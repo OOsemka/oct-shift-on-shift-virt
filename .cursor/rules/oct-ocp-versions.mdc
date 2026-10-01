@@ -1,0 +1,12 @@
+---
+description: OCT OpenShift minor lines — git ocp-X.Y branches, PatternFly major, do not mix minors
+alwaysApply: true
+---
+
+# OCT OpenShift minors
+
+Keep a **git line per OpenShift minor** when PF or APIs diverge. `main` = newest (currently **4.22**). Branches: `ocp-4.22`, `ocp-4.21`. PatternFly **6** on 4.22; do not mix PF majors on one branch.
+
+Catalog `versions[].openshift` lists which minors that **semver** supports. Never default a 4.21 image onto 4.22 if a 4.22-capable row exists.
+
+Image tags are always `<semver>-ocp<major.minor>` (e.g. `1.1.0-ocp4.22`). **Always publish both** `<semver>-ocp4.21` and `<semver>-ocp4.22` (same digest if bits match). Catalog `versions[]` lists both minors when those tags exist. Semver, Add/Update/pin, and tagging: **`oct-semver.mdc`**.

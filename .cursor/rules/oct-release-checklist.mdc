@@ -1,0 +1,73 @@
+---
+description: Procedural release checklist — follow after every code change, version bump, or catalog update
+alwaysApply: true
+---
+
+# OCT release checklist
+
+Existing rules describe the end-state; this rule tells you **when** and **in what order** to act. Follow it whenever you modify runtime code, bump a version, update `community.yaml`, or deploy to a cluster.
+
+## After any code change that affects runtime behavior
+
+1. Bump `package.json` — **both** top-level `version` and `consolePlugin.version`.
+2. Rebuild and push the image for **both** OCP minors:
+   ```
+   yarn build
+   podman build -t quay.io/<org>/<plugin>:<semver>-ocp4.22 -f Containerfile .
+   podman push quay.io/<org>/<plugin>:<semver>-ocp4.22
+   podman tag  quay.io/<org>/<plugin>:<semver>-ocp4.22 quay.io/<org>/<plugin>:<semver>-ocp4.21
+   podman push quay.io/<org>/<plugin>:<semver>-ocp4.21
+   ```
+3. Add or update `versions[]` rows in storefront `catalog/community.yaml` — **one row per OCP minor**, each with the correct combined image tag (`<semver>-ocp<minor>`). The 4.21 row must point at the `-ocp4.21` tag, not the `-ocp4.22` tag.
+4. Update the image tag in `catalog/deploy/oct-<name>.yaml` if one exists.
+5. Do not `oc apply` or deploy unless asked.
+
+## After bumping a sidecar or companion image
+
+Extensions with sidecars (discovery-service, benchmark-runner, windows-builder-builder) have **independent version numbers** from the plugin. When you rebuild a sidecar:
+
+1. Push the sidecar image with both OCP minor tags.
+2. Update the sidecar `image:` reference in the parent module's `catalog/deploy/oct-<name>.yaml`.
+3. Rebuild the **storefront** image — deploy YAMLs are webpack-bundled.
+4. Check AGENTS.md in the extension repo for a "Companion images" section and update the version there.
+
+## Before declaring "done"
+
+1. **Run `scripts/validate-catalog.sh`** (storefront repo). It checks every image tag exists on the registry, both OCP minors are covered, and deploy-bundle tags match the catalog. Fix any failures before committing.
+2. **If deploying to a cluster:** after a storefront image update, always:
+   ```
+   oc delete configmap community-tools-cache -n oct-storefront
+   ```
+   `ensureCacheSeeded()` is seed-once — if the `community.yaml` key already exists in the ConfigMap, it returns immediately. Deleting forces re-seed from the new bundled YAML on the next page load.
+3. **Verify pods are Running** — not just that Add / `oc apply` succeeded. Check the plugin Deployment **and** every sidecar Deployment.
+4. **Seed the public API** — POST new version rows to `https://api.octools.net/v1/versions` so the stats API knows about them.
+
+## OCP minor completeness
+
+- Every `versions[]` row **must** have a sibling row for the other supported minor.
+- Both image tags must exist and be **public** before committing `community.yaml`.
+- The 4.21 row's `image` field must end in `-ocp4.21`; the 4.22 row in `-ocp4.22`.
+
+## Storefront architecture (know what to restart)
+
+The `oct-storefront` namespace runs **two** Deployments with **different** images:
+
+| Deployment | Image | What it does |
+| --- | --- | --- |
+| `oct-storefront` | `oct-storefront:<semver>-ocp<minor>` | nginx serving the webpack plugin bundle (React UI + bundled catalog + deploy YAMLs) |
+| `catalog-service` | `oct-storefront-catalog:<semver>-ocp<minor>` | Go proxy for public API, fetch-yaml, stats forwarding |
+
+- Storefront code/catalog changes → rebuild and redeploy `oct-storefront` only.
+- Catalog-service Go code changes → rebuild and redeploy `catalog-service`.
+- Restarting one does **not** update the other.
+
+## Common mistakes this rule prevents
+
+| Mistake | What went wrong | Check |
+| --- | --- | --- |
+| Deploy YAML references unpublished sidecar tag | `ErrImagePull` / `ImagePullBackOff` | validate-catalog.sh |
+| Code committed but image not rebuilt | Users see old UI | Step 2 of "After code change" |
+| Catalog lists only one OCP minor | "No matching plugin image" on other cluster | OCP minor completeness |
+| Storefront updated but cache not cleared | Old tiles persist | Step 2 of "Before done" |
+| Wrong Deployment restarted | Catalog data unchanged | Architecture table |
+| 4.21 row points at 4.22 image tag | Wrong tag pulled on 4.21 cluster | OCP minor completeness |

@@ -1,0 +1,394 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: nestedclusters.octools.io
+  labels:
+    app.kubernetes.io/part-of: oct-shift-on-shift-virt
+spec:
+  group: octools.io
+  names:
+    kind: NestedCluster
+    listKind: NestedClusterList
+    plural: nestedclusters
+    singular: nestedcluster
+    shortNames:
+      - nc
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: OCP Version
+          type: string
+          jsonPath: .spec.ocpVersion
+        - name: Topology
+          type: string
+          jsonPath: .spec.topology
+        - name: API Endpoint
+          type: string
+          jsonPath: .status.apiEndpoint
+          priority: 0
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - clusterName
+                - baseDomain
+                - namespace
+                - ocpVersion
+                - topology
+                - masters
+                - network
+                - externalAccess
+                - storageClassName
+              properties:
+                clusterName:
+                  type: string
+                  description: DNS-safe name for the nested cluster.
+                  pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+                  maxLength: 63
+                baseDomain:
+                  type: string
+                  description: Base domain for the nested cluster (e.g. example.com).
+                  maxLength: 253
+                namespace:
+                  type: string
+                  description: User-specified namespace where all cluster resources will be created.
+                  pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+                  maxLength: 63
+                ocpVersion:
+                  type: string
+                  description: OpenShift version to deploy (e.g. 4.18.12).
+                topology:
+                  type: string
+                  description: Cluster topology.
+                  enum:
+                    - compact
+                    - ha
+                    - custom
+                masters:
+                  type: object
+                  required:
+                    - count
+                    - cpuCores
+                    - memoryGi
+                    - diskGi
+                  properties:
+                    count:
+                      type: integer
+                      minimum: 3
+                      maximum: 3
+                      default: 3
+                      description: Number of control plane nodes (always 3).
+                    cpuCores:
+                      type: integer
+                      minimum: 4
+                      description: CPU cores per master VM.
+                    memoryGi:
+                      type: integer
+                      minimum: 16
+                      description: Memory in GiB per master VM.
+                    diskGi:
+                      type: integer
+                      minimum: 120
+                      description: Root disk size in GiB per master VM.
+                workers:
+                  type: object
+                  properties:
+                    count:
+                      type: integer
+                      minimum: 0
+                      description: Number of worker nodes (0 for compact topology).
+                    cpuCores:
+                      type: integer
+                      minimum: 2
+                      description: CPU cores per worker VM.
+                    memoryGi:
+                      type: integer
+                      minimum: 8
+                      description: Memory in GiB per worker VM.
+                    diskGi:
+                      type: integer
+                      minimum: 64
+                      description: Root disk size in GiB per worker VM.
+                infra:
+                  type: object
+                  description: Infrastructure node configuration (custom topology only).
+                  properties:
+                    count:
+                      type: integer
+                      minimum: 0
+                      description: Number of infra nodes.
+                    cpuCores:
+                      type: integer
+                      minimum: 4
+                      description: CPU cores per infra VM.
+                    memoryGi:
+                      type: integer
+                      minimum: 16
+                      description: Memory in GiB per infra VM.
+                    diskGi:
+                      type: integer
+                      minimum: 120
+                      description: Root disk size in GiB per infra VM.
+                nodeNames:
+                  type: array
+                  description: Per-node naming overrides. Auto-generated if omitted.
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - role
+                    properties:
+                      name:
+                        type: string
+                        description: Node hostname.
+                        pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+                        maxLength: 63
+                      role:
+                        type: string
+                        description: Node role.
+                        enum:
+                          - master
+                          - worker
+                          - infra
+                network:
+                  type: object
+                  required:
+                    - cudnSubnet
+                    - apiVIP
+                    - ingressVIP
+                  properties:
+                    cudnSubnet:
+                      type: string
+                      description: CIDR for the cUDN Layer2 primary network (e.g. 10.100.0.0/16).
+                    apiVIP:
+                      type: string
+                      description: API virtual IP within the cUDN subnet.
+                    ingressVIP:
+                      type: string
+                      description: Ingress virtual IP within the cUDN subnet.
+                    clusterNetworkCIDR:
+                      type: string
+                      description: Cluster network CIDR for pods.
+                      default: "10.128.0.0/14"
+                    serviceNetworkCIDR:
+                      type: string
+                      description: Service network CIDR.
+                      default: "172.30.0.0/16"
+                externalAccess:
+                  type: object
+                  required:
+                    - nadName
+                    - apiIP
+                    - ingressIP
+                  description: HAProxy external access configuration via VLAN NAD.
+                  properties:
+                    nadName:
+                      type: string
+                      description: Name of the NetworkAttachmentDefinition for the HAProxy VLAN-side NIC.
+                    apiIP:
+                      type: string
+                      description: Static IP on the VLAN network for API traffic (api.<cluster>.<domain>).
+                    ingressIP:
+                      type: string
+                      description: Static IP on the VLAN network for Ingress traffic (*.apps.<cluster>.<domain>).
+                storageClassName:
+                  type: string
+                  description: StorageClass for VM root disk PVCs.
+                pullSecret:
+                  type: string
+                  description: Inline Red Hat pull secret JSON (stored temporarily, moved to a Secret during CreateSecrets phase).
+                sshKey:
+                  type: string
+                  description: Inline SSH public key (stored temporarily, moved to a Secret during CreateSecrets phase).
+                pullSecretRef:
+                  type: object
+                  description: Reference to the Secret containing the Red Hat pull secret (set by CreateSecrets phase).
+                  properties:
+                    name:
+                      type: string
+                sshKeyRef:
+                  type: object
+                  description: Reference to the Secret containing the SSH public key (set by CreateSecrets phase).
+                  properties:
+                    name:
+                      type: string
+                installConfigOverrides:
+                  type: string
+                  description: User-provided YAML overrides for install-config.yaml (merged on top of generated config).
+                agentConfigOverrides:
+                  type: string
+                  description: User-provided YAML overrides for agent-config.yaml (merged on top of generated config).
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: Current orchestration phase.
+                  enum:
+                    - Pending
+                    - CreateNamespace
+                    - CreateNetwork
+                    - CreateSecrets
+                    - CreateVMs
+                    - CollectIPs
+                    - DeployRedfish
+                    - DeployHAProxy
+                    - GenerateISO
+                    - MountISO
+                    - SetBootCD
+                    - PowerOn
+                    - WaitBootstrap
+                    - WaitInstall
+                    - PostInstall
+                    - Ready
+                    - Deleting
+                    - Failed
+                message:
+                  type: string
+                  description: Human-readable message about the current phase.
+                startedAt:
+                  type: string
+                  format: date-time
+                  description: Timestamp when orchestration started.
+                completedAt:
+                  type: string
+                  format: date-time
+                  description: Timestamp when orchestration completed (Ready or Failed).
+                redfishEndpoint:
+                  type: string
+                  description: URL of the per-cluster redfish-controller Route.
+                apiEndpoint:
+                  type: string
+                  description: Full API URL of the nested cluster (e.g. https://api.<cluster>.<domain>:6443).
+                consoleURL:
+                  type: string
+                  description: Console URL of the nested cluster (e.g. https://console-openshift-console.apps.<cluster>.<domain>).
+                ingressDomain:
+                  type: string
+                  description: Ingress wildcard domain (e.g. *.apps.<cluster>.<domain>).
+                kubeconfigSecretRef:
+                  type: string
+                  description: Name of the Secret containing the nested cluster kubeconfig.
+                kubeadminSecretRef:
+                  type: string
+                  description: Name of the Secret containing the kubeadmin password.
+                nodes:
+                  type: array
+                  description: Per-node status.
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        description: Node hostname.
+                      role:
+                        type: string
+                        description: Node role (master, worker, infra).
+                        enum:
+                          - master
+                          - worker
+                          - infra
+                      vmStatus:
+                        type: string
+                        description: KubeVirt VirtualMachine status.
+                        enum:
+                          - Created
+                          - Running
+                          - Stopped
+                          - Error
+                          - Unknown
+                      powerState:
+                        type: string
+                        description: VM power state from Redfish.
+                        enum:
+                          - "On"
+                          - "Off"
+                          - Unknown
+                      bootPhase:
+                        type: string
+                        description: Current boot phase.
+                        enum:
+                          - ISO
+                          - Disk
+                          - Unknown
+                      agentStatus:
+                        type: string
+                        description: Agent-based installer agent status.
+                        enum:
+                          - Pending
+                          - Discovering
+                          - Installing
+                          - Installed
+                          - Error
+                          - Unknown
+                      ip:
+                        type: string
+                        description: IP address assigned to the node on the cUDN.
+                      mac:
+                        type: string
+                        description: MAC address of the node's primary network interface.
+                phaseHistory:
+                  type: array
+                  description: History of phase transitions with timing.
+                  items:
+                    type: object
+                    properties:
+                      phase:
+                        type: string
+                        description: The phase name.
+                      startedAt:
+                        type: string
+                        format: date-time
+                        description: When this phase started.
+                      endedAt:
+                        type: string
+                        format: date-time
+                        description: When this phase ended.
+                      message:
+                        type: string
+                        description: Phase outcome message.
+                      success:
+                        type: boolean
+                        description: Whether the phase completed successfully.
+                conditions:
+                  type: array
+                  description: Standard Kubernetes conditions.
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                        description: Condition type (e.g. Ready, Progressing, Degraded).
+                      status:
+                        type: string
+                        description: Condition status.
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      reason:
+                        type: string
+                        description: Machine-readable reason for the condition.
+                      message:
+                        type: string
+                        description: Human-readable message.
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: Last time the condition transitioned.

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Background circle -->
+  <circle cx="32" cy="32" r="30" fill="#1F1F1F"/>
+
+  <!-- Outer ring representing the host cluster -->
+  <circle cx="32" cy="32" r="26" stroke="#EE0000" stroke-width="3" fill="none" opacity="0.3"/>
+
+  <!-- S letter (left) - stylized as a curved arrow/shift symbol -->
+  <path d="M14 24c0-3.3 2.7-6 6-6h2c2.2 0 4 1.8 4 4s-1.8 4-4 4h-2c-2.2 0-4 1.8-4 4s1.8 4 4 4h2c3.3 0 6-2.7 6-6"
+        stroke="#EE0000" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+
+  <!-- O letter (center) - nested OpenShift infinity/cluster symbol -->
+  <g transform="translate(32, 32)">
+    <!-- Outer O (host cluster) -->
+    <circle cx="0" cy="0" r="8" stroke="#EE0000" stroke-width="2.5" fill="none"/>
+    <!-- Inner O (nested cluster) -->
+    <circle cx="0" cy="0" r="4.5" stroke="#FF6B6B" stroke-width="2" fill="none"/>
+    <!-- Center dot (workload) -->
+    <circle cx="0" cy="0" r="1.5" fill="#FF6B6B"/>
+  </g>
+
+  <!-- S letter (right) - mirrored stylized shift symbol -->
+  <path d="M50 24c0-3.3-2.7-6-6-6h-2c-2.2 0-4 1.8-4 4s1.8 4 4 4h2c2.2 0 4 1.8 4 4s-1.8 4-4 4h-2c-3.3 0-6-2.7-6-6"
+        stroke="#EE0000" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+
+  <!-- Small VM indicators around the O -->
+  <rect x="28" y="19" width="3" height="2" rx="0.5" fill="#FF6B6B" opacity="0.7"/>
+  <rect x="33" y="19" width="3" height="2" rx="0.5" fill="#FF6B6B" opacity="0.7"/>
+  <rect x="28" y="43" width="3" height="2" rx="0.5" fill="#FF6B6B" opacity="0.7"/>
+  <rect x="33" y="43" width="3" height="2" rx="0.5" fill="#FF6B6B" opacity="0.7"/>
+
+  <!-- "VIRT" label at bottom -->
+  <text x="32" y="56" text-anchor="middle" font-family="Red Hat Display, sans-serif" font-size="5" font-weight="700" fill="#AAAAAA" letter-spacing="2">VIRT</text>
+</svg>

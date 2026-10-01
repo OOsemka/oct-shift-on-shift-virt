@@ -1,0 +1,46 @@
+---
+description: OCT two-axis catalog versioning; image tags are always <semver>-ocp<major.minor>
+alwaysApply: true
+---
+
+# OCT versioning (semver × OpenShift)
+
+Keep **two axes in the catalog**. Do not collapse catalog into a single `:4.22` tag.
+
+1. **Extension semver** (`version`, git tag `v1.2.0`).
+2. **OpenShift minor** (`openshift` list, optional branch `ocp-4.22` for PF/API).
+
+**Image tags MUST encode both axes**, always: `<semver>-ocp<major.minor>`
+
+Examples: `1.1.0-ocp4.22`, `1.0.1-ocp4.22`. Not `ocp4.22-1.0.1` (same pair; semver-first is the usual container convention and sorts by feature set).
+
+```yaml
+spec:
+  consolePlugin: oct-example
+  defaultChannel: stable
+  pinVersion: "1.1.0"          # optional; Add stays on this semver
+  versions:
+    - version: "1.0.0"
+      channel: stable
+      openshift: ["4.21"]
+      image: quay.io/org/oct-example:1.0.0-ocp4.21
+      gitRef: v1.0.0
+    - version: "1.0.0"
+      channel: stable
+      openshift: ["4.22"]
+      image: quay.io/org/oct-example:1.0.0-ocp4.22
+      gitRef: v1.0.0
+    - version: "1.2.0"
+      channel: stable
+      openshift: ["4.22"]
+      image: quay.io/org/oct-example:1.2.0-ocp4.22
+      gitRef: v1.2.0
+```
+
+**Hard rule:** never list a catalog row for (version, OpenShift minor) unless that **exact** combined tag exists and is **public**. That is what caused Add-success / Open-404 (`:1.1.0` cataloged, only `:4.22` published).
+
+**Always publish both OpenShift minors.** Every published image (plugin, sidecars, storefront, catalog-service when rebuilt) gets **both** tags: `<semver>-ocp4.21` and `<semver>-ocp4.22`. Same bits → two tags on one digest. Never catalog a (version, minor) unless that exact public tag exists. Catalog `versions[]` lists both minors when the tags exist.
+
+Bare `:4.22` and `:1.1.0` may remain as extra aliases; catalog `image` and install YAML must use the combined tag. Same bits on two minors → two tags on the same digest (`1.1.0-ocp4.21` and `1.1.0-ocp4.22`), not one ambiguous `:1.1.0` as the only catalog image.
+
+**Add** = newest stable semver whose `openshift` includes the cluster. **Update** is a click; never auto. **Enable** does not change the image. One ConsolePlugin name = one running version. No live-cluster auto-migrate. Add-must-go-Ready: **`oct-extension-add.mdc`**.

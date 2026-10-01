@@ -1,0 +1,7 @@
+.ct-community-disclaimer {
+  max-width: 48rem;
+}
+
+.ct-community-disclaimer + * {
+  margin-top: var(--pf-t--global--spacer--md, 16px);
+}

@@ -1,0 +1,34 @@
+---
+description: Never hardcode cluster- or lab-specific values (StorageClass, network, domains)
+alwaysApply: true
+---
+
+# No environment-specific hardcoding
+
+OCT must run on **any** OpenShift cluster. Do not bake in values that exist only in one lab.
+
+## Never hardcode
+
+- StorageClass names (`odf-…`, `px-…`, lab Ceph pools)
+- Networks: CIDRs, VLANs, bond/bridge names, MTU, DNS, NTP, proxy, domain
+- Cluster API / console URLs, node names, lab hostnames
+- Lab-only Secret or ConfigMap names, extra namespaces, a CSI provisioner used as *the* class
+
+## Do instead
+
+- Omit the field (cluster default), or **read** what the cluster already has
+- Use the value the admin chose at **Add** (e.g. PVC `image-cache` `spec.storageClassName`)
+- Optional env/annotation override with an **empty** default — never a lab name as default
+- Match Kubernetes/OpenShift **API contracts** (e.g. `storageclass.kubernetes.io/is-default-class`)
+
+## Allowed (product identity, not a lab)
+
+Plugin IDs and namespaces we own (`oct-baremetal`), Metal3’s `openshift-machine-api`, README samples labeled as examples.
+
+```
+// BAD — one lab’s StorageClass; other clusters Pending / not found
+storageClass = "odf-storagecluster-ceph-fast-pool-rbd"
+
+// GOOD — cluster default, or the class chosen at Add
+// omit storageClassName, or copy it from the image-cache PVC
+```
