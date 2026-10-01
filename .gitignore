@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+*.tgz
+.pnp.*
+
+# Go build artifacts
+orchestrator/.cache/
+orchestrator/sos-orchestrator
+orchestrator/ca-certificates.crt
+orchestrator/Containerfile.scratch
+orchestrator/Containerfile.prebuilt

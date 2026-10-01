@@ -1,0 +1,19 @@
+---
+description: OCT Add must go Ready — combined public image tag exists; bundle complete; href matches routes
+alwaysApply: true
+---
+
+# OCT Add must go Ready
+
+Storefront **Add** creates Namespace, ConsolePlugin, and appends `spec.plugins` even when the plugin **never becomes Ready**. **Open** then 404s: href is registered, no plugin bundle (typical: nginx **ImagePullBackOff** / `manifest unknown`).
+
+Before a catalog tile ships:
+
+1. **Tag exists and is public.** `spec.versions[].image` (and every sidecar the bundle pulls) must pull anonymously. Community Add has **no pull secret**.
+2. **Combined tag exists.** Catalog `versions[].image` must be `<semver>-ocp<major.minor>` (e.g. `:1.1.0-ocp4.22`) and that exact public tag must exist. Do not catalog `:1.1.0` or `:4.22` as the install image. Same bits on two OCP minors → two tags on one digest.
+3. **Bundle is complete.** Add applies `catalog/deploy/oct-<name>.yaml` (register in `BUNDLED_DEPLOY`) or generated Namespace/Deployment/Service/ConsolePlugin only. Include every PVC, volume, RBAC, Service, and sidecar the Deployments need. **Required PVCs must be in the bundle** so Add creates them before Deployments. `oct-baremetal` needs PVC `image-cache` (100Gi).
+4. **StorageClass.** Omit PVC `storageClassName` to use the cluster default. Add shows a StorageClass dropdown when the bundle has a PVC. Optional PVC annotation `communitytools.io/storage-class` or CommunityTool `spec.storageClassName`. Never hardcode a lab StorageClass, network, or other cluster-specific value (`oct-no-env-hardcoding.mdc`).
+5. **href matches routes.** Catalog `spec.href` must match `console-extensions.json` (`oct-baremetal`: `/baremetal/nodes`; `oct-network-bond`: `/community-tools/network/bond`; `oct-banner`: `/community-tools/management/banner` unless those routes changed).
+6. **Add success is not Ready.** Confirm the plugin Deployment is Running (and `discovery-service` + Bound `image-cache` for Bare Metal Hosts) before calling the tile done.
+
+Canonical checklist: storefront `docs/extension-standard.md`. Do not `oc apply` unless asked.

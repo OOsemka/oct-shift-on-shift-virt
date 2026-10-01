@@ -1,0 +1,17 @@
+[
+  {
+    "type": "console.page/route",
+    "properties": {
+      "exact": true,
+      "path": "/community-tools/compute/shift-on-shift-virt",
+      "component": { "$codeRef": "ShiftOnShiftPage" }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/community-tools/compute/shift-on-shift-virt/cluster/:name",
+      "component": { "$codeRef": "ClusterDetailPage" }
+    }
+  }
+]

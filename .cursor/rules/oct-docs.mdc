@@ -1,0 +1,27 @@
+---
+description: OCT docs — AGENTS.md and README required; extension-standard checklist
+alwaysApply: true
+---
+
+# OCT docs
+
+Every OCT repo must have **AGENTS.md** and **README.md**. Keep plugin ID, image name, OCP branches, and the community disclaimer in both.
+
+## Storefront vs extension
+
+- Storefront (`oct-storefront`): catalog hubs only. Document `catalog/community.yaml` and `spec.versions[]` (semver × OpenShift).
+- Extensions: tool routes only. Point catalog PRs at the storefront. Include the community disclaimer on pages.
+
+## New extension checklist
+
+Copy `docs/extension-template/` (storefront). Then:
+
+1. `oct-<name>` for directory, `consolePlugin.name`, ConsolePlugin CR, image.
+2. Cursor rules: `oct-naming.mdc`, `oct-ocp-versions.mdc`, `oct-semver.mdc`, `oct-docs.mdc`, `oct-extension-add.mdc`, `oct-no-env-hardcoding.mdc` (`alwaysApply: true`).
+3. `spec.versions[]` with `version` (semver), `channel`, `openshift` list, and **public** `image` whose tag is `<semver>-ocp<major.minor>` and **exists**. Never list a (version, OCP minor) row unless that exact combined tag is public.
+4. `spec.href` must match a `console-extensions.json` route. Bundled `catalog/deploy/oct-<name>.yaml` must include every required PVC, volume, RBAC, and Service. Precreate PVCs in that YAML; omit `storageClassName` for the cluster default (Add can override).
+5. PatternFly major matches the `ocp-X.Y` branch when APIs/PF diverge.
+6. `yarn build` in the extension and the storefront. **Add success is not Ready** — confirm the plugin Deployment is Running.
+7. Do not `oc apply` or push images unless the cluster owner asked.
+
+Canonical field list and **Add must go Ready**: `docs/extension-standard.md`.

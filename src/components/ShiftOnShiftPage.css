@@ -1,0 +1,7 @@
+.sos-tabs {
+  margin-top: var(--pf-t--global--spacer--md, 16px);
+}
+
+.sos-tab-content {
+  padding-top: var(--pf-t--global--spacer--lg, 24px);
+}
