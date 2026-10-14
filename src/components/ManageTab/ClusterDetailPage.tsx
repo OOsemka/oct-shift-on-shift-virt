@@ -38,6 +38,7 @@ import {
   Td,
 } from '@patternfly/react-table';
 import CommunityDisclaimer from '../shared/CommunityDisclaimer';
+import ConfigViewer from './ConfigViewer';
 import { deleteCluster, fetchCluster, fetchKubeadmin, fetchKubeconfig } from '../../utils/api';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
@@ -77,6 +78,8 @@ interface ClusterDetail {
       success: boolean;
       message: string;
     }>;
+    installConfig?: string;
+    agentConfig?: string;
   };
 }
 
@@ -229,6 +232,15 @@ const ClusterDetailPage: FC = () => {
                   </CodeBlockCode>
                 </CodeBlock>
               </ExpandableSection>
+            </StackItem>
+          )}
+
+          {(status.installConfig || status.agentConfig) && (
+            <StackItem>
+              <ConfigViewer
+                installConfig={status.installConfig}
+                agentConfig={status.agentConfig}
+              />
             </StackItem>
           )}
 

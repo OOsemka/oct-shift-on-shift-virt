@@ -61,6 +61,17 @@ rules:
       - virtualmachines/stop
     verbs:
       - create
+  # virtctl-style power ops are PUTs against the subresources.kubevirt.io
+  # aggregated API; RBAC sees them as `update` on that group's subresources.
+  # Without this the orchestrator cannot stop/start VMs (ISO mount, eject).
+  - apiGroups:
+      - subresources.kubevirt.io
+    resources:
+      - virtualmachines/restart
+      - virtualmachines/start
+      - virtualmachines/stop
+    verbs:
+      - update
   - apiGroups:
       - subresources.kubevirt.io
     resources:
@@ -143,6 +154,12 @@ rules:
       - create
       - update
       - delete
+  - apiGroups:
+      - ""
+    resources:
+      - pods/exec
+    verbs:
+      - create
   - apiGroups:
       - ""
     resources:

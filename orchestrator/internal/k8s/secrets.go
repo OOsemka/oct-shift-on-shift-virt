@@ -87,6 +87,22 @@ func (c *Client) GetSecretData(ctx context.Context, namespace, name, key string)
 	return data, nil
 }
 
+// UpdateSecretData replaces the value of a single key in an existing secret.
+func (c *Client) UpdateSecretData(ctx context.Context, namespace, name, key string, value []byte) error {
+	secret, err := c.Clientset.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("getting secret %s/%s: %w", namespace, name, err)
+	}
+	if secret.Data == nil {
+		secret.Data = map[string][]byte{}
+	}
+	secret.Data[key] = value
+	if _, err := c.Clientset.CoreV1().Secrets(namespace).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("updating secret %s/%s: %w", namespace, name, err)
+	}
+	return nil
+}
+
 func (c *Client) DeleteSecret(ctx context.Context, namespace, name string) error {
 	err := c.Clientset.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if errors.IsNotFound(err) {

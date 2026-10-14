@@ -24,11 +24,11 @@ var nestedClusterGVR = schema.GroupVersionResource{
 }
 
 type Engine struct {
-	client   *k8s.Client
-	logger   *logging.Logger
-	steps    *StepExecutor
-	mu       sync.Mutex
-	running  map[string]context.CancelFunc
+	client  *k8s.Client
+	logger  *logging.Logger
+	steps   *StepExecutor
+	mu      sync.Mutex
+	running map[string]context.CancelFunc
 }
 
 func NewEngine(client *k8s.Client, logger *logging.Logger) *Engine {

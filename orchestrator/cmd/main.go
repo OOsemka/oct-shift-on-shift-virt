@@ -30,6 +30,10 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
+	if err := k8s.EnsureSelfRBAC(ctx, client); err != nil {
+		logger.Info("supplemental RBAC not provisioned (ISO mount / endpoint exposure may degrade)", "error", err.Error())
+	}
+
 	engine := orchestrator.NewEngine(client, logger)
 	go func() {
 		if err := engine.Watch(ctx); err != nil && ctx.Err() == nil {

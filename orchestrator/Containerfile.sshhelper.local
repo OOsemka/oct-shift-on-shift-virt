@@ -1,0 +1,7 @@
+# sos-ssh-helper (local-storage variant): bash+ssh client vantage point for
+# ConfigureNodes / node-guard. Alpine variant of Containerfile.sshhelper;
+# script compat verified (bash, busybox install/seq, curl, ssh).
+FROM docker.io/library/node:20-alpine
+RUN apk add --no-cache openssh-client bash curl iproute2 && rm -rf /var/cache/apk/*
+USER 0
+CMD ["/bin/bash"]

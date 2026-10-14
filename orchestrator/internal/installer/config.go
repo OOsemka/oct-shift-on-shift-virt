@@ -2,6 +2,7 @@ package installer
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/crd"
@@ -75,9 +76,38 @@ sshKey: '%s'`,
 	return config
 }
 
+// ParseCIDRInfo extracts the gateway IP (first usable address) and prefix
+// length from a CIDR string. OVN Layer2 uses the first IP in the subnet as
+// the gateway (e.g. 10.100.0.0/16 → gateway 10.100.0.1, prefix 16).
+func ParseCIDRInfo(cidr string) (gateway string, prefixLen int, err error) {
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", 0, fmt.Errorf("parsing CIDR %q: %w", cidr, err)
+	}
+
+	networkIP := ipNet.IP.To4()
+	if networkIP == nil {
+		return "", 0, fmt.Errorf("only IPv4 CIDRs supported, got %q", cidr)
+	}
+
+	gw := make(net.IP, 4)
+	copy(gw, networkIP)
+	for i := 3; i >= 0; i-- {
+		gw[i]++
+		if gw[i] != 0 {
+			break
+		}
+	}
+
+	ones, _ := ipNet.Mask.Size()
+	return gw.String(), ones, nil
+}
+
 // GenerateAgentConfig creates agent-config.yaml for the agent-based installer.
-// Hosts use DHCP from the cUDN (OVN IPAM) — no static networkConfig.
-// The rendezvousIP is the DHCP-assigned IP of the first master, read from VMI status.
+// NMState networkConfig with static IPs is NOT included because OVN-K DHCP on
+// Primary cUDN networks always overrides NMState config. The DHCP lease from
+// OVN wins regardless of what NMState specifies. We keep the interfaces block
+// with MAC addresses so the agent can identify hosts.
 func GenerateAgentConfig(spec crd.NestedClusterSpec, hosts []HostConfig) string {
 	rendezvousIP := ""
 	if len(hosts) > 0 {
@@ -93,6 +123,7 @@ func GenerateAgentConfig(spec crd.NestedClusterSpec, hosts []HostConfig) string 
     - name: enp1s0
       macAddress: %s`, h.MAC)
 		}
+
 		hostEntries = append(hostEntries, entry)
 	}
 
@@ -120,4 +151,10 @@ func OcpMirrorChannel(version string) string {
 
 func escapeSingleQuotes(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
+}
+
+// EscapeSingleQuotes is the exported version of escapeSingleQuotes for use
+// when replacing <PULL_SECRET> placeholders in user-edited config overrides.
+func EscapeSingleQuotes(s string) string {
+	return escapeSingleQuotes(s)
 }

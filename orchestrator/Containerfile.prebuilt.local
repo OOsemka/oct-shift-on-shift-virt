@@ -1,0 +1,7 @@
+# Same as Containerfile.prebuilt but based on an image already present in
+# local storage (fresh-alpine unpack hits a rootless subuid quirk here).
+FROM docker.io/library/node:20-alpine
+RUN apk add --no-cache ca-certificates && rm -rf /var/cache/apk/*
+COPY sos-orchestrator /usr/local/bin/orchestrator
+USER 1001
+ENTRYPOINT ["orchestrator"]

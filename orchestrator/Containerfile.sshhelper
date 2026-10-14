@@ -1,0 +1,7 @@
+# sos-ssh-helper: exec/ssh vantage point for ConfigureNodes + node-guard.
+# Must run INSIDE the nested namespace (only vantage point that reaches the
+# nested VMs' cUDN overlay IPs). Keep tiny; bash+ssh+awk+sed+iproute suffice.
+FROM quay.io/centos/centos:stream9
+RUN dnf -y install openssh-clients iproute iputils && dnf clean all
+USER 0
+CMD ["/bin/bash"]
