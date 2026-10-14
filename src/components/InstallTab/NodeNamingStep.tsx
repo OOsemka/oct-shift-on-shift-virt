@@ -1,4 +1,4 @@
-import React, { FC } from 'react';
+import React, { FC, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Button,
@@ -9,7 +9,7 @@ import {
   TextInput,
 } from '@patternfly/react-core';
 import { MinusCircleIcon, PlusCircleIcon } from '@patternfly/react-icons';
-import { ClusterConfig, NodeNameEntry } from './types';
+import { ClusterConfig, NodeNameEntry, generateNodeNames } from './types';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
@@ -20,6 +20,18 @@ interface Props {
 
 const NodeNamingStep: FC<Props> = ({ config, onChange }) => {
   const { t } = useTranslation(I18N);
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      if (config.nodeNames.length === 0 && config.topology !== 'custom') {
+        onChange({
+          nodeNames: generateNodeNames(config.clusterName, config.topology, config.masters, config.workers),
+        });
+      }
+    }
+  });
 
   const updateNode = (idx: number, patch: Partial<NodeNameEntry>) => {
     const names = [...config.nodeNames];

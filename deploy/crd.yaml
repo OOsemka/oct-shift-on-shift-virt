@@ -190,6 +190,9 @@ spec:
                       type: string
                       description: Service network CIDR.
                       default: "172.30.0.0/16"
+                    dnsIP:
+                      type: string
+                      description: IP address of the in-cluster CoreDNS pod on the cUDN (optional, auto-collected if DeployDNS phase runs).
                 externalAccess:
                   type: object
                   required:
@@ -216,6 +219,15 @@ spec:
                 sshKey:
                   type: string
                   description: Inline SSH public key (stored temporarily, moved to a Secret during CreateSecrets phase).
+                sshPrivateKey:
+                  type: string
+                  description: Inline SSH private key matching sshKey. Required by the ConfigureNodes phase, which SSHes into nested VMs (as a Job inside the cluster namespace) to correct UDN-supplied DNS and discover the rendezvous node.
+                sshPrivateKeyRef:
+                  type: object
+                  description: Reference to a kubernetes.io/ssh-auth Secret in the operator namespace holding the private key (alternative to sshPrivateKey).
+                  properties:
+                    name:
+                      type: string
                 pullSecretRef:
                   type: object
                   description: Reference to the Secret containing the Red Hat pull secret (set by CreateSecrets phase).
@@ -249,10 +261,13 @@ spec:
                     - CollectIPs
                     - DeployRedfish
                     - DeployHAProxy
+                    - DeployDNS
                     - GenerateISO
                     - MountISO
                     - SetBootCD
                     - PowerOn
+                    - ConfigureNodes
+                    - MCSRelay
                     - WaitBootstrap
                     - WaitInstall
                     - PostInstall
@@ -288,6 +303,36 @@ spec:
                 kubeadminSecretRef:
                   type: string
                   description: Name of the Secret containing the kubeadmin password.
+                apiVIPcUDN:
+                  type: string
+                  description: Actual cUDN IP serving the nested API VIP (assigned to the haproxy-api pod by UDN DHCP).
+                ingressVIPcUDN:
+                  type: string
+                  description: Actual cUDN IP serving the nested ingress VIP.
+                dnsIPcUDN:
+                  type: string
+                  description: cUDN IP of the per-cluster DNS server pod.
+                rendezvousIP:
+                  type: string
+                  description: Node discovered in-cluster as serving the assisted-service (:8090).
+                rendezvousNode:
+                  type: string
+                  description: Name of the rendezvous node.
+                mcsRelayIP:
+                  type: string
+                  description: cUDN IP of the MCS relay VM (host nftables blocks haproxy-pod to VM:22623 traffic; the relay side-steps it from VM side).
+                hostAPIRoute:
+                  type: string
+                  description: Host-cluster Route URL proxying the nested API via the haproxy pod (passthrough; needs --insecure-skip-tls-verify).
+                hostConsoleRoute:
+                  type: string
+                  description: Host-cluster Route URL proxying nested ingress (passthrough; console SNI caveats apply).
+                installConfig:
+                  type: string
+                  description: Sanitized install-config.yaml content (pull secret and SSH key redacted).
+                agentConfig:
+                  type: string
+                  description: Generated agent-config.yaml content.
                 nodes:
                   type: array
                   description: Per-node status.

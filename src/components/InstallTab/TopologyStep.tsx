@@ -1,4 +1,4 @@
-import React, { FC } from 'react';
+import React, { FC, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Form,
@@ -7,7 +7,7 @@ import {
   Stack,
   StackItem,
 } from '@patternfly/react-core';
-import { ClusterConfig, NodeNameEntry } from './types';
+import { ClusterConfig, generateNodeNames } from './types';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
@@ -34,30 +34,37 @@ const DESCRIPTIONS: Record<ClusterConfig['topology'], string> = {
   custom: 'Choose your own node counts and roles.',
 };
 
-function generateNames(prefix: string, count: number, role: NodeNameEntry['role']): NodeNameEntry[] {
-  return Array.from({ length: count }, (_, i) => ({
-    name: `${prefix}-${role}-${i}`,
-    role,
-  }));
-}
-
 const TopologyStep: FC<Props> = ({ config, onChange }) => {
   const { t } = useTranslation(I18N);
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      if (config.nodeNames.length === 0 && config.topology !== 'custom') {
+        onChange({
+          nodeNames: generateNodeNames(config.clusterName, config.topology, config.masters, config.workers),
+        });
+      }
+    }
+  });
 
   const handleSelect = (topo: (typeof TOPOLOGIES)[number]) => {
-    const prefix = config.clusterName || 'cluster';
-    const names = [
-      ...generateNames(prefix, topo.masters, 'master'),
-      ...generateNames(prefix, topo.workers, 'worker'),
-      ...generateNames(prefix, topo.infra, 'infra'),
-    ];
-    onChange({
+    const updatedMasters = { ...config.masters, count: topo.masters };
+    const updatedWorkers = { ...config.workers, count: topo.workers };
+
+    const patch: Partial<ClusterConfig> = {
       topology: topo.key,
-      masters: { ...config.masters, count: topo.masters },
-      workers: { ...config.workers, count: topo.workers },
+      masters: updatedMasters,
+      workers: updatedWorkers,
       infra: { ...config.infra, count: topo.infra },
-      nodeNames: names,
-    });
+    };
+
+    if (topo.key !== 'custom') {
+      patch.nodeNames = generateNodeNames(config.clusterName, topo.key, updatedMasters, updatedWorkers);
+    }
+
+    onChange(patch);
   };
 
   return (

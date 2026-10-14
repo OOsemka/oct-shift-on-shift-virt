@@ -14,9 +14,44 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// CreateJob creates the job, deleting and recreating a FINISHED job of the
+// same name. Phase jobs have deterministic names; treating an already
+// Complete/Failed job as "success" let phase requeues silently skip real
+// work (observed: ConfigureNodes "passed" on a stale job whose run predates
+// the VMs even booting). An actively running job is left alone and waited on.
 func (c *Client) CreateJob(ctx context.Context, job *batchv1.Job) error {
 	_, err := c.Clientset.BatchV1().Jobs(job.Namespace).Create(ctx, job, metav1.CreateOptions{})
 	if errors.IsAlreadyExists(err) {
+		existing, gerr := c.Clientset.BatchV1().Jobs(job.Namespace).Get(ctx, job.Name, metav1.GetOptions{})
+		if gerr != nil {
+			return gerr
+		}
+		finished := false
+		for _, cond := range existing.Status.Conditions {
+			if (cond.Type == batchv1.JobComplete || cond.Type == batchv1.JobFailed) && cond.Status == corev1.ConditionTrue {
+				finished = true
+			}
+		}
+		if !finished {
+			return nil // in-flight: the waiter below will track it
+		}
+		policy := metav1.DeletePropagationBackground
+		if derr := c.Clientset.BatchV1().Jobs(job.Namespace).Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &policy}); derr != nil && !errors.IsNotFound(derr) {
+			return fmt.Errorf("deleting finished job %s/%s: %w", job.Namespace, job.Name, derr)
+		}
+		for i := 0; i < 30; i++ {
+			if _, gerr := c.Clientset.BatchV1().Jobs(job.Namespace).Get(ctx, job.Name, metav1.GetOptions{}); errors.IsNotFound(gerr) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
+		if _, cerr := c.Clientset.BatchV1().Jobs(job.Namespace).Create(ctx, job, metav1.CreateOptions{}); cerr != nil {
+			return fmt.Errorf("recreating job %s/%s: %w", job.Namespace, job.Name, cerr)
+		}
 		return nil
 	}
 	if err != nil {
@@ -56,6 +91,30 @@ func (c *Client) WaitForJobCompletion(ctx context.Context, namespace, name strin
 		case <-time.After(15 * time.Second):
 		}
 	}
+}
+
+// JobPodLogs returns the full logs of the most recent pod of a job.
+func (c *Client) JobPodLogs(ctx context.Context, namespace, jobName string) (string, error) {
+	pods, err := c.Clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "job-name=" + jobName,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(pods.Items) == 0 {
+		return "", fmt.Errorf("no pods for job %s/%s", namespace, jobName)
+	}
+	latest := pods.Items[0]
+	for _, p := range pods.Items[1:] {
+		if p.CreationTimestamp.After(latest.CreationTimestamp.Time) {
+			latest = p
+		}
+	}
+	logs, err := c.Clientset.CoreV1().Pods(namespace).GetLogs(latest.Name, &corev1.PodLogOptions{}).Do(ctx).Raw()
+	if err != nil {
+		return "", err
+	}
+	return string(logs), nil
 }
 
 func (c *Client) getJobPodLogs(ctx context.Context, namespace, jobName string) string {

@@ -60,6 +60,29 @@ export interface NestedClusterStatus {
   consoleURL: string;
   ingressDomain: string;
   nodes: NodeStatus[];
+  installConfig?: string;
+  agentConfig?: string;
+}
+
+/** Build node name entries for a given topology and sizing. */
+export function generateNodeNames(
+  clusterName: string,
+  topology: ClusterConfig['topology'],
+  masters: NodeSizing,
+  workers: NodeSizing,
+): NodeNameEntry[] {
+  if (topology === 'custom') return [];
+  const prefix = clusterName || 'cluster';
+  const names: NodeNameEntry[] = Array.from({ length: masters.count }, (_, i) => ({
+    name: `${prefix}-master-${i}`,
+    role: 'master' as const,
+  }));
+  if (topology === 'ha') {
+    for (let i = 0; i < workers.count; i++) {
+      names.push({ name: `${prefix}-worker-${i}`, role: 'worker' });
+    }
+  }
+  return names;
 }
 
 export const DEFAULT_CLUSTER_CONFIG: ClusterConfig = {
@@ -71,7 +94,11 @@ export const DEFAULT_CLUSTER_CONFIG: ClusterConfig = {
   masters: { count: 3, cpuCores: 8, memoryGi: 32, diskGi: 120 },
   workers: { count: 0, cpuCores: 4, memoryGi: 16, diskGi: 120 },
   infra: { count: 0, cpuCores: 4, memoryGi: 16, diskGi: 120 },
-  nodeNames: [],
+  nodeNames: [
+    { name: 'cluster-master-0', role: 'master' },
+    { name: 'cluster-master-1', role: 'master' },
+    { name: 'cluster-master-2', role: 'master' },
+  ],
   network: {
     cudnSubnet: '10.100.0.0/16',
     apiVIP: '10.100.0.10',

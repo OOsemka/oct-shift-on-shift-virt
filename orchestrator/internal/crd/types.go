@@ -21,9 +21,12 @@ const (
 	PhaseCreateVMs       ClusterPhase = "CreateVMs"
 	PhaseCollectIPs      ClusterPhase = "CollectIPs"
 	PhaseDeployHAProxy   ClusterPhase = "DeployHAProxy"
+	PhaseDeployDNS       ClusterPhase = "DeployDNS"
 	PhaseGenerateISO     ClusterPhase = "GenerateISO"
 	PhaseMountISO        ClusterPhase = "MountISO"
 	PhasePowerOn         ClusterPhase = "PowerOn"
+	PhaseConfigureNodes  ClusterPhase = "ConfigureNodes"
+	PhaseMCSRelay        ClusterPhase = "MCSRelay"
 	PhaseWaitBootstrap   ClusterPhase = "WaitBootstrap"
 	PhaseWaitInstall     ClusterPhase = "WaitInstall"
 	PhasePostInstall     ClusterPhase = "PostInstall"
@@ -38,10 +41,17 @@ var PhaseOrder = []ClusterPhase{
 	PhaseCreateSecrets,
 	PhaseCreateVMs,
 	PhaseCollectIPs,
+	// MCSRelay before DeployHAProxy: the relay only needs master IPs
+	// (CollectIPs), boots while the ISO is generated, and lets HAProxy come
+	// up ONE final config with MCS servers already in it — no live reload,
+	// no pods/exec needed mid-install.
+	PhaseMCSRelay,
 	PhaseDeployHAProxy,
+	PhaseDeployDNS,
 	PhaseGenerateISO,
 	PhaseMountISO,
 	PhasePowerOn,
+	PhaseConfigureNodes,
 	PhaseWaitBootstrap,
 	PhaseWaitInstall,
 	PhasePostInstall,
@@ -62,24 +72,30 @@ type NestedClusterList struct {
 }
 
 type NestedClusterSpec struct {
-	ClusterName            string               `json:"clusterName"`
-	BaseDomain             string               `json:"baseDomain"`
-	Namespace              string               `json:"namespace"`
-	OCPVersion             string               `json:"ocpVersion"`
-	Topology               string               `json:"topology"`
-	Masters                NodeSizing           `json:"masters"`
-	Workers                NodeSizing           `json:"workers,omitempty"`
-	Infra                  NodeSizing           `json:"infra,omitempty"`
-	NodeNames              []NodeNameEntry      `json:"nodeNames,omitempty"`
-	Network                NetworkConfig        `json:"network"`
-	ExternalAccess         ExternalAccessConfig `json:"externalAccess"`
-	StorageClassName       string               `json:"storageClassName"`
-	PullSecret             string               `json:"pullSecret,omitempty"`
-	SSHKey                 string               `json:"sshKey,omitempty"`
-	PullSecretRef          SecretRef            `json:"pullSecretRef"`
-	SSHKeyRef              SecretRef            `json:"sshKeyRef"`
-	InstallConfigOverrides string               `json:"installConfigOverrides,omitempty"`
-	AgentConfigOverrides   string               `json:"agentConfigOverrides,omitempty"`
+	ClusterName      string               `json:"clusterName"`
+	BaseDomain       string               `json:"baseDomain"`
+	Namespace        string               `json:"namespace"`
+	OCPVersion       string               `json:"ocpVersion"`
+	Topology         string               `json:"topology"`
+	Masters          NodeSizing           `json:"masters"`
+	Workers          NodeSizing           `json:"workers,omitempty"`
+	Infra            NodeSizing           `json:"infra,omitempty"`
+	NodeNames        []NodeNameEntry      `json:"nodeNames,omitempty"`
+	Network          NetworkConfig        `json:"network"`
+	ExternalAccess   ExternalAccessConfig `json:"externalAccess"`
+	StorageClassName string               `json:"storageClassName"`
+	PullSecret       string               `json:"pullSecret,omitempty"`
+	SSHKey           string               `json:"sshKey,omitempty"`
+	// SSHPrivateKey is the optional private half of SSHKey. Required for the
+	// ConfigureNodes phase (in-cluster SSH into VMs to fix DNS after boot —
+	// the primary-UDN DHCP hands VMs the host cluster's CoreDNS, which is
+	// unreachable from the UDN, so it must be replaced post-boot).
+	SSHPrivateKey          string    `json:"sshPrivateKey,omitempty"`
+	SSHPrivateKeyRef       SecretRef `json:"sshPrivateKeyRef,omitempty"`
+	PullSecretRef          SecretRef `json:"pullSecretRef"`
+	SSHKeyRef              SecretRef `json:"sshKeyRef"`
+	InstallConfigOverrides string    `json:"installConfigOverrides,omitempty"`
+	AgentConfigOverrides   string    `json:"agentConfigOverrides,omitempty"`
 }
 
 type NodeSizing struct {
@@ -100,6 +116,7 @@ type NetworkConfig struct {
 	IngressVIP         string `json:"ingressVIP"`
 	ClusterNetworkCIDR string `json:"clusterNetworkCIDR,omitempty"`
 	ServiceNetworkCIDR string `json:"serviceNetworkCIDR,omitempty"`
+	DNSIP              string `json:"dnsIP,omitempty"`
 }
 
 type ExternalAccessConfig struct {
@@ -113,18 +130,36 @@ type SecretRef struct {
 }
 
 type NestedClusterStatus struct {
-	Phase           ClusterPhase      `json:"phase,omitempty"`
-	Message         string            `json:"message,omitempty"`
-	StartedAt       *metav1.Time      `json:"startedAt,omitempty"`
-	CompletedAt     *metav1.Time      `json:"completedAt,omitempty"`
-	APIEndpoint     string            `json:"apiEndpoint,omitempty"`
-	ConsoleURL      string            `json:"consoleURL,omitempty"`
-	IngressDomain   string            `json:"ingressDomain,omitempty"`
-	KubeconfigRef   string            `json:"kubeconfigSecretRef,omitempty"`
-	KubeadminRef    string            `json:"kubeadminSecretRef,omitempty"`
-	Nodes           []NodeStatus      `json:"nodes,omitempty"`
-	PhaseHistory    []PhaseTransition `json:"phaseHistory,omitempty"`
-	Conditions      []metav1.Condition `json:"conditions,omitempty"`
+	Phase         ClusterPhase       `json:"phase,omitempty"`
+	Message       string             `json:"message,omitempty"`
+	StartedAt     *metav1.Time       `json:"startedAt,omitempty"`
+	CompletedAt   *metav1.Time       `json:"completedAt,omitempty"`
+	APIEndpoint   string             `json:"apiEndpoint,omitempty"`
+	ConsoleURL    string             `json:"consoleURL,omitempty"`
+	IngressDomain string             `json:"ingressDomain,omitempty"`
+	KubeconfigRef string             `json:"kubeconfigSecretRef,omitempty"`
+	KubeadminRef  string             `json:"kubeadminSecretRef,omitempty"`
+	InstallConfig string             `json:"installConfig,omitempty"`
+	AgentConfig   string             `json:"agentConfig,omitempty"`
+	Nodes         []NodeStatus       `json:"nodes,omitempty"`
+	PhaseHistory  []PhaseTransition  `json:"phaseHistory,omitempty"`
+	Conditions    []metav1.Condition `json:"conditions,omitempty"`
+	// Actual cUDN IPs collected at runtime. spec.network.apiVIP/ingressVIP are
+	// wizard-supplied wishes; the cUDN DHCP assigns the real ones to the
+	// HAProxy pods, and those (not the wishes) are what DNS must serve. Spec
+	// edits are not persisted by the reconcile loop, so the truth lives here.
+	APIVIPCUDN     string `json:"apiVIPcUDN,omitempty"`
+	IngressVIPCUDN string `json:"ingressVIPcUDN,omitempty"`
+	DNSIPCUDN      string `json:"dnsIPcUDN,omitempty"`
+	// RendezvousIP/Node are discovered in-cluster (assisted-service on :8090).
+	RendezvousIP   string `json:"rendezvousIP,omitempty"`
+	RendezvousNode string `json:"rendezvousNode,omitempty"`
+	// MCSRelayIP is the cUDN IP of the MCS relay VM (see MCSRelay phase).
+	MCSRelayIP string `json:"mcsRelayIP,omitempty"`
+	// HostAPIRoute/HostConsoleRoute are passthrough Routes published on the
+	// host cluster so the nested cluster is reachable without /etc/hosts.
+	HostAPIRoute     string `json:"hostAPIRoute,omitempty"`
+	HostConsoleRoute string `json:"hostConsoleRoute,omitempty"`
 }
 
 type NodeStatus struct {
