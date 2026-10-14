@@ -25,11 +25,12 @@ var nestedClusterGVR = schema.GroupVersionResource{
 }
 
 type Engine struct {
-	client  *k8s.Client
-	logger  *logging.Logger
-	steps   *StepExecutor
-	mu      sync.Mutex
-	running map[string]context.CancelFunc
+	client   *k8s.Client
+	logger   *logging.Logger
+	steps    *StepExecutor
+	mu       sync.Mutex
+	running  map[string]context.CancelFunc
+	deleting map[string]bool
 }
 
 func NewEngine(client *k8s.Client, logger *logging.Logger) *Engine {
@@ -105,13 +106,23 @@ func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) 
 	key := nc.Namespace + "/" + nc.Name
 
 	// Deletion (via finalizer) or an API-driven Deleting phase: stop any
-	// in-flight install reconcile and drive teardown.
+	// in-flight install reconcile exactly once and drive teardown. Repeated
+	// deletion events must NOT cancel the running teardown — status writes
+	// from the teardown itself generate those events.
 	if nc.GetDeletionTimestamp() != nil || phase == crd.PhaseDeleting {
 		e.mu.Lock()
+		if e.deleting == nil {
+			e.deleting = map[string]bool{}
+		}
+		if e.deleting[key] {
+			e.mu.Unlock()
+			return
+		}
 		if cancel, exists := e.running[key]; exists {
 			cancel()
 			delete(e.running, key)
 		}
+		e.deleting[key] = true
 		e.mu.Unlock()
 		// wait for the cancelled reconcile to deregister so the teardown
 		// reconcile isn't deduped away
@@ -178,6 +189,12 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 		if !hasFinalizer(nc, cleanupFinalizer) {
 			return
 		}
+		delKey := nc.Namespace + "/" + nc.Name
+		defer func() {
+			e.mu.Lock()
+			delete(e.deleting, delKey)
+			e.mu.Unlock()
+		}()
 		e.updateStatus(ctx, nc, crd.PhaseDeleting, "NestedCluster deletion requested")
 		log.Info("starting cluster deletion")
 		if err := e.steps.DeleteCluster(ctx, nc); err != nil {

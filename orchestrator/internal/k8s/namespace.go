@@ -69,7 +69,16 @@ func (c *Client) DeleteNamespaceForce(ctx context.Context, name string, timeout 
 		return nil
 	}
 
-	// Escalation: unbind cluster-scoped contents pointing into the namespace.
+	// Escalation 1: break the snapshot↔content mutual-hold deadlock by
+	// releasing the finalizers of VolumeSnapshots in the namespace that are
+	// already being deleted. The bound VolumeSnapshotContent then finalizes
+	// through its normal path (CSI DeleteSnapshot + PV cleanup), so no
+	// storage is orphaned.
+	if err := c.releaseSnapshotHolds(ctx, name); err != nil {
+		return fmt.Errorf("releasing snapshot holds for stuck namespace %s: %w", name, err)
+	}
+	// Escalation 2: delete any remaining cluster-scoped contents pointing
+	// into the namespace.
 	if err := c.sweepContentsForNamespace(ctx, name); err != nil {
 		return fmt.Errorf("sweeping snapshot contents for stuck namespace %s: %w", name, err)
 	}
@@ -118,6 +127,32 @@ func (c *Client) waitNamespaceGone(ctx context.Context, name string, timeout tim
 		}
 	}
 	return false
+}
+
+// releaseSnapshotHolds strips finalizers from VolumeSnapshots in the
+// namespace that already carry a deletionTimestamp. Safe only for
+// already-deletion-requested snapshots: it breaks the documented
+// snapshot↔content bound-protection deadlock without touching live data.
+func (c *Client) releaseSnapshotHolds(ctx context.Context, ns string) error {
+	list, err := c.DynamicClient.Resource(vsGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil // no snapshot CRDs usable
+		}
+		return err
+	}
+	for i := range list.Items {
+		item := &list.Items[i]
+		if item.GetDeletionTimestamp() == nil || len(item.GetFinalizers()) == 0 {
+			continue
+		}
+		empty := []string{}
+		item.SetFinalizers(empty)
+		if _, err := c.DynamicClient.Resource(vsGVR).Namespace(ns).Update(ctx, item, metav1.UpdateOptions{}); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("releasing finalizers on snapshot %s: %w", item.GetName(), err)
+		}
+	}
+	return nil
 }
 
 // sweepContentsForNamespace deletes cluster-scoped VolumeSnapshotContents
