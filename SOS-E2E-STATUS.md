@@ -1675,3 +1675,14 @@ PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
      deletionTimestamps simultaneously (it finalizes fine when deletion is
      simultaneous, as run 4's manual case showed; the orphan arises when ns
      cascade kills the snapshot first).
+
+## 2026-10-14 19:10 UTC — MILESTONE: run 6 PowerOn PASSED (in-band, product-only)
+- 19:09:33 PowerOn → `VM started via KubeVirt API` for master-0/1/2 (19:09:39,
+  19:09:51, 19:10:00); all Running=True. First clean-run boot of masters by the
+  orchestrator itself (catch #8 APIPath fix was the last blocker).
+- Run 6 evidence chain so far: jumpbox auto (ssh core@10.101.0.19), DNS .18,
+  apiVIP .14, karg nameserver=10.101.0.18, MountISO snapshot re-entrancy pass,
+  PowerOn pass. Rendezvous=10.101.0.11; watch WaitBootstrap for lease match
+  (if stalled: rendezvousIP pin in agent-config is the designed fix).
+- USER POLICY THIS PHASE: NO further runs launched by agent. On any failure:
+  update this doc + deliver handoff summary.
