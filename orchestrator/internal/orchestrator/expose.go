@@ -70,21 +70,35 @@ func (s *StepExecutor) exposeCluster(ctx context.Context, nc *crd.NestedCluster)
 	}
 
 	apiHost := nc.Spec.ClusterName + "-api." + appsDomain
-	edgeHost := nc.Spec.ClusterName + "-edge." + appsDomain
+	// Wildcard-able apps host: a Route host of X matches X and *.X, and a
+	// passthrough tunnel preserves the client SNI/Host end-to-end, so the
+	// nested router sees the original app hostname and its wildcard cert
+	// serves TLS. Nested app URLs map mechanically:
+	//   http(s)://<svc>-<ns>.apps.<cluster>.<base>  ->
+	//   http(s)://<svc>-<ns>-<cluster>-apps.<appsDomain>
+	// which keeps the nested console (and its OAuth flow) fully usable —
+	// the nested router matches the forwarded Host against its own routes.
+	appsHost := nc.Spec.ClusterName + "-apps." + appsDomain
 	if err := s.client.EnsurePassthroughRoute(ctx, clusterNs, nc.Spec.ClusterName+"-api-route", apiHost, apiSvc, "api", labels); err != nil {
 		return fmt.Errorf("api route: %w", err)
 	}
-	if err := s.client.EnsurePassthroughRoute(ctx, clusterNs, nc.Spec.ClusterName+"-edge-route", edgeHost, edgeSvc, "https", labels); err != nil {
-		return fmt.Errorf("edge route: %w", err)
+	if err := s.client.EnsurePassthroughRoute(ctx, clusterNs, nc.Spec.ClusterName+"-apps-route", appsHost, edgeSvc, "https", labels); err != nil {
+		return fmt.Errorf("apps route: %w", err)
 	}
 
 	nc.Status.HostAPIRoute = "https://" + apiHost
-	nc.Status.HostConsoleRoute = "https://" + edgeHost
+	// Nested console route is console-openshift-console.apps.<cluster>.<base>;
+	// under the rewrite rule (svc-ns -> svc + "-" + ns, then the -apps host
+	// suffix) it becomes:
+	nc.Status.HostConsoleRoute = "https://console-openshift-console-apps-" +
+		nc.Spec.ClusterName + "-apps." + appsDomain
 
 	log.Info("nested cluster exposed via host routes",
 		"api_route", nc.Status.HostAPIRoute,
-		"edge_route", nc.Status.HostConsoleRoute,
+		"apps_wildcard", "https://"+appsHost,
+		"console", nc.Status.HostConsoleRoute,
 		"api_endpoint_ips", apiIPs, "edge_endpoint_ips", edgeIPs)
+	log.Info("nested app URL rewrite rule: <svc>-<ns>.apps.<cluster>.<base> -> <svc>-<ns>-" + nc.Spec.ClusterName + "-apps." + appsDomain)
 	log.Info("access: oc --insecure-skip-tls-verify --server=" + nc.Status.HostAPIRoute + " login kubeadmin:<password> (cert SAN caveat, see docs)")
 	return nil
 }
