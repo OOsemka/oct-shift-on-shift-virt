@@ -1603,3 +1603,20 @@ PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
 - Run 5 (auto): first teardown driven by the ENGINE itself (CR finalizer →
   DeleteCluster → DeleteNamespaceForce). Watch `deletion failed` in orchestrator
   log; teardown counters watched by proc_5888ac5c8c81.
+
+## 2026-10-14 18:47 UTC — catch #7: first live run of engine-driven teardown exposed two bugs (commit c79e178)
+- Bug A: **self-cancellation storm.** Every teardown `updateStatus` fires a CR
+  watch event; the deletion branch cancelled the in-flight teardown reconcile and
+  restarted it (`deletion failed: context canceled` 2 ms after start). Fix:
+  per-key `deleting` flag — the delete branch cancels a non-teardown reconcile
+  exactly once, ignores repeat deletion events, clears the flag when the
+  teardown reconcile exits (so failures can retry on a later event).
+- Bug B: **escalation order.** Content-only sweep can't break the mutual hold
+  (content stuck too). Correct break = strip finalizers of VolumeSnapshots in
+  the ns that ALREADY have a deletionTimestamp → content then finalizes through
+  its normal path (CSI DeleteSnapshot + PV cleanup), so no orphaned RBD images.
+  (Manual pushes tonight stripped the CONTENT finalizer, which skips CSI
+  deletion — leaks; the product path must never do that.)
+- Both fixed; rollout of `c79e178` re-triggers the still-`Deleting` CR via pod
+  restart. This is run 5's teardown; run-5 loop (proc_5888ac5c8c81) applies the
+  fresh CR when counters zero.
