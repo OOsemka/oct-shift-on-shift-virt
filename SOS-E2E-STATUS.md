@@ -1900,3 +1900,43 @@ read-back verification (~20:35), agent-ISO first boot (agent up = port 22
 OPEN, not emergency shell), pivot ~21:00-21:30, then the post-pivot
 initramfs fetch that run 6 died on (node-guard must progress REFUSED→OPEN
 via grub karg + copy-network layers).
+
+## 2026-10-14 20:35–21:05 UTC — run 8 FAILED (installer.d is radioactive), infraenv lever found, run 9 live
+
+**Run 8 failure (user console, ~20:35):** live-ISO boot reached install stage
+(ignition VALID — run-7 fix confirmed working) then all masters emergency-shelled
+at **t+8s**: `coreos-installer-service` usage error, `<DEST_DEVICE>` missing,
+`--append-karg/--copy-network` present — my run-7 installer.d file's options.
+
+**Root cause (docs + probes, definitive):** per coreos-installer
+customizing-install docs, ANY file in /etc/coreos/installer.d switches a CoreOS
+LIVE image into documented **auto-install-on-boot** mode (live-media feature).
+The agent ISO never removes that boot path: my sos.yaml fired the vanilla
+coreos-installer unit seconds into boot, with no dest-device (the agent's own
+install orchestration never runs in that mode), unit fails →
+coreos-installer.target dependency chain → emergency mode. The
+openshift-install binary's installer.d strings are unrelated to the agent
+path — the earlier probe hit-count reasoning was misleading, sorry for the
+wrong turn. Probe matrix: agent-config rejects kernelArguments, ignition AND
+installerArgs (all `unknown field`); coreos-installer --config-file semantics
+reproduced the exact usage error offline (probe-installer-d).
+
+**Fix 7c85f3e (shipped, running as run 9's image): infraenv surgery.** The ISO
+ignition embeds /etc/assisted/manifests/infraenv.yaml (payload may be
+';base64'-encoded data-URL — handled). ISO job now inserts spec-level
+`installerArgs: [--append-karg, nameserver=<dnsIP>]` after the `spec:` line,
+re-embeds, and verifies by DECODING THE EMBEDDED ignition (asserts
+installerArgs present + installer.d absent tree-wide; merge+verifier blocks
+locally dry-runned in both good/bad directions; full ISO round-trip proven by
+probe-infraenv-edit2). assisted-service forwards installer_args verbatim to
+the agent's coreos-installer → karg lands in the INSTALLED bootloader entries
+— the layer the post-pivot initramfs fetch reads (run 6's deadlock). Live-ISO
+karg retained for pre-pivot. installer.d is banned in code + skill.
+
+**Teardown:** run 8 cleaned 21:00 via the same bounded forceContentsGone
+path; chris reference Ready, untouched throughout all runs.
+
+**Run 9 (created 21:04:32Z):** checkpoints: ISO read-back (~21:12), agent
+first boot (NO emergency; ~21:20), install+pivot (~21:40-22:10), then the
+decisive post-pivot fetch — installed grub now carries nameserver=.18 via
+installerArgs.
