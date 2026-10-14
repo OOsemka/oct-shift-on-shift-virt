@@ -1431,3 +1431,20 @@ jumpbox available from minute one. Product changes committed + rolled:
 Teardown+redeploy plan: wait for canary verdict (pivot result on current
 install = final datapoint on post-pivot leg), then full manual teardown of
 sos-nightly (VMs/PVCs/snapshots/ns/CRs), fresh CR, watch all phases clean.
+
+## 2026-10-14 ~18:20 UTC: CLEAN REDEPLOY STARTED
+
+Canary verdict deferred — the clean run reproduces every datapoint the
+fragmented attempt could still yield (post-pivot leg included), so waiting
+for it only delays the product proof. Teardown executing: all 6 VMs
+(masters, dns-vm, mcs-relay, manual jumpbox) stopped, NestedCluster CR +
+namespace cascade, operator-ns leftovers (installer PVC, iso-block PVC,
+block snapshot) removed. Fresh CR manifest = /tmp/sos-nightly-FRESH.yaml
+(pulled from live spec; carries pullSecret/sshKey as CR fields by design).
+New run expectations with tonight's product build (sha 7951f5cb):
+- DeployDNS: DNS VM at claimed cUDN IP + **jumpbox auto-deployed** (IP on
+  CR annotation sos.octools.io/jumpbox)
+- GenerateISO: nameserver= karg baked from status.dnsIPcUDN automatically
+- MountISO retries: rootdisk boot-sector wipe (bootindex trap closed)
+- ConfigureNodes: node-guard envs correct by construction
+chris-sos-odf remains Ready throughout as reference.
