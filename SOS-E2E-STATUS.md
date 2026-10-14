@@ -1653,3 +1653,25 @@ PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
   (deleting-flag works), 3-min graceful wait, releaseSnapshotHolds broke a REAL
   snapshot↔content hold, content finalized via CSI, ns drained, CR released —
   self-healing in 3m23s with zero operator action.
+
+## 2026-10-14 19:01 UTC — catch #9 (residual gap in my own releaseSnapshotHolds; manual push applied, NOT yet fixed in code)
+- Run-6 teardown drained CR+ns+snapshot, but the orphaned VolumeSnapshotContent
+  stayed forever: deletionTimestamp 18:55:22 + bound-protection finalizer, ref
+  pointing into a now-deleted namespace — external snapshot-controller emitted
+  ZERO events for it (never called CSI DeleteSnapshot, never released). The
+  redeploy loop's content counter therefore never hit zero and run-6 apply
+  stalled (not a run failure — pre-start gate).
+- Manual push: `oc patch volumesnapshotcontent sos-nightly-iso-content -p
+  '{"metadata":{"finalizers":[]}}' --type=merge` → gone. CONSEQUENCE: the RBD
+  backing snapshot for the run-5 ISO block volume is now ORPHANED in the odf
+  pool (CSI delete skipped by finalizer strip; volumeHandle was not captured
+  before patching — find via `rbd snap ls` on the pool's csi-vol-* images,
+  ≤5Gi, from ceph tools pod; harmless but should be reaped).
+- Product fixes owed (for next agent):
+  1. DeleteNamespaceForce must, after ns is gone, wait-gone the swept contents
+     and strip their finalizers as last resort (log warning about orphaned
+     backing), and capture spec.csi.volumeHandle into the log BEFORE any strip.
+  2. Consider: release snapshot holds only AFTER the controller had both
+     deletionTimestamps simultaneously (it finalizes fine when deletion is
+     simultaneous, as run 4's manual case showed; the orphan arises when ns
+     cascade kills the snapshot first).
