@@ -210,6 +210,9 @@ spec:
                     ingressIP:
                       type: string
                       description: Static IP on the VLAN network for Ingress traffic (*.apps.<cluster>.<domain>).
+                    jumpboxIP:
+                      type: string
+                      description: Optional static IP on the VLAN network for the diagnostics jumpbox VM's second NIC, making it ssh-reachable from outside the machine network (same /24 convention as apiIP).
                 storageClassName:
                   type: string
                   description: StorageClass for VM root disk PVCs.

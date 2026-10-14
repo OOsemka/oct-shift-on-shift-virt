@@ -553,19 +553,36 @@ resolve_ok() {
     getent hosts "anything.apps.$DOMAIN" 2>/dev/null | grep -q "$INGRESS_IP"
 }
 
-# Idempotency: skip churn if already pointed at the nested DNS and resolving.
+ALREADY_OK=0
 if grep -q "nameserver $DNS_IP" /etc/resolv.conf 2>/dev/null && resolve_ok; then
-    echo "SKIP: dns already correct"
-    exit 0
+    ALREADY_OK=1
 fi
 
-# ignore-auto-dns: DHCP re-advertises the HOST cluster CoreDNS on every renew
-# (unreachable on this UDN) and would clobber us without it.
+# ALWAYS write the pin into the PERSISTED connection — even when
+# resolv.conf already looks right (run 6 lesson: the old early-SKIP meant
+# the pin never landed, and after the pivot the installed OS re-ran the
+# ignition fetch against the DHCP resolver and deadlocked in initramfs).
+# coreos-installer --copy-network carries .nmconnection files into the
+# installed system, so what we write here is the second DNS layer after
+# the installed-OS grub karg.
 sudo nmcli connection modify "$CON" \
     ipv4.ignore-auto-dns yes \
     ipv4.dns "$DNS_IP" \
     ipv4.dns-search "$DOMAIN" \
     ipv4.dns-priority 10
+
+# Evidence for the run record: the on-disk keyfile must carry the pin.
+if grep -qs "dns=$DNS_IP" /etc/NetworkManager/system-connections/*.nmconnection; then
+    echo "PERSIST: keyfile carries dns pin"
+else
+    echo "WARN PERSIST: no keyfile with the pin (NM kept it volatile?)"
+fi
+
+if [ "$ALREADY_OK" -eq 1 ]; then
+    echo "OK: resolv.conf already correct; persisted pin ensured"
+    exit 0
+fi
+
 sudo nmcli connection up "$CON" >/dev/null
 
 # nmcli activation silently keeps stale servers on some RHCOS builds (live

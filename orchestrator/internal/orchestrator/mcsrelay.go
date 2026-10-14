@@ -73,6 +73,14 @@ func (s *StepExecutor) deployMCSRelay(ctx context.Context, nc *crd.NestedCluster
 	if err != nil {
 		return fmt.Errorf("MCS relay VM never got an IP: %w", err)
 	}
+	// Deterministic plan: the relay's address is preseeded (IPAMClaim), so
+	// a drift here means the claim was ignored — HAProxy rewire would then
+	// silently target the wrong box. Fail loudly.
+	if plan, perr := computeIPPlan(nc.Spec.ClusterName, nc.Spec.Network.CUDNSubnet, nc.Spec.Masters.Count,
+		nc.Spec.Network.APIVIP, nc.Spec.Network.IngressVIP); perr == nil && plan.MCSRelay.String() != relayIP {
+		return fmt.Errorf("MCS relay got IP %s but reserved allocation is %s (check IPAMClaim %s.default)",
+			relayIP, plan.MCSRelay.String(), relayName)
+	}
 	nc.Status.MCSRelayIP = relayIP
 	s.updateCRStatus(ctx, nc)
 	log.Info("MCS relay up", "ip", relayIP)

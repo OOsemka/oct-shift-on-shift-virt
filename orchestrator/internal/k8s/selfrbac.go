@@ -25,7 +25,7 @@ import (
 // content-versioned (name carries a version suffix) so create-if-absent is
 // sufficient even without update rights on clusterroles: bump the version
 // constant when the rule set changes.
-const supplementalRoleName = "sos-orchestrator-supplemental-v1"
+const supplementalRoleName = "sos-orchestrator-supplemental-v2"
 
 func ensureSupplementalRBAC(ctx context.Context, c *Client) error {
 	sa := os.Getenv("SOS_SERVICE_ACCOUNT")
@@ -63,6 +63,13 @@ func ensureSupplementalRBAC(ctx context.Context, c *Client) error {
 				APIGroups: []string{"route.openshift.io"},
 				Resources: []string{"routes"},
 				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+			},
+			{
+				// Deterministic-IP plan: preseed persistent-IP claims on
+				// the cluster UDN before VMs attach (v2).
+				APIGroups: []string{"k8s.cni.cncf.io"},
+				Resources: []string{"ipamclaims", "ipamclaims/status"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "patch"},
 			},
 		},
 	}
