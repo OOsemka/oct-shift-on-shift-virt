@@ -1867,3 +1867,36 @@ mid-run — ships with the next image per no-hand-patch policy.
 **Watch:** the decisive moment is the installed-OS initramfs fetch after
 pivot (~20:45-21:00): node-guard must go REFUSED→TIMEOUT→OPEN (grub karg +
 installer.d) instead of run 6's permanent REFUSED loop.
+
+## 2026-10-14 20:11–20:24 UTC — run 7 FAILED (my ignition bug), fixed 0d69c94, run 8 live
+
+**Run 7 failure (user console capture, ~20:11):** all masters emergency-shelled
+on the LIVE agent ISO boot: `error at $.storage.files.61.overwrite: overwrite
+must be false if source is unspecified` + `warning at
+$.storage.files.61.contents.inline: unused key inline` →
+`ignition-fetch-offline: config is not valid`. Root cause: the run-7 A2 bake
+wrote the installer.d entry with Ignition **2.x `contents.inline`** — Ignition
+3.x has no inline key, so the entry parsed as source-unspecified and
+overwrite:true hard-failed. The grep-only bake check passed because the file
+path string was present; the live ignition parser was the only real validator.
+(Everything else in run 7 was still green right up to the wall: claims,
+reserved IPs .100-.102, installer.d/karg injected, rendezvous .100.)
+
+**Fix 0d69c94 (shipped as :latest, ran run 8):** entry now Ignition 3.x
+`contents.source: "data:,<urlencoded>"` mirroring the installer's own 61
+entries. Two new hard gates in the ISO job: pre-embed asserts (no `inline`
+anywhere in the tree; own entry is data-URL) and a POST-EMBED READ-BACK that
+re-parses the embedded config and asserts the entry shape — grep-only checks
+banned by lesson. Locally dry-run against a simulated 61-file config before
+shipping. Jumpbox annotation now json.Marshal'd (fixes run 7's trailing-comma
+patch error). Skill updated with the inline/source pitfall.
+
+**Run 7 teardown:** 20:17→20:23:53, same bounded forceContentsGone path
+(WARNING trail, "cluster resources deleted"). chris reference untouched.
+
+**Run 8:** created 20:24:28Z. Deterministic IP layer re-proved instantly
+(CollectIPs green again inside a minute). Decisive checkpoints: ISO job
+read-back verification (~20:35), agent-ISO first boot (agent up = port 22
+OPEN, not emergency shell), pivot ~21:00-21:30, then the post-pivot
+initramfs fetch that run 6 died on (node-guard must progress REFUSED→OPEN
+via grub karg + copy-network layers).
