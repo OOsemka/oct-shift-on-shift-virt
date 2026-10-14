@@ -1492,3 +1492,21 @@ Last night's install pivoted despite a mismatched derived value, treating
 this as non-gating; watching PowerOn empirically — if WaitBootstrap stalls
 >~30min, set explicit rendezvousIP + consider static-IP agent-config as
 the product fix.
+
+### Clean-run catch #3 (~18:05 UTC): snapshot clone not re-entrant
+
+MountISO timed out: `snapshot sos-nightly-iso not ready` → events:
+`SnapshotContentMisbound: sos-nightly-iso-content is bound to a different
+snapshot`. Cross-ns "clone" = prebound VolumeSnapshotContent with a
+DETERMINISTIC name (`<snap>-content`) + DeletionPolicy Retain. Any retry
+(new snapshot UID) misbinds against the retained content forever. First
+attempt ever to retry this phase — clean runs used to pass it first try.
+USER DIRECTIVE (standing policy from here): every failure = fix in code +
+re-run the deploy from the beginning; no mid-run manual surgery.
+Fix fe19c71 (rolling): sweep stale snapshot+content pair and wait-gone
+before recreating; only accept existing pair when ref-uid matches AND
+ready; DeletionPolicy Delete (no more per-retry rbd snapshot leak);
+terminating-snapshot guard on CreateVolumeSnapshot (waitGVRGone helper).
+Redeploy executing: build+roll, teardown waits for EVERYTHING gone
+(namespace, PVCs, snapshots, cluster-scoped content) before re-apply —
+runbook hardened against my own catch-#2-style races.
