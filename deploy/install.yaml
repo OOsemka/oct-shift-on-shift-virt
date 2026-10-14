@@ -113,6 +113,18 @@ rules:
       - create
       - delete
   - apiGroups:
+      - k8s.cni.cncf.io
+    resources:
+      - ipamclaims
+      - ipamclaims/status
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+  - apiGroups:
       - security.openshift.io
     resources:
       - securitycontextconstraints
