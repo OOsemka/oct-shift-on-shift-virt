@@ -1550,3 +1550,13 @@ ttlSecondsAfterFinished=3600 on all managed jobs (finished generate-iso pod
 was silently holding pvc-protection and hanging teardown). Run 4 starting:
 build+roll, full teardown (VMIs-gone wait + 4-way numeric gone-loop),
 re-apply. First time the engine will stop AND start VMs entirely in-band.
+
+Teardown collateral note (honesty): the gone-loop's `oc delete volumesnapshot
+--all -n oct-shift-on-shift-virt` also removed `chris-sos-odf-iso-block-snap`
+— per-cluster intermediate ISO snapshots live in the OPERATOR ns. chris
+remains Ready; that snapshot is a transient MountISO artifact (regenerated
+from its surviving installer PVC on any re-ISO), so impact = zero functional,
+but `--all` in a SHARED namespace is forbidden practice on this cluster —
+scope every delete by `<cluster>-` prefix, lesson applied going forward.
+Run-3's SUCCEEDED generate-iso pod (pre-TTL build) again held the installer
+PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
