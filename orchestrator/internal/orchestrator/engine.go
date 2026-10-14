@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 )
 
@@ -101,21 +102,33 @@ func (e *Engine) handleWatchEvents(ctx context.Context, watcher watch.Interface)
 
 func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) {
 	phase := nc.Status.Phase
-
-	if phase == crd.PhaseReady || phase == crd.PhaseFailed {
-		return
-	}
-
 	key := nc.Namespace + "/" + nc.Name
 
-	if phase == crd.PhaseDeleting {
+	// Deletion (via finalizer) or an API-driven Deleting phase: stop any
+	// in-flight install reconcile and drive teardown.
+	if nc.GetDeletionTimestamp() != nil || phase == crd.PhaseDeleting {
 		e.mu.Lock()
 		if cancel, exists := e.running[key]; exists {
 			cancel()
 			delete(e.running, key)
 		}
 		e.mu.Unlock()
+		// wait for the cancelled reconcile to deregister so the teardown
+		// reconcile isn't deduped away
+		for i := 0; i < 60; i++ {
+			e.mu.Lock()
+			_, busy := e.running[key]
+			e.mu.Unlock()
+			if !busy {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
 		e.startReconcile(ctx, nc)
+		return
+	}
+
+	if phase == crd.PhaseReady || phase == crd.PhaseFailed {
 		return
 	}
 
@@ -157,6 +170,33 @@ func (e *Engine) cancelReconcile(name string) {
 
 func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 	log := e.logger.WithCluster(nc.Name).WithCorrelation()
+
+	// A plain `oc delete nestedcluster` (no API handler involved) must still
+	// tear the cluster down: our finalizer keeps this object reconcilable
+	// until cleanup completes, then we release it.
+	if nc.GetDeletionTimestamp() != nil {
+		if !hasFinalizer(nc, cleanupFinalizer) {
+			return
+		}
+		e.updateStatus(ctx, nc, crd.PhaseDeleting, "NestedCluster deletion requested")
+		log.Info("starting cluster deletion")
+		if err := e.steps.DeleteCluster(ctx, nc); err != nil {
+			log.Error("deletion failed", "error", err.Error())
+			e.updateStatus(ctx, nc, crd.PhaseFailed, "Deletion failed: "+err.Error())
+			return
+		}
+		if err := e.removeFinalizer(ctx, nc); err != nil {
+			log.Error("removing cleanup finalizer failed", "error", err.Error())
+		}
+		return
+	}
+
+	// Adopt the cleanup finalizer on first sight of a live cluster.
+	if !hasFinalizer(nc, cleanupFinalizer) {
+		if err := e.addFinalizer(ctx, nc); err != nil {
+			log.Error("adding cleanup finalizer failed", "error", err.Error())
+		}
+	}
 
 	if nc.Status.Phase == crd.PhaseDeleting {
 		log.Info("starting cluster deletion")
@@ -277,4 +317,52 @@ func unstructuredToNestedCluster(obj *unstructured.Unstructured) (*crd.NestedClu
 		return nil, err
 	}
 	return nc, nil
+}
+
+// cleanupFinalizer gives the orchestrator a chance to tear down cluster
+// resources when the NestedCluster itself is deleted.
+const cleanupFinalizer = "sos.octools.io/cleanup"
+
+func hasFinalizer(nc *crd.NestedCluster, f string) bool {
+	for _, existing := range nc.GetFinalizers() {
+		if existing == f {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) addFinalizer(ctx context.Context, nc *crd.NestedCluster) error {
+	return e.patchFinalizers(ctx, nc, true)
+}
+
+func (e *Engine) removeFinalizer(ctx context.Context, nc *crd.NestedCluster) error {
+	return e.patchFinalizers(ctx, nc, false)
+}
+
+func (e *Engine) patchFinalizers(ctx context.Context, nc *crd.NestedCluster, add bool) error {
+	cur, err := e.client.DynamicClient.Resource(nestedClusterGVR).Namespace(nc.Namespace).
+		Get(ctx, nc.Name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	finalizers, _, _ := unstructured.NestedStringSlice(cur.Object, "metadata", "finalizers")
+	out := make([]string, 0, len(finalizers)+1)
+	for _, f := range finalizers {
+		if f == cleanupFinalizer {
+			continue
+		}
+		out = append(out, f)
+	}
+	if add {
+		out = append(out, cleanupFinalizer)
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	_, err = e.client.DynamicClient.Resource(nestedClusterGVR).Namespace(nc.Namespace).
+		Patch(ctx, nc.Name, types.MergePatchType,
+			[]byte(`{"metadata":{"finalizers":`+string(raw)+`}}`), metav1.PatchOptions{})
+	return err
 }

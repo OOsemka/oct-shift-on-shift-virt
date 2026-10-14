@@ -3,6 +3,7 @@ package k8s
 import (
 	"fmt"
 
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -12,6 +13,7 @@ import (
 type Client struct {
 	Clientset     kubernetes.Interface
 	DynamicClient dynamic.Interface
+	Discovery     discovery.DiscoveryInterface
 	RestConfig    *rest.Config
 }
 
@@ -41,9 +43,15 @@ func NewClient(kubeconfig string) (*Client, error) {
 		return nil, fmt.Errorf("creating dynamic client: %w", err)
 	}
 
+	discClient, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("creating discovery client: %w", err)
+	}
+
 	return &Client{
 		Clientset:     clientset,
 		DynamicClient: dynClient,
+		Discovery:     discClient,
 		RestConfig:    config,
 	}, nil
 }

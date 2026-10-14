@@ -1991,15 +1991,19 @@ func (s *StepExecutor) DeleteCluster(ctx context.Context, nc *crd.NestedCluster)
 	}
 	s.client.Clientset.CoreV1().PersistentVolumeClaims(crNs).Delete(ctx, nc.Spec.ClusterName+"-installer", metav1.DeleteOptions{})
 
-	// Clean up snapshots
-	snapName := nc.Spec.ClusterName + "-iso-snap"
+	// Clean up snapshots (block-source snapshot lives in the operator ns and
+	// is named -iso-block-snap; the old -iso-snap name never existed)
+	snapName := nc.Spec.ClusterName + "-iso-block-snap"
 	dstSnapName := nc.Spec.ClusterName + "-iso"
 	s.client.DeleteVolumeSnapshot(ctx, crNs, snapName)
 	s.client.DeleteVolumeSnapshot(ctx, clusterNs, dstSnapName)
 	s.client.DeleteVolumeSnapshotContent(ctx, dstSnapName+"-content")
+	s.client.Clientset.CoreV1().PersistentVolumeClaims(crNs).Delete(ctx, nc.Spec.ClusterName+"-iso-block", metav1.DeleteOptions{})
 
 	s.client.DeleteCUDN(ctx, nc.Spec.ClusterName)
-	s.client.DeleteNamespace(ctx, clusterNs)
+	if err := s.client.DeleteNamespaceForce(ctx, clusterNs, 3*time.Minute); err != nil {
+		return fmt.Errorf("deleting cluster namespace: %w", err)
+	}
 
 	log.Info("cluster resources deleted")
 	return nil
