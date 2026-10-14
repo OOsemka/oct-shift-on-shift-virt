@@ -1940,3 +1940,91 @@ path; chris reference Ready, untouched throughout all runs.
 first boot (NO emergency; ~21:20), install+pivot (~21:40-22:10), then the
 decisive post-pivot fetch — installed grub now carries nameserver=.18 via
 installerArgs.
+
+## 2026-10-14 21:04–23:00+ UTC — RUN 10 DEEP-DIVE (furthest ever) + run-11 fix set — SESSION HANDOFF
+
+### How far run 10 got (all product-automated, zero manual node changes)
+- Deterministic IP plan held: masters .100/.101/.102, DNS .18, jumpbox .19, relay .12.
+- ISO job self-verified: `infraenv installerArgs baked and read-back verified` + `karg injected`.
+- Ignition parsed clean on all masters (run 7 killer gone); NO installer.d auto-install
+  trap (run 8 killer gone). **All three agents booted and were SSH-reachable** — first
+  time ever. ConfigureNodes green. Install wrote to disk 100%, masters rebooted.
+- master-0 = bootstrap node and runs bootstrap CP **from the live ISO** (agent-flow
+  design: no pivot for master-0 until the very end; node-guard applied the known
+  kubeconfig-server FIX there — bootstrap etcd/apiserver/MCS came up).
+- Parked >75m at exactly one point: masters 1/2 post-install first boot cannot fetch
+  their join config (`Waiting for masters to join bootstrap control plane`).
+
+### Root-cause findings (all evidence-backed, probes in oct-shift-on-shift-virt)
+1. **MCS-via-VIP FLAPS (Bug B — FIXED in code, commit 0407a08, NOT yet in an image
+   at time of writing — build :latest before run 11).** From VM-class clients,
+   `https://api-int:22623/config/master` through haproxy returned `000 000 200 000 000 200`
+   (33% success). Cause: `server relay x:12262 check` health probes from the haproxy
+   POD into a cUDN VM — pod→VM SYNs ride the hybrid OVN/netfilter path and time out
+   intermittently (haproxy log: repeated `mcs-backend/relay DOWN, Layer4 timeout` →
+   `ALERT no server available` → UP). Backend empties during windows; initramfs
+   fetches die there. Fix: removed `check` on both MCS relay servers (single statically-
+   known bootstrap MCS server; dead MCS must surface as failed fetch, not flap windows).
+2. **Direct MCS on master-0:22623 = 200 OK. DNS VM healthy (5/5 answers, api-int→.13).**
+   (An early join-probe POD got REFUSED on :22623 — PROBE ARTIFACT: host nftables
+   OUTPUT rules reject pod-originated SYNs to 22623; VM→VM traffic rides OVN and is
+   unaffected. Discriminator: source=POD ⇒ nft applies; source=VM ⇒ not.)
+3. **DHCP on the cUDN serves resolvers 172.30.0.10 + 1.2.3.4** (host DNS + junk) —
+   post-pivot resolv without a karg = broken api-int resolution, same as run 6.
+   OVN-K UDN has NO DNS knob (binary-proven; CUdN NAD config has no dns field).
+4. **agent-config rejects EVERY post-install lever on 4.22** (probe-verified, do NOT
+   re-probe): host `kernelArguments`, host `ignition`, top-level `installerArgs`,
+   and now `postInstallRebootCmds` (probe-pirc-5: `json: unknown field`).
+   InfraEnv `spec.installerArgs` (edited inside the ISO ignition) is the ONLY
+   accepted installer-args channel — whether it APPLIES was mid-verification at
+   handoff: snapshot-reader m1-reader was reading master-1's installed grub entries
+   from a VolumeSnapshot copy (read-only, VM untouched). **Check
+   /tmp/m1-reader-console.log `ENT:` lines: if `nameserver=10.101.0.18` IS present →
+   Bug B alone explains the stall; if ABSENT → installerArgs is ignored by the ISO's
+   embedded assisted-service and run 11 needs the karg via a different route (see
+   Open items).**
+
+### Ops knowledge gained this session (also in skill sos-nested-ocp-ops)
+- virtctl console works headless: `(sleep N | virtctl console vm -n ns > log)` —
+  KEEP STDIN OPEN or it exits instantly; serial may be SILENT in initramfs fetch
+  loops (dracut retries print nothing; no getty prompt response) — absence of serial
+  output is NOT proof of hang-before-console.
+- oc proxy (18443) does NOT proxy websocket upgrades; direct wss to the host API's
+  kubevirt console subresource returned router 503 HTML; virtctl is the way.
+- Disk forensics without touching a live VM: VolumeSnapshot of rootdisk DV → restore
+  PVC MUST set `volumeMode: Block` (source DVs are Block; Filesystem restore fails
+  csi `allow-volume-mode-change`). dataVolumeTemplates clones: match source mode or
+  CDI silently does a slow full copy; DataSource golden images are 30Gi — request 30Gi+.
+- Helper VMs run as non-root read-only-rootfs jobs: only /tmp/... (PVC-mounted) writable.
+- Bootstrap cluster API (/etc/kubernetes/kubeconfig on master-0) does NOT host
+  agent-install CRDs — the ISO's assisted-service is standalone on master-0:8090
+  (metrics endpoint /metrics works; API paths vary). Bootstrap admin.conf appears
+  only after bootstrap-exit. Its serving CA ≠ install-config CA (use --insecure).
+- NAD for the cUDN is named PLAIN `<cluster>` in the nested ns; nested-ns pods get the
+  cUDN as PRIMARY automatically (no k8s.v1.cni.cncf.io/networks annotation — adding it
+  is rejected: "unexpected primary network"; underscores in the logical name also
+  break annotation parsing).
+
+### State at handoff / what run 11 must do (user: NO new run started from this session)
+1. Repo HEAD = 0407a08 (fix B). **Build+push quay.io/cjanisze/sos-orchestrator:latest
+   from 0407a08** (Containerfile.prebuilt.local pattern in orchestrator/), rollout
+   deploy/sos-orchestrator -n oct-shift-on-shift-virt.
+2. Read /tmp/m1-reader-console.log verdict (ENT: lines). If karg ABSENT: the next lever
+   to implement+probe BEFORE a run — options ranked:
+   a) patch the ISO's EMBEDDED infraenv differently: also try `spec.kernelArguments`
+      on the InfraEnv (CRD field on 4.18+ InfraEnv? unprobed — one probe-job cycle),
+   b) bake a firstboot systemd unit + drop-in NM connection into the ISO ignition
+      /etc/assisted/… NO — installed system needs it; ISO ignition files only affect
+      the live agent. Real fallback: after bootstrap-exit is unreachable, so fix MUST
+      work pre-join. Last-resort hack-class: make DNS VM also serve on the host-DNS
+      path is impossible (not ours). Viable: **static IP+DNS via NM initramfs kargs**:
+      coreos-installer supports `--append-karg ip=<client>::<gw>:...:none:off` AND
+      nameserver= together — same installerArgs channel though. So (a)/(probe whether
+      installerArgs reached coreos-installer at all via assisted-service logs on the
+      ISO service: /metrics or journal on master-0 live boot `assisted-install` unit).
+3. Cleanup of run 10: bash /tmp/sos-cleanup.sh (deletes forensic vm/pvc/snapshot FIRST,
+   then probe jobs, then deletes nestedcluster sos-nightly → engine teardown; verify
+   ns sos-nightly-ns gone; chris + chris-sos-odf must stay Ready).
+4. Run 11: apply /tmp/sos-nightly-RUN7.yaml (adds external jumpboxIP 172.21.75.111,
+   verified free). Checkpoints: ISO read-back ~+8m, agents SSH ~+25m, install ~+45m,
+   join = FIRST TRUE TEST of Bug B fix (fetch via VIP now check-less).
