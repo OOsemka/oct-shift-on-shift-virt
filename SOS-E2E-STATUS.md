@@ -1394,3 +1394,40 @@ ISO-patch/retry flow, wipe rootdisk boot sectors (or drop
 dataVol bootindex) together with the ISO re-clone; otherwise retries
 silently boot stale installs. Same trap explains several "ISO patch
 didn't take" mysteries in earlier logs.
+
+## 2026-10-14 ~18:05 UTC: PRODUCTIZED tonight's lessons (commit 33e1aaf)
+
+Decision (user-endorsed): the fragmented sos-nightly attempt retires after
+this canary run; NEXT attempt must be a CLEAN end-to-end deploy with the
+jumpbox available from minute one. Product changes committed + rolled:
+
+1. `jumpbox.go` — new `deployJumpbox` step wired into PhaseDeployDNS
+   (best-effort; JUMPBOX=off disables). <cluster>-jumpbox VM (1c/2Gi,
+   centos-stream9 base, cloud-init `core` user + cluster ssh key, wheel
+   sudo, no services) + IP annotated on the CR
+   (`sos.octools.io/jumpbox: ssh core@<ip>`) so operators find it without
+   logs. Encodes today's proven manual recipe (sos-nightly-jumpbox .105).
+   Note: today's manual box proved cUDN-native via kubevirt pod-attach
+   bridging — no explicit NAD annotation needed or allowed (primary-UDN
+   rejection).
+2. `wipeRootdiskBoot` — mountISO now zeroes the first 100Mi of
+   <node>-rootdisk whenever an ISO PVC is RE-generated for a node (retry
+   path = reinstall intent), via alpine dd Job, no-op if the PVC doesn't
+   exist yet. Directly kills the bootindex trap on all future retries.
+   First mounts untouched (fresh rootdisks carry no bootloader — proven by
+   clean master-2 boots).
+3. node-guard stale-env class of bug: verified `ensureNodeGuard` already
+   full-Update-specs the deployment (create-or-update with live env);
+   tonight's stale `.52/.16` envs persisted only because ConfigureNodes
+   never re-ran after status fixes. A clean run gets correct envs by
+   construction. (Standing TODO: re-entrant reconcile that re-pins envs if
+   status changes after ConfigureNodes passed.)
+4. REMAINING product TODOs: CR deletion/finalizer teardown handler
+   (test1 deletion left everything behind); ISO karg baked from
+   status.dnsIPcUDN (already coded in 2c8c324, first live proof expected
+   on the clean run); dns-vm has NO ssh user by design (add users block
+   there too for symmetry? low priority).
+
+Teardown+redeploy plan: wait for canary verdict (pivot result on current
+install = final datapoint on post-pivot leg), then full manual teardown of
+sos-nightly (VMs/PVCs/snapshots/ns/CRs), fresh CR, watch all phases clean.
