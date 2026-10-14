@@ -1460,3 +1460,12 @@ manual history) masked it. Exactly the class of bug this redeploy exists
 to find. Fix 72f7ddb: VIP check moved after the secret-existence branch
 (only required on the retry/regen path where it's meaningful). New image
 rolled, phase reset Failed->MCSRelay, run resumed.
+
+### Jumpbox product proof (17:39 UTC)
+
+DeployDNS auto-created BOTH VMs with zero manual steps: dns-vm .19,
+**jumpbox .20**, CR annotation `sos.octools.io/jumpbox: ssh core@10.101.0.20`,
+verified `ssh core@10.101.0.20` from helper pod (key auth OK, correct
+hostname/IP). Operators now have in-network SSH from phase ~5 of a fresh
+install. (Note: virt-launcher podIP stays on default net — cUDN guest IPs
+are not port-forwardable; use helper pod or vlan2111.)
