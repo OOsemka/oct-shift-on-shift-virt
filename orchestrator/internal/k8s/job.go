@@ -20,6 +20,14 @@ import (
 // work (observed: ConfigureNodes "passed" on a stale job whose run predates
 // the VMs even booting). An actively running job is left alone and waited on.
 func (c *Client) CreateJob(ctx context.Context, job *batchv1.Job) error {
+	// Finished job pods hold pvc-protection on any mounted PVC until the pod
+	// object itself is deleted; a SUCCEEDED generate-iso pod silently blocked
+	// teardown of the installer PVC. Default to GC one hour after finish
+	// (enough window to forensics-read logs from the Job/pod).
+	if job.Spec.TTLSecondsAfterFinished == nil {
+		ttl := int32(3600)
+		job.Spec.TTLSecondsAfterFinished = &ttl
+	}
 	_, err := c.Clientset.BatchV1().Jobs(job.Namespace).Create(ctx, job, metav1.CreateOptions{})
 	if errors.IsAlreadyExists(err) {
 		existing, gerr := c.Clientset.BatchV1().Jobs(job.Namespace).Get(ctx, job.Name, metav1.GetOptions{})
