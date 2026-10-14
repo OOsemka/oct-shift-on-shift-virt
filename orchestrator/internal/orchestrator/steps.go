@@ -548,8 +548,15 @@ func (s *StepExecutor) generateHAProxyConfigAPI(nc *crd.NestedCluster) string {
 	// Until then the backends exist but are empty (haproxy boots fine).
 	var mcsServers, mcsAuthServers string
 	if relay := nc.Status.MCSRelayIP; relay != "" {
-		mcsServers = fmt.Sprintf("  server relay %s:12262 check\n", relay)
-		mcsAuthServers = fmt.Sprintf("  server relay %s:12264 check\n", relay)
+		// NO health check on the relay: the check is issued from the haproxy
+		// POD into a VM on the cUDN — pod->VM SYNs ride the hybrid OVN/netfilter
+		// path and intermittently time out, which flapped the backend
+		// (run 10: join fetches via the VIP got 000/000/200/000/000/200).
+		// Bootstrap MCS is a single, statically-known server behind a
+		// long-lived relay; a dead MCS must surface as a failed fetch the
+		// initramfs retries, not as a flap window that blackholes the VIP.
+		mcsServers = fmt.Sprintf("  server relay %s:12262\n", relay)
+		mcsAuthServers = fmt.Sprintf("  server relay %s:12264\n", relay)
 	}
 	return fmt.Sprintf(`global
   maxconn 4096
