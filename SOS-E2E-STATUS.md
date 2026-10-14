@@ -1448,3 +1448,15 @@ New run expectations with tonight's product build (sha 7951f5cb):
 - MountISO retries: rootdisk boot-sector wipe (bootindex trap closed)
 - ConfigureNodes: node-guard envs correct by construction
 chris-sos-odf remains Ready throughout as reference.
+
+### Clean-run catch #1 (17:35 UTC): MCSRelay deadlock on fresh installs
+
+`MCSRelay -> Failed: API VIP cUDN IP missing`. Ordering inversion shipped
+in 2c8c324: rewireHAProxyMCSToRelay hard-gated on status.APIVIPCUDN
+(populated only AFTER DeployHAProxy's pod lease) before its own
+"secret-absent → first-install no-op" branch — so the guard made every
+CLEAN install fail while fragmented runs (secret+VIP already present from
+manual history) masked it. Exactly the class of bug this redeploy exists
+to find. Fix 72f7ddb: VIP check moved after the secret-existence branch
+(only required on the retry/regen path where it's meaningful). New image
+rolled, phase reset Failed->MCSRelay, run resumed.
