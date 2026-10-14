@@ -1625,3 +1625,27 @@ PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
   loop applied fresh CR 18:44 (no snapshots existed at that point — run 4 died
   before creating them — so the deadlock-break path itself first exercises on
   the NEXT teardown, which will have real snapshot+content pairs).
+
+## 2026-10-14 18:54 UTC — run 5: MountISO PASSED (snapshot RBAC proven), PowerOn failed again → catch #8 (commit 802c793): it was NEVER RBAC
+- Run 5 (fully-patched build) evidence: karg nameserver=10.101.0.18 verified;
+  MountISO first-time pass — snapshot+content Bound/Ready with shipped-role-only
+  permissions (catch #6 fix proven).
+- PowerOn: `forbidden ... cannot put path
+  "/subresources.kubevirt.io/v1/namespaces/.../start"`. Live role HAD the
+  subresources rules. Decisive probe: PUT to the aggregated path
+  `/apis/subresources.kubevirt.io/v1/.../start` with a fresh SA token returned
+  **404 (authorized)** on a nonexistent VM — RBAC passes. Engine failed in 5 ms
+  = local fast-reject: `rest.RESTClientFor` with only `GroupVersion` set emits
+  `/subresources.kubevirt.io/v1/...` (no `/apis`) — a path the main authorizer
+  evaluates on raw URL attributes and denies; the aggregated endpoint never saw
+  the request. Fix: `restCfg.APIPath = "/apis"` in vm.go startVM/stopVM client.
+- Correction to catch #4: its "live role lacked subresources rules" diagnosis
+  was WRONG — the denial was the client URL all along (the role gaps it found
+  were real but unrelated: snapshot rules fixed in catch #6). Lesson: a
+  `forbidden ... cannot <verb> path "..."` message (PATH form, not
+  resource/group form) means URL-shape/mapping failure, not RBAC rules; and
+  duration_ms≈5 means the main apiserver rejected it, aggregated servers take
+  longer. Always discriminate with a direct path probe + nonexistent-object
+  404-vs-403 test before touching RBAC.
+- Run 6 launched: first teardown WITH real snapshot+content → first live test
+  of releaseSnapshotHolds + deleting-flag + APIPath PowerOn fix.
