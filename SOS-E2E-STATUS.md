@@ -2028,3 +2028,41 @@ installerArgs.
 4. Run 11: apply /tmp/sos-nightly-RUN7.yaml (adds external jumpboxIP 172.21.75.111,
    verified free). Checkpoints: ISO read-back ~+8m, agents SSH ~+25m, install ~+45m,
    join = FIRST TRUE TEST of Bug B fix (fetch via VIP now check-less).
+
+### FINAL SESSION STATE (2026-10-14 ~23:20 UTC) — user directive: NO new run started
+- **Image LIVE**: quay.io/cjanisze/sos-orchestrator:latest + :061256f contains ALL
+  fixes (deterministic IP plan, InfraEnv installerArgs surgery + read-back verifier,
+  create-image 3x retry, MCS relay NO-health-check Bug B fix). Deployment rolled out.
+- **Run 10 LEFT RUNNING on purpose** (parked at WaitBootstrap join loop; wait job
+  self-expires ~00:20 UTC, then CR=Failed, harmless; masters idle in initramfs retry
+  loop). Next agent's call: keep or `bash /tmp/sos-cleanup.sh` (deletes forensic
+  reader first, probe jobs, then the CR -> engine teardown; verify ns sos-nightly-ns
+  gone; chris/chris-sos-odf stay Ready).
+- Forensic reader left STOPPED/absent — recreate from /tmp/m1-reader.json if needed
+  (Block volumeMode mandatory; keep console stdin open).
+- **Bug A status = OPEN**: installerArgs (InfraEnv) is baked+verified in the ISO but
+  snapshot evidence shows the karg NOT landing on installed grub entries, and every
+  agent-config install-stage lever is rejected on 4.22 (kernelArguments, ignition,
+  installerArgs, postInstallRebootCmds — all `unknown field`, probe-proven, do not
+  re-probe). Remaining candidate levers, in order of preference:
+  1. **MachineConfig manifests trick**: does the agent flow honor /manifests in the
+     config dir (rendered into the MCO before bootstrap complete)? If yes, an MC with
+     kernelArguments nameserver=... hits the joiner's SECOND boot — too late for the
+     join fetch. Only useful post-join. Skip unless join otherwise works.
+  2. **Static-IP kargs via ip= is already present (`ip=<mac>:dhcp`) but resolver-less**;
+     coreos-installer supports `--append-karg ip=<client>::<gw>:<nameserver>:...` —
+     same dead installerArgs channel.
+  3. **Realistic path**: since Bug B is fixed and the VIP MCS now answers reliably,
+     consider making api-int resolvable WITHOUT client-side DNS by moving MCS fetch
+     to IP: the only remaining knob we control pre-join is the ISO ignition itself —
+     investigate a dracut config layer (e.g. /etc/cmdline.d via ISO live image is
+     live-ISO-scoped, NOT installed-disk-scoped) — i.e. likely DEAD too. If all dead,
+     the honest fallback is product-side: after masters stall, engine detects
+     join-loop (node-guard REFUSED >20m), marks run failed EARLY with actionable
+     message, rather than burning the 3h window. The upstream-correct fix is a
+     supported karg channel in agent-config/InfraEnv — file against product repo as
+     known limitation on 4.22; revisit on 4.23 installer helper.
+- Artifacts: this doc; /tmp/run6-evidence/ (screenshots runs7-10, probe logs);
+  /tmp/sos-nightly-RUN7.yaml (run manifest); /tmp/sos-cleanup.sh; /tmp/probe-*.json;
+  probes + join-probe pod in cluster (cleanup script removes).
+- chris + chris-sos-odf Ready throughout; zero physical-node changes ever.
