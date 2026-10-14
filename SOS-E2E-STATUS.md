@@ -1816,3 +1816,54 @@ PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
 - RBAC delta: orchestrator ClusterRole gains ipamclaims (create/get/list/
   patch/update) + status subresource. Live role must be re-applied (skill
   pitfall: image rolls don't roll the role).
+
+## 2026-10-14 19:55–20:10 UTC — fixes shipped (7cb2347), run 6 torn down, run 7 LIVE
+
+**Code (commit 7cb2347, image quay.io/cjanisze/sos-orchestrator:7cb2347 = :latest):**
+- A: agent-config provably CANNOT carry kargs/ignition — probe-agentcfg-2
+  verdicts: host-level `kernelArguments` and host-level `ignition` both
+  `json: unknown field`. So the ISO job bakes `/etc/coreos/installer.d/sos.yaml`
+  (append-karg nameserver=<dnsIP> + copy-network: true) into the agent ISO's
+  own ignition via coreos-installer show→merge→embed. The installer binary
+  itself references installer.d (6×) and append-karg (1×) — the mechanism is
+  native, not a hack. Layers: (1) installed-OS grub karg (this), (2)
+  copy-network carrying ConfigureNodes' pinned .nmconnection, (3) live-ISO
+  karg (unchanged).
+- A3: ConfigureNodes fix-node.sh no longer early-SKIPs (run 6: skip meant the
+  pin was never written anywhere). It ALWAYS writes the NM pin + prints a
+  PERSIST: keyfile evidence line.
+- B: deterministic ipPlan preseeded as IPAMClaims (OVN-K honors preseeded
+  status.ips — proven again live): dns .18, jumpbox .19, relay .12, masters
+  .100-.102; gateway +1 and CR-VIP collisions rejected at compute time;
+  unit-tested. CollectIPs/DNS-VM/MCS-relay HARD-VERIFY measured==reserved.
+  Rendezvous recorded deterministically at GenerateISO.
+- C: optional externalAccess.jumpboxIP → jumpbox VM second bridge NIC on the
+  vlan NAD, static /24 no-gateway (nmcli con sos-ext, metric 700).
+- #9: DeleteNamespaceForce escalation 3 forceContentsGone (bounded 2m wait,
+  then volumeHandle-logged finalizer strip).
+- RBAC: self-grant v2 (ipamclaims + status); base ClusterRole in
+  deploy/install.yaml extended and re-applied — SA cannot self-grant what the
+  base role lacks (correctly refused first, then fixed via the install path).
+
+**Run 6 teardown (first exercise of catch #9):** deleted 19:56:12Z →
+`20:01:13 [teardown] WARNING: volumeSnapshotContent sos-nightly-iso-content
+(volumeHandle=) still stuck after delete; stripping finalizers` → namespace
+gone, contents 0, "cluster resources deleted" 20:01:13. 5m01s total, bounded,
+automatic. chris reference untouched throughout.
+
+**Run 7 (created 20:01:55Z) checkpoints passed:**
+- 6 IPAMClaims preseeded; ALL masters landed exactly on reserved IPs
+  (CollectIPs done in 40s — DHCP wait effectively gone).
+- Relay .12, DNS .18, jumpbox .19 (+ external 172.21.75.111) all confirmed.
+- GenerateISO: `installer.d baked` + `karg injected` verified in-job;
+  status.rendezvousIP=10.101.0.100 before any discovery scraping.
+- PowerOn entered ~20:11.
+
+**Known-deferred (cosmetic):** jumpbox CR-annotation patch has a trailing
+comma when jumpboxIP is set (`error decoding patch` logged, deploy not
+affected; fix queued: build annotation map + json.Marshal). Not hot-patched
+mid-run — ships with the next image per no-hand-patch policy.
+
+**Watch:** the decisive moment is the installed-OS initramfs fetch after
+pivot (~20:45-21:00): node-guard must go REFUSED→TIMEOUT→OPEN (grub karg +
+installer.d) instead of run 6's permanent REFUSED loop.
