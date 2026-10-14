@@ -1189,7 +1189,17 @@ cp /secrets/install-config.yaml /output/config/
 cp /secrets/agent-config.yaml /output/config/
 
 echo "Generating agent ISO..."
-openshift-install agent create image --dir=/output/config --log-level=info
+# Registry flakes (quay 502s on release layers) are transient; the whole
+# generation is idempotent inside this fresh PVC dir, so retry with backoff
+# instead of failing the entire run on one bad gateway.
+attempt=0
+until openshift-install agent create image --dir=/output/config --log-level=info; do
+  attempt=$((attempt+1))
+  if [ "$attempt" -ge 3 ]; then echo "agent create image failed 3x"; exit 1; fi
+  echo "create image failed (attempt $attempt); retrying in 90s"
+  find /output/config -mindepth 1 -maxdepth 1 ! -name 'auth' ! -name 'install-config.yaml' ! -name 'agent-config.yaml' -delete || true
+  sleep 90
+done
 
 ISO=$(ls /output/config/*.iso | head -1)
 
