@@ -157,7 +157,11 @@ hostname: %s
     content: |
       import socket, threading, sys, itertools
       MASTERS = sys.argv[1:]
-      BACKENDS = {12262: [(m, 22623) for m in MASTERS], 12264: [(m, 22624) for m in MASTERS]}
+      BACKENDS = {
+          12262: [(m, 22623) for m in MASTERS], 12264: [(m, 22624) for m in MASTERS],
+          6443:  [(m, 6443) for m in MASTERS],
+          22623: [(m, 22623) for m in MASTERS], 22624: [(m, 22624) for m in MASTERS],
+      }
       RR = {p: itertools.cycle(v) for p, v in BACKENDS.items()}
       LOCK = threading.Lock()
 

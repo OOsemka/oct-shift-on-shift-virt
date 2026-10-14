@@ -564,6 +564,9 @@ backend ingress-http-backend
 }
 
 func (s *StepExecutor) deployDNS(ctx context.Context, nc *crd.NestedCluster) error {
+	if dnsVMMode() {
+		return s.deployDNSVM(ctx, nc)
+	}
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("dns")
 	targetNs := nc.Spec.Namespace
 
@@ -585,19 +588,33 @@ func (s *StepExecutor) deployDNS(ctx context.Context, nc *crd.NestedCluster) err
 	// spec.network.apiVIP/ingressVIP are never actually bound to anything and
 	// MUST NOT be served in DNS (a VM querying api.<zone> would hit a dead IP,
 	// possibly one DHCP later hands to a node — silent split-brain).
+	// NOTE (corrected 2026-10-14): the host nftables 22623/22624 rejects are
+	// SYN-match rules in OUTPUT (host/pod-originated traffic only). VM->VIP
+	// MCS traffic rides the OVN pipeline and never hits netfilter — proven by
+	// master-0 -> haproxy cUDN :22623 == HTTP 200 with zero exceptions. So
+	// the HAProxy pod lease IS a legal MCS front; keep it authoritative. The
+	// relay VM (if present, with 22623 frontends) is only a fallback VIP.
 	if nc.Status.APIVIPCUDN == "" || nc.Status.IngressVIPCUDN == "" {
 		if nc.Status.APIVIPCUDN == "" {
 			ip, err := s.client.WaitForDeploymentCUDNIP(ctx, targetNs, clusterName+"-haproxy-api", 2*time.Minute)
 			if err == nil {
-				apiVIP = ip
+				nc.Status.APIVIPCUDN = ip
 			}
 		}
 		if nc.Status.IngressVIPCUDN == "" {
 			ip, err := s.client.WaitForDeploymentCUDNIP(ctx, targetNs, clusterName+"-haproxy-ingress", 2*time.Minute)
 			if err == nil {
-				ingressVIP = ip
+				nc.Status.IngressVIPCUDN = ip
 			}
 		}
+	}
+	if nc.Status.APIVIPCUDN != "" {
+		apiVIP = nc.Status.APIVIPCUDN
+	} else if nc.Status.MCSRelayIP != "" {
+		apiVIP = nc.Status.MCSRelayIP
+	}
+	if nc.Status.IngressVIPCUDN != "" {
+		ingressVIP = nc.Status.IngressVIPCUDN
 	}
 
 	if apiVIP == "" || ingressVIP == "" {
@@ -1096,6 +1113,9 @@ func (s *StepExecutor) generateISO(ctx context.Context, nc *crd.NestedCluster) e
 							ImagePullPolicy: corev1.PullAlways,
 							Env: []corev1.EnvVar{
 								{Name: "HOME", Value: "/tmp"},
+								// persistent nested DNS (VM-first); baked as a
+								// nameserver= karg into the live ISO.
+								{Name: "DNS_IP", Value: nc.Status.DNSIPCUDN},
 							},
 							Command: []string{"/bin/bash", "-c"},
 							Args: []string{`set -ex
@@ -1105,6 +1125,34 @@ cp /secrets/agent-config.yaml /output/config/
 
 echo "Generating agent ISO..."
 openshift-install agent create image --dir=/output/config --log-level=info
+
+ISO=$(ls /output/config/*.iso | head -1)
+
+# Bake the nested DNS server into the live ISO's grub entries. Pre-pivot
+# guests get their resolver from cUDN DHCP otherwise — a stale lease (dead
+# DNS pod IP) strands ignition fetch for hours with no in-guest recourse
+# (nmcli is a no-op pre-pivot). nameserver= is a dracut karg honored by
+# the RHCOS live initramfs, so it fixes the resolver at the exact stage
+# where ignition fetch runs. agent-config v1alpha1 has no kernelArguments
+# field, so post-process with coreos-installer instead. No root needed:
+# extract the C9S AppStream rpm with rpm2archive+tar and run the binary.
+if [ -n "${DNS_IP:-}" ]; then
+  echo "Injecting nameserver=$DNS_IP karg into $ISO"
+  mkdir -p /tmp/ci && cd /tmp/ci
+  REL=https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os/Packages
+  if command -v coreos-installer >/dev/null 2>&1; then
+    CI=coreos-installer
+  else
+    curl -sL -o ci.rpm "$REL/coreos-installer-0.25.0-1.el9.x86_64.rpm"
+    rpm2archive ci.rpm && tar xzf ci.rpm.tgz
+    CI=$(find . -type f -name coreos-installer | head -1)
+  fi
+  test -n "$CI" || { echo "coreos-installer unavailable"; exit 41; }
+  "$CI" --version
+  "$CI" iso kargs modify -a "nameserver=$DNS_IP" "$ISO"
+  "$CI" iso kargs show "$ISO" | grep -c "nameserver=$DNS_IP"
+  echo "karg injected"
+fi
 
 ls -la /output/config/
 echo "ISO generation complete"

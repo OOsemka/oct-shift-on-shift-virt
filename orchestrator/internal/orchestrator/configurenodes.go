@@ -61,7 +61,7 @@ func (s *StepExecutor) configureNodes(ctx context.Context, nc *crd.NestedCluster
 	}
 
 	dnsIP := nc.Status.DNSIPCUDN
-	if dnsIP == "" {
+	if dnsIP == "" && !dnsVMMode() {
 		ip, err := s.client.WaitForDeploymentCUDNIP(ctx, clusterNs, nc.Spec.ClusterName+"-dns", 2*time.Minute)
 		if err != nil {
 			return fmt.Errorf("DNS pod cUDN IP unavailable for node configuration: %w", err)
@@ -69,7 +69,12 @@ func (s *StepExecutor) configureNodes(ctx context.Context, nc *crd.NestedCluster
 		dnsIP = ip
 		nc.Status.DNSIPCUDN = ip
 	}
+	// HAProxy lease is the authoritative api VIP (VM->pod MCS rides the OVN
+	// pipeline, unfiltered); the relay VM is a fallback front only.
 	apiIP := nc.Status.APIVIPCUDN
+	if apiIP == "" {
+		apiIP = nc.Status.MCSRelayIP
+	}
 	ingressIP := nc.Status.IngressVIPCUDN
 	if apiIP == "" || ingressIP == "" {
 		return fmt.Errorf("HAProxy cUDN IPs not in status (DeployHAProxy/DeployDNS must run first)")
