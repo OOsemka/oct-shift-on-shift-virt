@@ -90,11 +90,6 @@ func (s *StepExecutor) deployMCSRelay(ctx context.Context, nc *crd.NestedCluster
 func (s *StepExecutor) rewireHAProxyMCSToRelay(ctx context.Context, nc *crd.NestedCluster, relayIP string) error {
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("mcs-relay")
 	clusterNs := nc.Spec.Namespace
-	apiIP := nc.Status.APIVIPCUDN
-	if apiIP == "" {
-		return fmt.Errorf("API VIP cUDN IP missing; cannot regenerate HAProxy config")
-	}
-	_ = apiIP // (config generation reads status itself)
 
 	cfg := s.generateHAProxyConfigAPI(nc)
 	if !strings.Contains(cfg, relayIP) {
@@ -104,8 +99,14 @@ func (s *StepExecutor) rewireHAProxyMCSToRelay(ctx context.Context, nc *crd.Nest
 	if _, err := s.client.Clientset.CoreV1().Secrets(clusterNs).Get(ctx, secretName, metav1.GetOptions{}); err != nil {
 		// Normal first-install path: DeployHAProxy has not run yet and will
 		// bake this config (relay included) into the FIRST generation.
+		// APIVIPCUDN is legitimately empty at this point (it comes from the
+		// HAProxy pod's cUDN lease AFTER DeployHAProxy) — do NOT gate on it
+		// here or every clean install deadlocks the phase.
 		log.Info("haproxy config secret not present yet; DeployHAProxy will include the relay backend", "ip", relayIP)
 		return nil
+	}
+	if nc.Status.APIVIPCUDN == "" {
+		return fmt.Errorf("API VIP cUDN IP missing while HAProxy config exists; cannot regenerate")
 	}
 	if err := s.client.UpdateSecretData(ctx, clusterNs, secretName, "haproxy.cfg", []byte(cfg)); err != nil {
 		return fmt.Errorf("updating haproxy api config secret: %w", err)
