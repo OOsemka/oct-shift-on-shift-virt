@@ -347,6 +347,11 @@ func (c *Client) SetVMPower(ctx context.Context, namespace, vmName string, on bo
 		// verbs; issue the start/stop PUT over a plain REST client (cheaper
 		// than vendoring the full kubevirt clientset).
 		restCfg := rest.CopyConfig(c.RestConfig)
+		// RESTClientFor without an explicit APIPath puts the group into the
+		// path (/subresources.kubevirt.io/v1/...), which misses the
+		// aggregated endpoint (/apis/subresources.kubevirt.io/v1/...) and is
+		// rejected by the main authorizer on raw path attributes.
+		restCfg.APIPath = "/apis"
 		restCfg.GroupVersion = &schema.GroupVersion{Group: "subresources.kubevirt.io", Version: "v1"}
 		restCfg.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
 		rc, rerr := rest.RESTClientFor(restCfg)
