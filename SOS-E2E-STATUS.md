@@ -1357,3 +1357,40 @@ kubevirt version = `spec.running` (runIfAbsent rejected).
 Then: ssh core@<jumpbox-pod-ip> from rescue pod -> dig @10.101.0.68,
 dig @172.30.0.10, curl -k https://api-int:22623/config/master, ssh into
 master-0 to compare — from inside-cluster position.
+
+## ROOT CAUSE FOUND ~17:35 UTC: bootindex — patched ISO was never booting
+
+QEMU cmdline (virt-launcher log) for master-1 shows:
+  rootdisk: virtio-blk-pci ... "bootindex":1
+  iso:      ide-cd        ... "bootindex":2
+=> the VM always boots the ROOTDISK first. Both masters had PARTIAL
+installs on their rootdisks (from the ~16:07 boots that reached pivot), so
+every "reboot with freshly patched ISO" actually re-booted the stale
+installed OS, whose `ignition-firstboot` fetch loops with its own poisoned
+resolver (old ConfigureNodes pinned `.18` era values / DHCP 172.30.0.10)
+and NONE of our ISO kargs apply — the karg was patched into a disc that was
+never read. The console loop everyone kept watching = installed-OS
+firstboot fetch, not ISO fetch. Identical message format fooled us.
+
+Corollaries (all now consistent):
+- master-2's 16:20 success was a genuine ISO boot (rootdisk still empty
+  then). After its pivot, its rootdisk also hijacked subsequent boots.
+- "zero DNS" sniffer result was a TUN false-negative: kubevirt taps deliver
+  IP-only frames (no L2 header) — AF_PACKET frames start with 0x45 (the
+  3813 'eth4500' buckets WERE IPv4 flowing). Sniffers must parse
+  frame[0]>>4==4 => IP at offset 0.
+- Wire truth via jumpbox (cUDN-native guest, `.105`): .68 answers in 0.00s
+  (api-int->10.36), 172.30.0.10 answers NXDOMAIN, .18 dead-timeout, and
+  MCS https://10.101.0.36:22623/config/master = HTTP 200 / 471533 bytes
+  FROM A GUEST. The whole stack is healthy; only the boot source was wrong.
+
+FIX APPLIED: stopped master-1/2, privileged pod dd-wiped first 100Mi of
+each ROOTDISK PVC (destroys stale GRUB/ESP so BIOS falls through to
+ISO bootindex=2), restarted. Now they boot the VERIFIED ISO
+(nameserver=10.101.0.68 baked) on clean disks -> agent -> fetch (proven
+reachable) -> fresh install -> agent rejoin to master-0 (rendezvous
+already done; proven path). PRODUCT FIX NEEDED (orchestrator): on any
+ISO-patch/retry flow, wipe rootdisk boot sectors (or drop
+dataVol bootindex) together with the ISO re-clone; otherwise retries
+silently boot stale installs. Same trap explains several "ISO patch
+didn't take" mysteries in earlier logs.
