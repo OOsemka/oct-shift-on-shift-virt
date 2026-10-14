@@ -1649,3 +1649,7 @@ PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
   404-vs-403 test before touching RBAC.
 - Run 6 launched: first teardown WITH real snapshot+content → first live test
   of releaseSnapshotHolds + deleting-flag + APIPath PowerOn fix.
+- TEARDOWN FULLY PROVEN (run 6, 18:55:22→18:58:45): single deletion reconcile
+  (deleting-flag works), 3-min graceful wait, releaseSnapshotHolds broke a REAL
+  snapshot↔content hold, content finalized via CSI, ns drained, CR released —
+  self-healing in 3m23s with zero operator action.
