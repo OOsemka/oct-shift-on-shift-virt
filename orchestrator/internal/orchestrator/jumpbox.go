@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -102,15 +103,18 @@ func (s *StepExecutor) deployJumpbox(ctx context.Context, nc *crd.NestedCluster)
 			"reserved", plan.Jumpbox.String(), "actual", ip)
 	}
 
-	annos := fmt.Sprintf(`{"metadata":{"annotations":{"sos.octools.io/jumpbox":"ssh core@%s","sos.octools.io/jumpbox-access":"oc -n %s run diag --rm -it --restart=Never --image=%s --command -- bash  # in-ns pods reach every cUDN IP",`,
-		ip, clusterNs, sshHelperImage())
-	if extIP != "" {
-		annos += fmt.Sprintf(`"sos.octools.io/jumpbox-ext":"ssh core@%s (from the external vlan)",`, extIP)
+	ann := map[string]string{
+		"sos.octools.io/jumpbox":        "ssh core@" + ip,
+		"sos.octools.io/jumpbox-access": "oc -n " + clusterNs + " run diag --rm -it --restart=Never --image=" + sshHelperImage() + " --command -- bash  # in-ns pods reach every cUDN IP",
 	}
-	annos += "}}"
-	_, err = s.client.DynamicClient.Resource(nestedClusterGVR).Namespace(nc.Namespace).
-		Patch(ctx, nc.Name, types.MergePatchType, []byte(annos), metav1.PatchOptions{})
+	if extIP != "" {
+		ann["sos.octools.io/jumpbox-ext"] = "ssh core@" + extIP + " (from the external vlan)"
+	}
+	patchBody, err := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"annotations": ann}})
 	if err != nil {
+		log.Info("failed to encode jumpbox annotation patch", "error", err.Error())
+	} else if _, err := s.client.DynamicClient.Resource(nestedClusterGVR).Namespace(nc.Namespace).
+		Patch(ctx, nc.Name, types.MergePatchType, patchBody, metav1.PatchOptions{}); err != nil {
 		log.Info("failed to annotate CR with jumpbox address", "error", err.Error())
 	}
 	log.Info("jumpbox ready", "ip", ip, "ssh", "core@"+ip, "external", extIP)

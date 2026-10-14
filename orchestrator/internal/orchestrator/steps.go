@@ -1222,22 +1222,43 @@ if [ -n "${DNS_IP:-}" ]; then
   "$CI" iso ignition show "$ISO" > /tmp/agent.ign
   DNS_IP="$DNS_IP" python3 - <<'PY'
 import json, os
+from urllib.parse import quote
 dns = os.environ["DNS_IP"]
 ign = json.load(open("/tmp/agent.ign"))
 files = ign.setdefault("storage", {}).setdefault("files", [])
 path = "/etc/coreos/installer.d/sos.yaml"
 files[:] = [f for f in files if f.get("path") != path]
+content = "copy-network: true\nappend-karg:\n- nameserver=%s\n" % dns
+# Ignition 3.x has NO contents.inline key (that is 2.x legacy): the entry
+# reads as source-unspecified and overwrite:true then hard-fails validation.
+# Run 7 paid for this lesson: all masters emergency-shelled on
+# "unused key inline". 3.x content is a data: URL in contents.source.
 files.append({
     "path": path,
     "mode": 420,
     "overwrite": True,
-    "contents": {"inline": "copy-network: true\nappend-karg:\n- nameserver=%s\n" % dns},
+    "contents": {"source": "data:," + quote(content)},
 })
+# Self-validate the merged shape BEFORE embedding: no entry may carry the
+# legacy inline key, and our entry must hold a data-URL source.
+for f in files:
+    assert "inline" not in f.get("contents", {}), "legacy inline key at %s" % f.get("path")
+assert files[-1]["contents"]["source"].startswith("data:,")
 json.dump(ign, open("/tmp/agent.mod", "w"))
 PY
   "$CI" iso ignition embed -f -i /tmp/agent.mod "$ISO"
   "$CI" iso ignition show "$ISO" | grep -q "installer.d/sos.yaml" || { echo "installer.d bake verification FAILED"; exit 42; }
-  echo "installer.d baked"
+  # Read-back verification of the EMBEDDED config (run 7's inline-key brick
+  # passed a grep-only check — the live ignition parser was the validator).
+  "$CI" iso ignition show "$ISO" | python3 -c 'import json,sys
+ign=json.load(sys.stdin)
+fs=[f for f in ign.get("storage",{}).get("files",[]) if f.get("path")=="/etc/coreos/installer.d/sos.yaml"]
+assert len(fs)==1, "sos.yaml entry missing after embed"
+c=fs[0].get("contents",{})
+assert "inline" not in c and c.get("source","").startswith("data:,"), "bad entry shape"
+assert fs[0].get("overwrite") is not False, "overwrite flag"
+' || { echo "embedded ignition read-back verification FAILED"; exit 42; }
+  echo "installer.d baked and read-back verified"
 
   "$CI" iso kargs modify -a "nameserver=$DNS_IP" "$ISO"
   "$CI" iso kargs show "$ISO" | grep -c "nameserver=$DNS_IP"
