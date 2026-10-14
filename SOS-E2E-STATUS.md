@@ -2066,3 +2066,14 @@ installerArgs.
   /tmp/sos-nightly-RUN7.yaml (run manifest); /tmp/sos-cleanup.sh; /tmp/probe-*.json;
   probes + join-probe pod in cluster (cleanup script removes).
 - chris + chris-sos-odf Ready throughout; zero physical-node changes ever.
+
+### ADDENDUM (session end, 2026-10-14 ~23:30 UTC)
+Correction to "left RUNNING" above: per user's final directive, **run 10 WAS torn
+down** (CR deleted ~23:25 UTC; engine finalizer teardown running; expect
+`sos-nightly-ns` gone within ~10m — verify with `oc get ns sos-nightly-ns`, force
+only if stuck >15m). All probe jobs + forensic reader/PVC/snapshot deleted.
+FINAL STATE: orchestrator image :latest = commit 755cbd7-tree content f4b35e9-line
+with Bug B fix (repo HEAD 755cbd7, image tag :061256f+latest pushed & rolled out);
+repo clean; run 10 gone; chris/chris-sos-odf Ready; no physical-node changes.
+NEXT AGENT: run 11 from /tmp/sos-nightly-RUN7.yaml after deciding Bug A approach
+(section above). Bug B fix will be exercised for the first time by run 11's join.
