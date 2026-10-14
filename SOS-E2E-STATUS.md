@@ -1751,3 +1751,68 @@ PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
   detection). Both harmless to leave.
 - Git: HEAD d6a95ab..8b1976e range covers catches #8/#9 + milestone; all
   product fixes committed locally, live image = 802c793 build (ROLLOUT4).
+
+## 2026-10-14 ~19:45 UTC — new agent session: run-6 forensics complete; fix design LOCKED (A/B/C + catch #9)
+### Decisive live evidence gathered this hour (all passive)
+- wait-bootstrap job log: all three masters `Rebooting` → `Waiting for control
+  plane: Waiting for masters to join bootstrap control plane`, stalled. Matches
+  handoff root cause A.
+- node-guard log: `Connection refused` for .11/.8 port 22, every 60s, since the
+  pivot. Per the skill discriminator REFUSED (instant RST) = guest alive, path
+  healthy, merely pre-sshd → the installed-OS first-boot ignition fetch IS
+  running in INITRAMFS (dracut ignition-fetch + afterburn), stuck on
+  resolvability of api-int, then initramfs emergency-shell with NM up (hence
+  RST, not timeout). Consequence: NOTHING inside the installed OS can fix the
+  fetch (files/systemd units land only AFTER the fetch succeeds). The only
+  user-controllable inputs to that stage are (1) the installed-OS GRUB kernel
+  args, (2) what DHCP hands out.
+- **udn-dnsconfig DEAD END CLOSED (do not re-litigate):** grepped the live
+  cluster's /usr/bin/ovnkube binary: `primary-user-defined-network` present
+  (grep sound), `udn-dnsconfig`/`dnsServers` ABSENT → this OVN-K build has no
+  such annotation; dhcp_options dns_server = host kube-dns ClusterIP is not a
+  per-namespace lever. Confirms why the earlier experiment failed; the fix
+  cannot be annotation-based.
+- configure-nodes job log this run: `SKIP: dns already correct` on ALL nodes —
+  fix-node.sh's early-SKIP (resolv.conf already correct via the karg) means the
+  nmcli ipv4.dns pin was NEVER written into the .nmconnection this run, so
+  whatever copy-network did or didn't carry, it carried no DNS pin. Fix: pin
+  unconditionally.
+- IPAMClaims: this cluster's auto shape is `<vm>.default` in
+  k8s.cni.cncf.io/v1alpha1, finalizer kubevirt.io/persistent-ipam,
+  spec.network=cluster_udn_<name>, status.ips honored. NAD already sets
+  allowPersistentIPs=true. Deterministic-IP preseed is implementable.
+- rendezvous truth for run 6: configure-nodes probed `RENDEZVOUS_IP=10.101.0.7`
+  (== ISO-baked rendezvous from status.agentConfig) at 19:11 — the .11 figure in
+  the 19:17/19:33 notes reflects later lease churn, not the boot-time config.
+  The race itself is real and must die: leases observed drifting (.7→.11 across
+  boots) while agent-config pins .7. Preseed claims end it.
+### Fix design (implementing now; user policy = code-only, rerun from scratch)
+- A (post-pivot resolver): the fetch stage accepts ONLY grub kargs. Layers:
+  A1 agent-config `kernelArguments` IF the 4.22 schema accepts it (probe job
+  probe-agentcfg running: binary grep + v1 top-level string / v2 host-list /
+  v3 host-ignition-create-image variants);
+  A2 ISO ignition surgery in GenerateISO: extract agent ISO ignition, merge
+  storage.file /etc/coreos/installer.d/sos.conf (`copy-network: true` +
+  `append-karg: [nameserver=<dnsIP>]`) — coreos-installer CLI merges
+  /etc/coreos/installer.d automatically — re-embed, re-verify karg+file;
+  A3 fix-node.sh: ALWAYS write the NM DNS pin (kill the early-SKIP path) so a
+  copied .nmconnection, if it rides, is already pinned;
+  A4 node-guard stays as the real-root repair loop.
+- B (deterministic IPs + rendezvous): CreateVMs pre-creates
+  IPAMClaim `<vm>.default` with status.ips preset (masters at cudnSubnet
+  base+100/101/102, dns-vm .18, jumpbox .19, mcs-relay .12) BEFORE any VM
+  powers on; GenerateISO rendezvous = master-0's reserved IP; CollectIPs
+  VERIFYs VMI IP == reserved (fail-fast on drift); ConfigureNodes mismatch
+  repair stays as backstop.
+- C (jumpbox inbound): jumpbox.go second interface via the ExternalAccess NAD
+  (vlan2111 localnet, already CopyNAD'd into the cluster ns by DeployHAProxy —
+  proven attach form = the haproxy pods' `[{name,ips}]`), static IP from new
+  CRD field externalAccess.jumpboxIP, cloud-init networkData for in-guest
+  config; annotate BOTH addresses (cUDN + vlan). Vlan-side reachability is the
+  workstation-proven path (socat-era sos-ssh-debug .102/.172.21.75.x).
+- catch #9 (owed teardown fix): DeleteNamespaceForce — after ns drains,
+  wait-gone the swept VolumeSnapshotContents; log spec.csi.volumeHandle FIRST;
+  strip finalizer as last resort with an orphaned-backing warning.
+- RBAC delta: orchestrator ClusterRole gains ipamclaims (create/get/list/
+  patch/update) + status subresource. Live role must be re-applied (skill
+  pitfall: image rolls don't roll the role).
