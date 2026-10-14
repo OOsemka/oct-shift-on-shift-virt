@@ -169,7 +169,13 @@ func (c *Client) CreatePVCFromSnapshot(ctx context.Context, namespace, name, sna
 	pvcGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
 	_, err := c.DynamicClient.Resource(pvcGVR).Namespace(namespace).Create(ctx, pvc, metav1.CreateOptions{})
 	if errors.IsAlreadyExists(err) {
-		return nil
+		return c.reclaimTerminatingPVC(ctx, namespace, name, func() error {
+			_, err := c.DynamicClient.Resource(pvcGVR).Namespace(namespace).Create(ctx, pvc, metav1.CreateOptions{})
+			if errors.IsAlreadyExists(err) {
+				return nil
+			}
+			return err
+		})
 	}
 	return err
 }
