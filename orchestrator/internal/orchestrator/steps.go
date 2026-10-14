@@ -1208,57 +1208,71 @@ test -n "$CI" || { echo "coreos-installer unavailable"; exit 41; }
 "$CI" --version
 
 if [ -n "${DNS_IP:-}" ]; then
-  # (A) Post-pivot resolver gap: the installed OS re-runs the ignition fetch
-  # in ITS OWN initramfs (api-int MCS config), and nothing inside the
-  # installed OS can influence that stage — only what DHCP hands out and the
-  # GRUB kernel args. The karg below covers the LIVE ISO (pre-pivot fetch).
-  # For the INSTALLED system we exploit coreos-installer's own config file:
-  # the CLI always merges /etc/coreos/installer.d/*.yaml into its options,
-  # and the agent runs coreos-installer on the live system at install time.
-  # A file baked into the ISO's ignition therefore controls the installed
-  # system's grub: append-karg nameserver=<dnsIP> plus copy-network=true so
-  # the pinned .nmconnection (ConfigureNodes) rides along as second layer.
-  echo "Baking installer config (karg nameserver=$DNS_IP + copy-network) into $ISO"
+  # (A) Post-pivot resolver gap: the installed OS re-runs the ignition
+  # fetch in ITS OWN initramfs; only its GRUB kernel args (or DHCP) shape
+  # that stage. Two SUPPORTED layers:
+  #  1) infraenv surgery: add spec.installerArgs ["--append-karg",
+  #     "nameserver=<dnsIP>"] to the embedded /etc/assisted/manifests/
+  #     infraenv.yaml — assisted-service forwards installer_args verbatim
+  #     to the agent's coreos-installer, which bakes the karg into the
+  #     INSTALLED system's bootloader entries (validated end-to-end by
+  #     probe-infraenv-edit2 against this installer build).
+  #  2) live-ISO grub karg (below) for the PRE-pivot fetch stage.
+  # NEVER write /etc/coreos/installer.d: the mere presence of a file there
+  # switches the RHCOS live image into auto-install-on-boot mode (documented
+  # live-media feature); with no dest-device it fails the coreos-installer
+  # unit seconds into boot and its dependency chain emergency-shells every
+  # master (run 8).
+  echo "Adding installerArgs (nameserver=$DNS_IP) to embedded infraenv manifest"
   "$CI" iso ignition show "$ISO" > /tmp/agent.ign
   DNS_IP="$DNS_IP" python3 - <<'PY'
-import json, os
-from urllib.parse import quote
+import json, os, base64
+from urllib.parse import unquote
 dns = os.environ["DNS_IP"]
 ign = json.load(open("/tmp/agent.ign"))
-files = ign.setdefault("storage", {}).setdefault("files", [])
-path = "/etc/coreos/installer.d/sos.yaml"
-files[:] = [f for f in files if f.get("path") != path]
-content = "copy-network: true\nappend-karg:\n- nameserver=%s\n" % dns
-# Ignition 3.x has NO contents.inline key (that is 2.x legacy): the entry
-# reads as source-unspecified and overwrite:true then hard-fails validation.
-# Run 7 paid for this lesson: all masters emergency-shelled on
-# "unused key inline". 3.x content is a data: URL in contents.source.
-files.append({
-    "path": path,
-    "mode": 420,
-    "overwrite": True,
-    "contents": {"source": "data:," + quote(content)},
-})
-# Self-validate the merged shape BEFORE embedding: no entry may carry the
-# legacy inline key, and our entry must hold a data-URL source.
+files = ign.get("storage", {}).get("files", [])
+assert not any("installer.d" in f.get("path", "") for f in files), \
+    "installer.d file present in ISO ignition (radioactive, run 8 lesson)"
+hit = 0
 for f in files:
-    assert "inline" not in f.get("contents", {}), "legacy inline key at %s" % f.get("path")
-assert files[-1]["contents"]["source"].startswith("data:,")
+    if f.get("path", "").endswith("/etc/assisted/manifests/infraenv.yaml"):
+        head, payload = f["contents"]["source"].split(",", 1)
+        body = base64.b64decode(payload).decode() if ";base64" in head else unquote(payload)
+        assert "installerArgs" not in body, "installerArgs already present"
+        out = []
+        done = False
+        for line in body.split("\n"):
+            out.append(line)
+            if line.startswith("spec:"):
+                out += ["  installerArgs:", "  - --append-karg", "  - nameserver=%s" % dns]
+                done = True
+        assert done, "infraenv.yaml has no top-level spec: line"
+        new = "\n".join(out)
+        f["contents"] = {"source": "data:;base64," + base64.b64encode(new.encode()).decode()}
+        hit += 1
+assert hit == 1, "infraenv.yaml hits = %d (expected 1)" % hit
 json.dump(ign, open("/tmp/agent.mod", "w"))
+print("infraenv.yaml edited: installerArgs nameserver=%s" % dns)
 PY
   "$CI" iso ignition embed -f -i /tmp/agent.mod "$ISO"
-  "$CI" iso ignition show "$ISO" | grep -q "installer.d/sos.yaml" || { echo "installer.d bake verification FAILED"; exit 42; }
-  # Read-back verification of the EMBEDDED config (run 7's inline-key brick
-  # passed a grep-only check — the live ignition parser was the validator).
-  "$CI" iso ignition show "$ISO" | python3 -c 'import json,sys
-ign=json.load(sys.stdin)
-fs=[f for f in ign.get("storage",{}).get("files",[]) if f.get("path")=="/etc/coreos/installer.d/sos.yaml"]
-assert len(fs)==1, "sos.yaml entry missing after embed"
-c=fs[0].get("contents",{})
-assert "inline" not in c and c.get("source","").startswith("data:,"), "bad entry shape"
-assert fs[0].get("overwrite") is not False, "overwrite flag"
-' || { echo "embedded ignition read-back verification FAILED"; exit 42; }
-  echo "installer.d baked and read-back verified"
+  # Read-back verification of the EMBEDDED config (grep-only checks are
+  # banned by the run 7/8 lessons): re-parse, decode, assert.
+  "$CI" iso ignition show "$ISO" | DNS_IP="$DNS_IP" python3 -c 'import json,sys,os,base64
+from urllib.parse import unquote
+dns = os.environ["DNS_IP"]
+ign = json.load(sys.stdin)
+n = 0
+for f in ign.get("storage", {}).get("files", []):
+    p = f.get("path", "")
+    assert "installer.d" not in p, "installer.d snuck in: " + p
+    if p.endswith("/etc/assisted/manifests/infraenv.yaml"):
+        head, payload = f["contents"]["source"].split(",", 1)
+        body = base64.b64decode(payload).decode() if ";base64" in head else unquote(payload)
+        assert "installerArgs" in body and ("nameserver=" + dns) in body, "installerArgs missing after embed"
+        n += 1
+assert n == 1, "infraenv.yaml count %d" % n
+' || { echo "infraenv read-back verification FAILED"; exit 42; }
+  echo "infraenv installerArgs baked and read-back verified"
 
   "$CI" iso kargs modify -a "nameserver=$DNS_IP" "$ISO"
   "$CI" iso kargs show "$ISO" | grep -c "nameserver=$DNS_IP"
