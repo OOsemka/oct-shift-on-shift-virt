@@ -1586,3 +1586,20 @@ PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
 - Run 4: CR created 18:33:00 UTC (CollectIPs); image with finalizer/force-push rolling
   mid-run — finalizer will be adopted once new pod leads. Monitors: proc_406b9a975d1b
   (phases), proc_1c9448b42faa (rollout).
+
+## 2026-10-14 18:44 UTC — run 4 caught #6: shipped ClusterRole never had snapshot rules (commit 0097d4f)
+- Run 4 ran flawlessly through CollectIPs → MCSRelay → DeployHAProxy → DeployDNS
+  (jumpbox auto-annotated `ssh core@10.101.0.20`) → GenerateISO (karg
+  `nameserver=10.101.0.19` verified, rendezvousIP=10.101.0.11 auto-derived, free).
+- Failed at MountISO: `cannot create volumesnapshots in snapshot.storage.k8s.io`.
+- Root cause: `deploy/install.yaml`'s ClusterRole NEVER contained
+  snapshot.storage.k8s.io rules. Runs 1–3 masked it with the legacy Oct-1 live
+  role; when catch #4 replaced the live role with the (incomplete) shipped role,
+  snapshot create permission silently vanished. RBAC truth lives in the shipped
+  manifest — every permission the orchestrator uses must be proven against a
+  role applied ONLY from install.yaml, not the live role that happens to exist.
+- Fix: shipped manifest + live role now include volumesnapshots/contents/classes
+  get/list/watch/create/update/patch/delete.
+- Run 5 (auto): first teardown driven by the ENGINE itself (CR finalizer →
+  DeleteCluster → DeleteNamespaceForce). Watch `deletion failed` in orchestrator
+  log; teardown counters watched by proc_5888ac5c8c81.
