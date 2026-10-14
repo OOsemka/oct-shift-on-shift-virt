@@ -1691,3 +1691,63 @@ PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
   RESOLVED, no rendezvousIP pin needed), masters 0+1 at
   `Writing image to disk: 100%` (pivot), master-2 preparing. Deepest product
   state in project history; remainder is the standard long install tail.
+
+## 2026-10-14 19:33 UTC — HANDOFF STATE: run 6 parked at WaitBootstrap; two product bugs identified, NOT yet fixed (agent session ending by user request)
+### Where run 6 stands
+- CR sos-nightly age 19:00:01Z; phases CollectIPs→…→PowerOn ALL PASSED IN-BAND
+  (first-ever product PowerOn: 19:09:33, "VM started via KubeVirt API" x3).
+- WaitBootstrap job (in sos-nightly-ns, pod sos-nightly-wait-bootstrap-*) live
+  since 19:11:25; deadline 3h + one retry ⇒ window until ~22:11 UTC. Hosts
+  pivoted ("Writing image 100%", "Rebooting", "Bootstrap Kube API Initialized")
+  and are now STALLED on: installed-OS masters cannot fetch config from
+  api-int (user console observation on master-1/2 = the historical
+  ignition-fetch error text, now in INSTALLED OS, not live ISO).
+
+### Root cause A (primary): post-pivot resolver gap = fresh-install deadlock
+- karg nameserver= applies ONLY to the live-ISO initramfs. Post-pivot the
+  installed OS gets resolv.conf from cUDN DHCP — historically a stale/
+  unreachable resolver — and machine-config-agent + kubelet bootstrap must
+  resolve api-int.sos-nightly.chris.lab to fetch config. The ConfigureNodes
+  resolv.conf fix runs AFTER WaitBootstrap ⇒ chicken-and-egg deadlock on a
+  fresh cluster (chris/canary survived only via manual recovery).
+- FIX TO IMPLEMENT (in GenerateISO/agent-config path): bake an ignition
+  systemd unit into the master INSTALL-time config (agent-config ignition
+  config merge; DNS VM IP known at GenerateISO) that (a) writes
+  /etc/resolv.conf with nameserver=<dnsIP>, (b) `nmcli con mod` /
+  NM keyfile: ipv4.ignore-auto-dns yes + ipv4.dns=<dnsIP> on
+  ovs-if-br-ex (the phys conn rejects IP config — use the br-ex conn), and
+  (c) keeps it immutable-ish against MC resets (a systemd oneshot +
+  path unit, or dispatcher.d script). Verify via the SAME evidence chain
+  used for chris (kubelet registers; CSR appears).
+
+### Root cause B (latent): rendezvousIP races DHCP
+- This run: master-0=.101.0.7, master-1=.101.0.11, master-2=.101.0.8;
+  openshift-install auto-derived rendezvous=10.101.0.11 = MASTER-1's lease.
+  "Bootstrap Kube API Initialized" appeared anyway, but the bootstrap
+  control plane is expected at rendezvousIP — this mismatch MUST be removed:
+  pre-create an IPAMClaim (preseeded status.ips is honored per prior proof)
+  reserving a fixed IP for master-0 AND set agent-config rendezvousIP to it;
+  or per-host static IPs in agent-config.
+
+### Product gap C: jumpbox not inbound-reachable (diagnostics were blind)
+- jumpbox.go VM is single-NIC **masquerade** → guest sshd unreachable from
+  pods/hosts (NAT, no DNAT). The fragmented-era MANUAL fixture was dual-NIC
+  (pod-bridge second interface, e.g. .105-era) and WAS ssh-able from helper
+  pods. FIX: add second interface (bridge NAD to pod network) in jumpbox.go,
+  annotate both podIP-side and cUDN addresses on the CR.
+- Blocked paths confirmed: helper-pod→cUDN IPs :22 CLOSED (multus ns-isolation
+  also blocks cross-ns NAD attach from operator ns); host→cUDN 10.101/24
+  routes via 172.21.66.1 and TIMES OUT; virtctl has no guest-exec in this
+  build. Do not re-probe these four.
+
+### Live-run facts for whoever continues (do NOT start a new run — user policy)
+- jumpbox cUDN 10.101.0.19 (ssh from INSIDE cUDN guests only), DNS VM .18,
+  apiVIP cUDN .14, mcs-relay .12, masters .7/.11/.8. SSH key: secret
+  sos-nightly-ssh-key in sos-nightly-ns (ssh-privatekey), also cm
+  oct-shift-on-shift-virt/sos-handoff-keymap; public half matches CR.
+- If WaitBootstrap deadline expires: phase→Failed, run stops by itself. NO
+  new run; next agent fixes A+B+C in code first.
+- Live monitors: proc_0396e75b8a28 (phase), proc_74829d19dc56 (bootstrap-done
+  detection). Both harmless to leave.
+- Git: HEAD d6a95ab..8b1976e range covers catches #8/#9 + milestone; all
+  product fixes committed locally, live image = 802c793 build (ROLLOUT4).
