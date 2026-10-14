@@ -1620,3 +1620,8 @@ PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
 - Both fixed; rollout of `c79e178` re-triggers the still-`Deleting` CR via pod
   restart. This is run 5's teardown; run-5 loop (proc_5888ac5c8c81) applies the
   fresh CR when counters zero.
+- Teardown result (18:42:41→18:43:37, 92 s, engine-driven): `starting cluster
+  deletion` → `cluster resources deleted`, finalizer released, CR gone; run-5
+  loop applied fresh CR 18:44 (no snapshots existed at that point — run 4 died
+  before creating them — so the deadlock-break path itself first exercises on
+  the NEXT teardown, which will have real snapshot+content pairs).
