@@ -1205,4 +1205,44 @@ Both master-1 and master-2 ISOs now carry `nameserver=10.101.0.68`
 3. Build/roll the corrected image so the ISO karg + DNS-VM path is the
    default; then validate host-side exposure of nested API and console via
    Services/Routes using the `sos-spike` mechanism.
-4. Keep `chris-sos-odf` healthy (currently 3/3 masters, 0 problem COs).
+4. Keep `chris-sos-odf` healthy — masters stopped 15:5x UTC to free 96Gi for
+   nightly master-1/2 scheduling (recurring 32Gi-each capacity wall; workers
+   untouched). Restore + re-verify once nightly installs.
+
+## Running log 2026-10-14 ~16:15 UTC (differential experiment in flight)
+
+Post-restart observations, some surprising:
+
+- Master-1/2 scheduled + booted after chris masters freed memory. Both show
+  `Running` with correct cUDN IPs (`.10`/`.9`) — and KubeVirt reports those
+  IPs, which means the qemu-guest-agent answered = guests are alive in
+  userspace, NOT hung.
+- **Serial console pipe is dead on the new virt-launchers.** `virtctl
+  console` and a direct socat read of `/var/run/kubevirt-private/<uid>/
+  virt-serial0` inside the launcher both return ZERO bytes across full boot
+  windows — even for a PRISTINE (unpatched, snapshot-restored) ISO boot that
+  demonstrably boots fine. Console output must not be used as a liveness
+  signal for these VMs; use IP/GA presence and SSH port instead.
+- Control experiment setup: master-2's ISO PVC was wiped and restored
+  PRISTINE from VolumeSnapshot `sos-nightly-iso`
+  (`snapshot.storage.k8s.io/v1`, PVC `dataSource` clone, Block mode, 5Gi —
+  procedure validated, Bound in ~20s). master-1 keeps the karg-patched ISO.
+  This is a clean A/B on the nameserver-karg fix: patched (must resolve via
+  .68) vs pristine (whatever DHCP hands out). SSH-22 opening = agent up =
+  ignition fetch succeeded on that VM. Watcher polls both every 60s.
+- Transient MCS probe flakiness noted: from master-0,
+  `curl https://10.101.0.36:22623/...` returned 000 while
+  `https://api-int...:22623/...` returned 200 seconds apart, and
+  `nc` connect was OPEN for both. HAProxy MCS backends are the three masters'
+  own agents (each live agent serves its MCS during the bootstrap phase), and
+  two of the three are mid-fetch/install, so per-connection verdicts vary
+  with which backend answers. Treat single MCS curl results as noisy;
+  repeat 3-4x before concluding.
+- `6443/healthz` by name from master-0 = 200; nested API answers
+  authenticated requests (master-0 kubeconfig needs
+  `--insecure-skip-tls-verify` — agent-stage CA artifact, same class as the
+  chris run's localhost:6443 kubeconfig bug; productization TODO: fix the
+  kubeconfig CA/server trio at pivot).
+- dns-vm (manual, `.68`) has no working SSH user (all candidates denied) —
+  the productized `deployDNSVM` embeds the cluster ssh key properly; for the
+  manual VM, use the console or recreate if shell access is ever needed.
