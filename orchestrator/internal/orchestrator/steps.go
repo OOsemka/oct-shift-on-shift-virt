@@ -183,10 +183,38 @@ func (s *StepExecutor) createVMs(ctx context.Context, nc *crd.NestedCluster) err
 	log := s.logger.WithCluster(nc.Spec.ClusterName)
 	nodes := s.buildNodeList(nc)
 
+	// Deterministic IP plan, registered as preseeded IPAMClaims BEFORE any
+	// VM (or infra VM) attaches to the cUDN. This is the fix for the
+	// rendezvous/lease race: the IPs baked into agent-config, the nameserver
+	// karg, and haproxy backends are all decided here instead of being
+	// scraped from DHCP after a discovery boot.
+	plan, err := computeIPPlan(nc.Spec.ClusterName, nc.Spec.Network.CUDNSubnet,
+		len(nodes), nc.Spec.Network.APIVIP, nc.Spec.Network.IngressVIP)
+	if err != nil {
+		return fmt.Errorf("computing IP plan: %w", err)
+	}
+	p := func(ip net.IP) string { return fmt.Sprintf("%s/%d", ip.String(), plan.Prefix) }
+	if err := s.client.PreseedIPAMClaim(ctx, nc.Spec.Namespace, dnsVMName(nc.Spec.ClusterName), plan.NetworkName, plan.DNSVM.String(), plan.Prefix); err != nil {
+		return fmt.Errorf("preseeding dns-vm IP: %w", err)
+	}
+	if err := s.client.PreseedIPAMClaim(ctx, nc.Spec.Namespace, jumpboxVMName(nc.Spec.ClusterName), plan.NetworkName, plan.Jumpbox.String(), plan.Prefix); err != nil {
+		return fmt.Errorf("preseeding jumpbox IP: %w", err)
+	}
+	if err := s.client.PreseedIPAMClaim(ctx, nc.Spec.Namespace, relayVMName(nc.Spec.ClusterName), plan.NetworkName, plan.MCSRelay.String(), plan.Prefix); err != nil {
+		return fmt.Errorf("preseeding mcs-relay IP: %w", err)
+	}
+	log.Info("IP plan preseeded", "network", plan.NetworkName,
+		"dns_vm", p(plan.DNSVM), "jumpbox", p(plan.Jumpbox), "mcs_relay", p(plan.MCSRelay),
+		"masters", fmt.Sprint(plan.Masters))
+
 	for i, node := range nodes {
 		nodeLog := log.WithNode(node.Name)
 		sizing := s.sizingForRole(nc, node.Role)
 		mac := k8s.GenerateMAC(nc.Spec.ClusterName, i)
+
+		if err := s.client.PreseedIPAMClaim(ctx, nc.Spec.Namespace, node.Name, plan.NetworkName, plan.Masters[i].String(), plan.Prefix); err != nil {
+			return fmt.Errorf("preseeding %s IP: %w", node.Name, err)
+		}
 
 		_, err := s.client.CreateVM(ctx, k8s.VMCreateParams{
 			Name:             node.Name,
@@ -204,7 +232,7 @@ func (s *StepExecutor) createVMs(ctx context.Context, nc *crd.NestedCluster) err
 			return fmt.Errorf("creating VM %s: %w", node.Name, err)
 		}
 
-		nodeLog.Info("VM created", "mac", mac)
+		nodeLog.Info("VM created", "mac", mac, "reserved_ip", plan.Masters[i].String())
 
 		nc.Status.Nodes = append(nc.Status.Nodes, crd.NodeStatus{
 			Name:        node.Name,
@@ -214,6 +242,7 @@ func (s *StepExecutor) createVMs(ctx context.Context, nc *crd.NestedCluster) err
 			BootPhase:   "Unknown",
 			AgentStatus: "Pending",
 			MAC:         mac,
+			IP:          plan.Masters[i].String(),
 		})
 	}
 
@@ -224,7 +253,13 @@ func (s *StepExecutor) collectIPs(ctx context.Context, nc *crd.NestedCluster) er
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("ip-collect")
 	clusterNs := nc.Spec.Namespace
 
-	log.Info("waiting for VMs to get IPs from cUDN DHCP")
+	log.Info("waiting for VMs to get their reserved IPs from cUDN DHCP")
+
+	plan, err := computeIPPlan(nc.Spec.ClusterName, nc.Spec.Network.CUDNSubnet,
+		len(nc.Status.Nodes), nc.Spec.Network.APIVIP, nc.Spec.Network.IngressVIP)
+	if err != nil {
+		return fmt.Errorf("computing IP plan: %w", err)
+	}
 
 	for i := range nc.Status.Nodes {
 		node := &nc.Status.Nodes[i]
@@ -235,13 +270,21 @@ func (s *StepExecutor) collectIPs(ctx context.Context, nc *crd.NestedCluster) er
 		if err != nil {
 			return fmt.Errorf("waiting for IP on %s: %w", node.Name, err)
 		}
+		// The preseeded IPAMClaim MUST have delivered the reserved address.
+		// A mismatch means something outside the plan allocated the port
+		// (claim ignored / hijacked) — better a loud phase failure here
+		// than a rendezvousIP race further down.
+		if plan.Masters[i].String() != ip {
+			return fmt.Errorf("%s got DHCP IP %s but the reserved allocation is %s — refusing to continue (check IPAMClaim %s.default)",
+				node.Name, ip, plan.Masters[i].String(), node.Name)
+		}
 		node.IP = ip
 		node.VMStatus = "Running"
 		node.PowerState = "On"
-		log.WithNode(node.Name).Info("VM got DHCP IP from cUDN", "ip", ip)
+		log.WithNode(node.Name).Info("VM confirmed on reserved IP", "ip", ip)
 	}
 
-	log.Info("all VMs have IPs, stopping VMs for ISO attachment")
+	log.Info("all VMs confirmed on reserved IPs, stopping VMs for ISO attachment")
 
 	for i := range nc.Status.Nodes {
 		node := &nc.Status.Nodes[i]
@@ -1076,6 +1119,16 @@ func (s *StepExecutor) generateISO(ctx context.Context, nc *crd.NestedCluster) e
 	// interfaces and rendezvousIP. We ignore the override for agent-config.
 	agentConfig := installer.GenerateAgentConfig(nc.Spec, hosts)
 
+	// The IPs are reserved allocations now (preseeded IPAMClaims, verified at
+	// CollectIPs), so master-0 == rendezvous is DETERMINISTIC. Record it up
+	// front: the waitBootstrap phase then skips its opportunistic :8090
+	// probe, and configure-nodes' mismatch repair can only ever be a
+	// no-op confirmation.
+	if len(hosts) > 0 {
+		nc.Status.RendezvousIP = hosts[0].IP
+		nc.Status.RendezvousNode = hosts[0].Name
+	}
+
 	sanitizedInstallConfig := installConfig
 	sanitizedInstallConfig = strings.ReplaceAll(sanitizedInstallConfig, string(pullSecret), "<PULL_SECRET>")
 	if len(sshKey) > 0 {
@@ -1140,27 +1193,52 @@ openshift-install agent create image --dir=/output/config --log-level=info
 
 ISO=$(ls /output/config/*.iso | head -1)
 
-# Bake the nested DNS server into the live ISO's grub entries. Pre-pivot
-# guests get their resolver from cUDN DHCP otherwise — a stale lease (dead
-# DNS pod IP) strands ignition fetch for hours with no in-guest recourse
-# (nmcli is a no-op pre-pivot). nameserver= is a dracut karg honored by
-# the RHCOS live initramfs, so it fixes the resolver at the exact stage
-# where ignition fetch runs. agent-config v1alpha1 has no kernelArguments
-# field, so post-process with coreos-installer instead. No root needed:
-# extract the C9S AppStream rpm with rpm2archive+tar and run the binary.
-if [ -n "${DNS_IP:-}" ]; then
-  echo "Injecting nameserver=$DNS_IP karg into $ISO"
+# coreos-installer, rootless: run from the C9S AppStream rpm when the image
+# lacks it (rpm2archive+tar; note the .rpm.tgz suffix — images often lack cpio).
+if command -v coreos-installer >/dev/null 2>&1; then
+  CI=coreos-installer
+else
   mkdir -p /tmp/ci && cd /tmp/ci
   REL=https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os/Packages
-  if command -v coreos-installer >/dev/null 2>&1; then
-    CI=coreos-installer
-  else
-    curl -sL -o ci.rpm "$REL/coreos-installer-0.25.0-1.el9.x86_64.rpm"
-    rpm2archive ci.rpm && tar xzf ci.rpm.tgz
-    CI=$(find . -type f -name coreos-installer | head -1)
-  fi
-  test -n "$CI" || { echo "coreos-installer unavailable"; exit 41; }
-  "$CI" --version
+  curl -sL -o ci.rpm "$REL/coreos-installer-0.25.0-1.el9.x86_64.rpm"
+  rpm2archive ci.rpm && tar xzf ci.rpm.tgz
+  CI=$(find . -type f -name coreos-installer | head -1)
+fi
+test -n "$CI" || { echo "coreos-installer unavailable"; exit 41; }
+"$CI" --version
+
+if [ -n "${DNS_IP:-}" ]; then
+  # (A) Post-pivot resolver gap: the installed OS re-runs the ignition fetch
+  # in ITS OWN initramfs (api-int MCS config), and nothing inside the
+  # installed OS can influence that stage — only what DHCP hands out and the
+  # GRUB kernel args. The karg below covers the LIVE ISO (pre-pivot fetch).
+  # For the INSTALLED system we exploit coreos-installer's own config file:
+  # the CLI always merges /etc/coreos/installer.d/*.yaml into its options,
+  # and the agent runs coreos-installer on the live system at install time.
+  # A file baked into the ISO's ignition therefore controls the installed
+  # system's grub: append-karg nameserver=<dnsIP> plus copy-network=true so
+  # the pinned .nmconnection (ConfigureNodes) rides along as second layer.
+  echo "Baking installer config (karg nameserver=$DNS_IP + copy-network) into $ISO"
+  "$CI" iso ignition show "$ISO" > /tmp/agent.ign
+  DNS_IP="$DNS_IP" python3 - <<'PY'
+import json, os
+dns = os.environ["DNS_IP"]
+ign = json.load(open("/tmp/agent.ign"))
+files = ign.setdefault("storage", {}).setdefault("files", [])
+path = "/etc/coreos/installer.d/sos.yaml"
+files[:] = [f for f in files if f.get("path") != path]
+files.append({
+    "path": path,
+    "mode": 420,
+    "overwrite": True,
+    "contents": {"inline": "copy-network: true\nappend-karg:\n- nameserver=%s\n" % dns},
+})
+json.dump(ign, open("/tmp/agent.mod", "w"))
+PY
+  "$CI" iso ignition embed -f -i /tmp/agent.mod "$ISO"
+  "$CI" iso ignition show "$ISO" | grep -q "installer.d/sos.yaml" || { echo "installer.d bake verification FAILED"; exit 42; }
+  echo "installer.d baked"
+
   "$CI" iso kargs modify -a "nameserver=$DNS_IP" "$ISO"
   "$CI" iso kargs show "$ISO" | grep -c "nameserver=$DNS_IP"
   echo "karg injected"

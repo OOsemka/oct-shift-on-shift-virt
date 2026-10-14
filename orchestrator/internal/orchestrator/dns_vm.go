@@ -73,6 +73,14 @@ func (s *StepExecutor) deployDNSVM(ctx context.Context, nc *crd.NestedCluster) e
 	if err != nil {
 		return fmt.Errorf("dns VM never got an IP: %w", err)
 	}
+	// The nameserver= karg baked into the agent ISO points at the RESERVED
+	// address (ipPlan.offsetDNSVM); a drifted VM would leave every pre-pivot
+	// ignition fetch pointing at nothing. Fail loudly instead.
+	if plan, perr := computeIPPlan(clusterName, nc.Spec.Network.CUDNSubnet, nc.Spec.Masters.Count,
+		nc.Spec.Network.APIVIP, nc.Spec.Network.IngressVIP); perr == nil && plan.DNSVM.String() != ip {
+		return fmt.Errorf("DNS VM got IP %s but the reserved allocation is %s — the ISO karg targets the reserved address (check IPAMClaim %s.default)",
+			ip, plan.DNSVM.String(), vmName)
+	}
 	nc.Status.DNSIPCUDN = ip
 	// The zone itself may have changed since (VM recreated): re-push via
 	// configmap is not used in vm mode — userData embeds the script; the

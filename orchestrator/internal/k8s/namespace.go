@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -81,6 +82,15 @@ func (c *Client) DeleteNamespaceForce(ctx context.Context, name string, timeout 
 	// into the namespace.
 	if err := c.sweepContentsForNamespace(ctx, name); err != nil {
 		return fmt.Errorf("sweeping snapshot contents for stuck namespace %s: %w", name, err)
+	}
+	// Escalation 3 (catch #9): the sweep only ISSUES content deletes. A
+	// content whose CSI finalizer is still stuck keeps the namespace
+	// controller from finishing its own PVC finalization ("persistentvolumeclaim
+	// X still exists" — observed run 6 teardown, 40min+ hang), so waiting for
+	// the namespace alone can never resolve. Give contents a bounded grace,
+	// then log each one's volumeHandle (orphan trail) and strip finalizers.
+	if err := c.forceContentsGone(ctx, name, 2*time.Minute); err != nil {
+		return fmt.Errorf("forcing snapshot contents gone for stuck namespace %s: %w", name, err)
 	}
 	if c.waitNamespaceGone(ctx, name, time.Minute) {
 		return nil
@@ -174,6 +184,62 @@ func (c *Client) sweepContentsForNamespace(ctx context.Context, ns string) error
 		}
 	}
 	return nil
+}
+
+// contentsForNamespace lists cluster-scoped VolumeSnapshotContents whose
+// volumeSnapshotRef points into ns (live or already-deleting).
+func (c *Client) contentsForNamespace(ctx context.Context, ns string) ([]unstructured.Unstructured, error) {
+	list, err := c.DynamicClient.Resource(vscGVR).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	var out []unstructured.Unstructured
+	for i := range list.Items {
+		item := &list.Items[i]
+		refNS, _, _ := unstructured.NestedString(item.Object, "spec", "volumeSnapshotRef", "namespace")
+		if refNS == ns {
+			out = append(out, *item)
+		}
+	}
+	return out, nil
+}
+
+// forceContentsGone waits `timeout` for the contents pointing into ns to
+// finalize after being deleted, then (and only then) force-strips their
+// finalizers. Before stripping, each content's volumeHandle is logged: that
+// is the CSI-level orphan trail an operator needs to clean the backing
+// VolumeSnapshot manually. This is the catch #9 last resort — run 6's
+// teardown hung 40+ minutes because the namespace controller refused to
+// strip PVC finalizers while a stuck content still existed.
+func (c *Client) forceContentsGone(ctx context.Context, ns string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		left, err := c.contentsForNamespace(ctx, ns)
+		if err != nil {
+			return err
+		}
+		if len(left) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			for i := range left {
+				item := &left[i]
+				vh, _, _ := unstructured.NestedString(item.Object, "spec", "volumeHandle")
+				log.Printf("[teardown] WARNING: volumeSnapshotContent %s (volumeHandle=%s) still stuck after delete; stripping finalizers — its backing VolumeSnapshot may be orphaned and need manual cleanup",
+					item.GetName(), vh)
+				item.SetFinalizers([]string{})
+				if _, uerr := c.DynamicClient.Resource(vscGVR).Update(ctx, item, metav1.UpdateOptions{}); uerr != nil && !errors.IsNotFound(uerr) {
+					return fmt.Errorf("stripping finalizers on content %s: %w", item.GetName(), uerr)
+				}
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
 }
 
 // countNamespaceObjects best-effort-lists every namespaced resource in ns

@@ -557,6 +557,16 @@ type InfraVMParams struct {
 	DataSourceNS     string
 	DataSourceName   string
 	UserData         string
+	// ExtraNetworks attaches additional multus networks (e.g. the external
+	// diagnostics vlan) as bridge interfaces alongside the primary pod
+	// network. Name is the kubevirt network/interface name; NetworkName is
+	// the NAD (bare name = the VM's own namespace).
+	ExtraNetworks []InfraNetwork
+}
+
+type InfraNetwork struct {
+	Name        string
+	NetworkName string
 }
 
 func (c *Client) CreateInfraVM(ctx context.Context, p InfraVMParams) error {
@@ -662,6 +672,22 @@ func (c *Client) CreateInfraVM(ctx context.Context, p InfraVMParams) error {
 				},
 			},
 		},
+	}
+	if len(p.ExtraNetworks) > 0 {
+		nets, _, _ := unstructured.NestedSlice(vm.Object, "spec", "template", "spec", "networks")
+		ifaces, _, _ := unstructured.NestedSlice(vm.Object, "spec", "template", "spec", "domain", "devices", "interfaces")
+		for _, n := range p.ExtraNetworks {
+			nets = append(nets, map[string]interface{}{
+				"name":   n.Name,
+				"multus": map[string]interface{}{"networkName": n.NetworkName},
+			})
+			ifaces = append(ifaces, map[string]interface{}{
+				"name":   n.Name,
+				"bridge": map[string]interface{}{},
+			})
+		}
+		unstructured.SetNestedSlice(vm.Object, nets, "spec", "template", "spec", "networks")
+		unstructured.SetNestedSlice(vm.Object, ifaces, "spec", "template", "spec", "domain", "devices", "interfaces")
 	}
 	_, err = c.DynamicClient.Resource(vmGVR).Namespace(p.Namespace).Create(ctx, vm, metav1.CreateOptions{})
 	if err != nil {

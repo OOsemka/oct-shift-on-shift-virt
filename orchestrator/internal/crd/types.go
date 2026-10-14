@@ -123,6 +123,11 @@ type ExternalAccessConfig struct {
 	NADName   string `json:"nadName"`
 	APIIP     string `json:"apiIP"`
 	IngressIP string `json:"ingressIP"`
+	// JumpboxIP gives the diagnostics jumpbox VM a second interface on the
+	// NAD above with this static address (same /24 convention as the HAProxy
+	// VIPs), making it ssh-reachable from the external network. Optional:
+	// empty leaves the jumpbox cUDN-only.
+	JumpboxIP string `json:"jumpboxIP,omitempty"`
 }
 
 type SecretRef struct {
