@@ -1510,3 +1510,14 @@ terminating-snapshot guard on CreateVolumeSnapshot (waitGVRGone helper).
 Redeploy executing: build+roll, teardown waits for EVERYTHING gone
 (namespace, PVCs, snapshots, cluster-scoped content) before re-apply —
 runbook hardened against my own catch-#2-style races.
+
+## 2026-10-14 ~18:20 UTC: RUN 3 (all fixes aboard) — 18:31 DeployDNS done
+
+Teardown note: PVC finalizer hang was a SUCCEEDED iso pod still referencing
+the PVC (job pods lack ttlSecondsAfterFinished — TODO: set TTL). My wait-loop
+regex bug cost ~10 min (field-count shift when ns disappears; memory noted).
+Run 3, all automatic: CollectIPs→MCSRelay→DeployHAProxy→DeployDNS in ~11
+min: dns-vm 10.101.0.18 (status.dnsIPcUDN correct), jumpbox 10.101.0.19
+annotated on CR, apiVIP cUDN 10.101.0.15. GenerateISO: installer PVC
+auto-created (f385046 proven live). Watching: karg=.18 in job log; MountISO
+sweep (fe19c71); rendezvous derived value vs master DHCP leases at PowerOn.
