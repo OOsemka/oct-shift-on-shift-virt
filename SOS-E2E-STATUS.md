@@ -1246,3 +1246,70 @@ Post-restart observations, some surprising:
 - dns-vm (manual, `.68`) has no working SSH user (all candidates denied) —
   the productized `deployDNSVM` embeds the cluster ssh key properly; for the
   manual VM, use the console or recreate if shell access is ever needed.
+
+## Running log 2026-10-14 ~16:35 UTC: capacity purge, DHCP truth, re-patch
+
+**test1 purge = 200Gi reclaimed.** `sos-test1` (old failed 4.18 cluster,
+11d old) held three 64Gi masters + 8Gi jumpbox, one per node across all four
+leaves. Deleted: NestedCluster CR, VMs (after `virtctl stop`), namespace
+cascade. NOTE: the orchestrator has NO deletion/teardown handler — deleting
+the CR left the namespace Active with all VMs/PVCs behind it; manual VM+ns
+deletion required. Product gap: a DeleteCluster/finalizer path.
+
+**chris-sos-odf masters restored** immediately after (its capacity rationale
+was gone). All three Running with correct IPs (10.100.0.9/.10/.11); health
+verification (6+ nodes, 0 problem COs) armed as a background watcher.
+
+**The "showing this again" screenshot (master-2, 12:59 job / uptime ~780s)
+decodes as pre-pivot fetch-loop, and it exposed the DHCP truth:**
+OVN per-VM dhcp_options rows on `cluster_udn_sos.nightly_ovn_layer2_switch`
+show `dns_server="172.30.0.10"` — the HOST kube-dns ClusterIP, unreachable
+from nested guests. The `k8s.ovn.org/udn-dnsconfig` namespace annotation did
+NOT propagate into these rows. So:
+- A PRISTINE ISO boot resolves against 172.30.0.10 -> dead -> fetch loops.
+  (The pristine-vs-patched A/B already had its answer before pristine even
+  mattered: patched master-1 fetched successfully, SSH-opened 16:19:58,
+  master-2 16:20:58, both went CLOSED ~2min later = pivot reboot. Console
+  replay of stale ISO-era scrollback, not a new failure — the known console
+  illusion.)
+- POST-PIVOT this bites again: installed OS gets 172.30.0.10 from DHCP for
+  final-ignition + kubelet. Mitigation already in product: ConfigureNodes
+  pins resolv.conf over ssh (now with `SKIP: dns already correct` fast path
+  verified working on master-0) and node-guard re-pins on drift.
+- Productization TODO: deployDNS/ConfigureNodes must treat the DHCP-provided
+  resolver as hostile on day-0 for every node, every boot (it already does,
+  but node-guard's env was found stale: `DNS_IP=10.101.0.52`,
+  `API_IP=10.101.0.16` -> both repointed to `.68`/`.36`; the orchestrator
+  should write node-guard env from live status, not from first-seen values).
+
+**IPAMClaim experiment (making the dead .18 resolver answer again) — partial
+success, blocked by UDN primary-network quirk.** Created
+`sos-nightly-dns-static` (k8s.cni.cncf.io/v1alpha1) with
+`spec.network: cluster_udn_sos-nightly`, pre-seeded
+`status.ips: ["10.101.0.18"]`, annotated the DNS Deployment with
+`k8s.v1.cni.cncf.io/ipam-claim-reference` — claim honored the seeded IP.
+But adding `k8s.v1.cni.cncf.io/networks: sos-nightly-ns/sos-nightly` to the
+pod template makes OVN REJECT the pod: `unexpected primary network
+"cluster_udn_sos-nightly" specified with a NetworkSelectionElement` — ovnkube
+treats this cluster-UDN as primary, so pods must not (and currently don't)
+request it as secondary; the plain pod sits on the pod network
+(10.131.0.x) and cannot host .18. Open question: how the haproxy pods
+originally attached to cUDN (.36/.38) — their pod template annotation is
+plain `k8s.v1.cni.cncf.io/networks: sos-nightly` (no namespace prefix) and
+they work; replicate that exact form for the DNS deployment next attempt.
+Decision: moot for tonight's install — karg + ConfigureNodes pin cover it.
+The claim CR stays (harmless) for the later attempt.
+
+**Decisive action in flight (independent of the ambiguity above):** stopped
+master-1/2, wiped + re-cloned BOTH ISO PVCs pristine from VolumeSnapshot
+`sos-nightly-iso` (validated ~20s Bound), then patched BOTH with
+`nameserver=10.101.0.68` via the privileged `sos-isorepatch` pod
+(rpm-extracted coreos-installer, dd front/modify/dd-back/sync/verify from
+device), then restart. This removes every stale lease/option path: both
+masters boot with a baked correct resolver, agent fetch succeeds regardless
+of what DHCP lies about, and post-pivot pinning is covered by the (now
+correctly env'd) ConfigureNodes + node-guard.
+
+**ISO PVCs are volumeMode Block + RWO — attach-conflict pitfall recorded:** a
+verification pod mounting them while the VM is running sticks forever in
+ContainerCreating (no error event, just hangs). Stop the VM first, always.
