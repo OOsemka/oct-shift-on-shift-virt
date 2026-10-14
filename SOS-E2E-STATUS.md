@@ -1469,3 +1469,26 @@ verified `ssh core@10.101.0.20` from helper pod (key auth OK, correct
 hostname/IP). Operators now have in-network SSH from phase ~5 of a fresh
 install. (Note: virt-launcher podIP stays on default net — cUDN guest IPs
 are not port-forwardable; use helper pod or vlan2111.)
+
+### Clean-run catch #2 (~17:50 UTC): generate-iso orphaned by terminating-PVC race
+
+GenerateISO sat unschedulable: `persistentvolumeclaim "sos-nightly-installer"
+not found`. Root cause: `CreatePVC` treated AlreadyExists as success — but
+the API reports AlreadyExists for a PVC still FINALIZING from my teardown
+delete. Engine "created" the dying object, which then vanished; job pod
+orphaned 10 min. Investigation trap along the way: `grep -m1 generate-iso`
+matched the 22h-old completed CHRIS pod (alphabetics) and served stale ISO
+logs (chris's PVC, rendezvous 10.100.0.11, karg-less script) — always
+anchor job greps to the full `sos-nightly-` prefix.
+Fix: manual PVC + delete failed job + engine recreated (completed in 79s,
+fresh files, `Injecting nameserver=10.101.0.19 karg` logged ✓ FIRST
+product-side karg proof). Code fix f385046: reclaimTerminatingPVC waits
+for finalize + retries create (CreatePVC / CreateBlockPVC / snapshot-clone
+paths). Will ride next image roll.
+
+OPEN QUESTION logged at GenerateISO: openshift-install derived rendezvous
+`10.101.0.10` (empty `rendezvousIP:` in agentConfigOverrides → fallback).
+Last night's install pivoted despite a mismatched derived value, treating
+this as non-gating; watching PowerOn empirically — if WaitBootstrap stalls
+>~30min, set explicit rendezvousIP + consider static-IP agent-config as
+the product fix.
