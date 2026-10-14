@@ -1521,3 +1521,13 @@ min: dns-vm 10.101.0.18 (status.dnsIPcUDN correct), jumpbox 10.101.0.19
 annotated on CR, apiVIP cUDN 10.101.0.15. GenerateISO: installer PVC
 auto-created (f385046 proven live). Watching: karg=.18 in job log; MountISO
 sweep (fe19c71); rendezvous derived value vs master DHCP leases at PowerOn.
+
+### 18:20 UTC: MountISO PASSES (first ever) — both fixes proven live
+
+sos-nightly-iso-content Bound+Ready+policy-Delete (misbind fix works);
+rootdisk wipe fired on ALL THREE FRESH masters (CreateVMs pre-creates the
+placeholder -iso PVC, so mountISO's "stale ISO present" guard is true on
+first mounts too — wiping zeros on blank RBD disks is a no-op and means
+the bootindex trap is closed on EVERY mount path, not just retries).
+karg verified in job log: `nameserver=10.101.0.18`. Next: PowerOn/
+WaitBootstrap — rendezvous 10.101.0.10 vs master-0's DHCP lease.
