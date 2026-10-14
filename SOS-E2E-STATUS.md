@@ -625,3 +625,71 @@ Morning checklist (in order):
    stays usable when VMs are back up).
 6. Optional RBAC belt (not required — self-RBAC covers it now): apply
    deploy/install.yaml ClusterRole delta to the live role.
+
+
+## NIGHT FINAL ENTRY (2026-10-14 06:29 EDT)
+
+Workstation connectivity did NOT recover: parent dnsmasq lost its corporate
+forwarder at ~02:35 EDT; probes over ~6h (10s/5s intervals) show only a
+single brief window (~03:57, long enough for one oc read: CR phase=Failed —
+which is octools' *expected* state while bootstrap continues in-cluster,
+per their own AGENTS.md known-issue note). Internet fine; this needs the
+workstation VPN/resolver re-established (human action) — no cluster-side
+impact.
+
+Most likely reality on the cluster right now: nested `sos-nightly` install
+proceeded autonomously (masters wrote RHCOS ~02:25; MCS relay + node-guard
+guarding the pivot; bootstrap typically completes within ~30-45 min of that)
+while the parent CR sits in Failed because its wait job errored during the
+transition — exactly the pattern octools documents ("CR shows Failed but the
+actual install continues"). Wait jobs are disposable: state is in the
+assisted-service and the `*-installer-state` secret.
+
+COPY-PASTE RECOVERY (once `getent hosts api.az1.vpc.openinfra.lab` works):
+```
+# 1. roll latest orchestrator (self-RBAC + all night fixes already on quay)
+oc rollout restart deploy/sos-orchestrator -n oct-shift-on-shift-virt
+oc rollout status deploy/sos-orchestrator -n oct-shift-on-shift-virt --timeout=180s
+oc get clusterrole sos-orchestrator-supplemental-v1   # should now exist
+
+# 2. requeue from whatever phase it's stuck at
+oc get nestedcluster sos-nightly -n oct-shift-on-shift-virt -o jsonpath='{.status.phase} {.status.message}{"\n"}'
+oc patch nestedcluster sos-nightly -n oct-shift-on-shift-virt --subresource=status --type=merge \
+  -p '{"status":{"phase":"WaitBootstrap","message":"morning requeue"}}'
+
+# 3. watch (should traverse WaitBootstrap -> WaitInstall -> PostInstall -> Ready
+#    within the install's remaining time; PostInstall needs the new image for
+#    routes/services RBAC it self-grants in step 1)
+oc get nestedcluster sos-nightly -n oct-shift-on-shift-virt -w
+
+# 4. acceptance when Ready
+oc get secret sos-nightly-kubeconfig sos-nightly-kubeadmin -n sos-nightly-ns
+oc get route -n sos-nightly-ns   # sos-nightly-api-route + sos-nightly-apps-route (wildcard)
+oc get secret sos-nightly-kubeconfig -n sos-nightly-ns -o jsonpath='{.data.kubeconfig}' \
+  | base64 -d > /tmp/nightly-kubeconfig
+oc --insecure-skip-tls-verify --kubeconfig /tmp/nightly-kubeconfig get nodes
+# host-side exposure (no /etc/hosts hacks needed):
+#   API:    the route status host (https://sos-nightly-api.<apps-domain>) — use
+#           --insecure-skip-tls-verify (nested cert has no route SAN)
+#   apps:   rewrite <svc>-<ns>.apps.sos-nightly.chris.lab ->
+#           <svc>-<ns>-sos-nightly-apps.<apps-domain>  (nested console works)
+
+# 5. restore chris-sos-odf (STOPPED all night for memory; nightly holds 3x32Gi)
+virtctl stop sos-nightly-master-0 -n sos-nightly-ns   # only if capacity needed
+virtctl stop sos-nightly-master-1 -n sos-nightly-ns
+virtctl stop sos-nightly-master-2 -n sos-nightly-ns
+for i in 0 1 2; do virtctl start cluster-master-$i -n chris-sos-odf-ns; done
+# then verify chris: 3/3 masters Ready, 34/34 COs available
+```
+
+NOT pushed to GitHub: two local commits (d3091cf, cc93709) hold the night's
+work — review + `git push` at leisure. quay images are current:
+sos-orchestrator:latest (50c53ab build) and sos-ssh-helper:latest.
+
+Honest gap list carried to morning: (a) full green-path to Ready not yet
+observed end-to-end once — blocked purely by wait-job/CR bookkeeping, the
+install itself is past every known product blocker; (b) route/console
+acceptance untested live (code reviewed, RBAC self-granted); (c) ISO eject
+after install remains best-effort (needs the subresource RBAC that step 1
+installs, and a stop/start cycle per master — cosmetic, boot order puts ISO
+behind rootdisk).
