@@ -44,9 +44,50 @@ func (c *Client) CreateVolumeSnapshot(ctx context.Context, namespace, name, pvcN
 
 	_, err := c.DynamicClient.Resource(vsGVR).Namespace(namespace).Create(ctx, vs, metav1.CreateOptions{})
 	if errors.IsAlreadyExists(err) {
+		existing, gerr := c.DynamicClient.Resource(vsGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if gerr == nil && existing.GetDeletionTimestamp() != nil {
+			// Same AlreadyExists-while-terminating race as PVCs: wait it
+			// out and re-create instead of trusting a dying object.
+			if err := c.waitGVRGone(ctx, vsGVR, namespace, name, 3*time.Minute); err != nil {
+				return err
+			}
+			_, err = c.DynamicClient.Resource(vsGVR).Namespace(namespace).Create(ctx, vs, metav1.CreateOptions{})
+			if errors.IsAlreadyExists(err) {
+				return nil
+			}
+			return err
+		}
 		return nil
 	}
 	return err
+}
+
+// waitGVRGone polls until a (cluster- or namespaced-) resource stops
+// existing. Pass ns="" for cluster-scoped resources.
+func (c *Client) waitGVRGone(ctx context.Context, gvr schema.GroupVersionResource, ns, name string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		var err error
+		if ns == "" {
+			_, err = c.DynamicClient.Resource(gvr).Get(ctx, name, metav1.GetOptions{})
+		} else {
+			_, err = c.DynamicClient.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		}
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil && !errors.IsGone(err) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s %s/%s still present after %v", gvr.Resource, ns, name, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 // WaitForVolumeSnapshot waits until the snapshot is readyToUse and returns
@@ -87,6 +128,43 @@ func (c *Client) WaitForVolumeSnapshot(ctx context.Context, namespace, name stri
 func (c *Client) CloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapshotName, driver, snapshotHandle, snapshotClassName string) error {
 	contentName := dstSnapshotName + "-content"
 
+	// Re-entrancy sweep: the content name is deterministic, so a phase retry
+	// that recreates the VolumeSnapshot (new UID) leaves the stale pre-bound
+	// content reporting SnapshotContentMisbound forever — the snapshot never
+	// goes ready (observed after an engine restart mid-MountISO). Accept the
+	// existing pair only when it is fully bound to this snapshot AND ready;
+	// otherwise sweep both objects and wait for them to be gone before
+	// recreating.
+	oldVS, vsErr := c.DynamicClient.Resource(vsGVR).Namespace(dstNs).Get(ctx, dstSnapshotName, metav1.GetOptions{})
+	oldVSC, vscErr := c.DynamicClient.Resource(vscGVR).Get(ctx, contentName, metav1.GetOptions{})
+	if vsErr == nil && vscErr == nil {
+		refUID, _, _ := unstructured.NestedString(oldVSC.Object, "spec", "volumeSnapshotRef", "uid")
+		ready, _, _ := unstructured.NestedBool(oldVS.Object, "status", "readyToUse")
+		if refUID == string(oldVS.GetUID()) && ready {
+			return nil
+		}
+	}
+	if vscErr == nil {
+		if err := c.DeleteVolumeSnapshotContent(ctx, contentName); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("sweeping stale content %s: %w", contentName, err)
+		}
+	}
+	if vsErr == nil {
+		if err := c.DeleteVolumeSnapshot(ctx, dstNs, dstSnapshotName); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("sweeping stale snapshot %s/%s: %w", dstNs, dstSnapshotName, err)
+		}
+	}
+	if vscErr == nil {
+		if err := c.waitGVRGone(ctx, vscGVR, "", contentName, 3*time.Minute); err != nil {
+			return err
+		}
+	}
+	if vsErr == nil {
+		if err := c.waitGVRGone(ctx, vsGVR, dstNs, dstSnapshotName, 3*time.Minute); err != nil {
+			return err
+		}
+	}
+
 	vsc := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "snapshot.storage.k8s.io/v1",
@@ -95,7 +173,11 @@ func (c *Client) CloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapsho
 				"name": contentName,
 			},
 			"spec": map[string]interface{}{
-				"deletionPolicy": "Retain",
+				// Delete (not Retain): the content name is deterministic and
+				// the pair is swept+recreated on every retry, so the CSI
+				// snapshot must share its lifecycle — Retain leaked an rbd
+				// snapshot per retry attempt.
+				"deletionPolicy": "Delete",
 				"driver":         driver,
 				"source": map[string]interface{}{
 					"snapshotHandle": snapshotHandle,
