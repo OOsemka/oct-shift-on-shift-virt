@@ -197,6 +197,20 @@ rules:
       - list
       - watch
       - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - endpoints
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
       - delete
   - apiGroups:
       - rbac.authorization.k8s.io
