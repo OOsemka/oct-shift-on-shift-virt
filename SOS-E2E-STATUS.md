@@ -1686,3 +1686,8 @@ PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
   (if stalled: rendezvousIP pin in agent-config is the designed fix).
 - USER POLICY THIS PHASE: NO further runs launched by agent. On any failure:
   update this doc + deliver handoff summary.
+- 19:17: WaitBootstrap job (lives in sos-nightly-ns) live log: `Bootstrap Kube
+  API Initialized` (rendezvous 10.101.0.11 == master-0 lease — open question
+  RESOLVED, no rendezvousIP pin needed), masters 0+1 at
+  `Writing image to disk: 100%` (pivot), master-2 preparing. Deepest product
+  state in project history; remainder is the standard long install tail.
