@@ -338,9 +338,10 @@ func (s *StepExecutor) deployHAProxy(ctx context.Context, nc *crd.NestedCluster)
 		return fmt.Errorf("waiting for haproxy-ingress cUDN IP: %w", err)
 	}
 
-	nc.Spec.Network.APIVIP = apiIP
-	nc.Spec.Network.IngressVIP = ingressIP
-	// Persist the REAL serving IPs: pods rolled since a previous reconcile
+	// Persist the REAL serving IPs in STATUS only — spec keeps the
+	// user-requested VIPs untouched (writing observed cUDN leases back into
+	// spec poisoned every later consumer, incl. DNS record fallbacks and the
+	// node-guard env, with stale/mis-parsed addresses).
 	// carry new DHCP leases, and every consumer downstream (DNS records,
 	// ConfigureNodes, guard, status) must see the current truth.
 	if nc.Status.APIVIPCUDN != apiIP || nc.Status.IngressVIPCUDN != ingressIP {
@@ -676,15 +677,16 @@ func (s *StepExecutor) deployDNS(ctx context.Context, nc *crd.NestedCluster) err
 				"template": map[string]interface{}{
 					"metadata": map[string]interface{}{
 						"labels": dnsLabels,
-					},
-					"spec": map[string]interface{}{
 						"annotations": map[string]interface{}{
-							// roll DNS pods whenever the served
-							// zone/script changes (records embed live
-							// haproxy cUDN IPs); the python server
-							// reads its script only at startup.
+							// roll DNS pods whenever the served zone
+							// changes (records embed live haproxy cUDN
+							// leases); python reads its script only
+							// at startup. Correct position: pod
+							// TEMPLATE metadata, not the pod spec.
 							"sos.octools.io/script-sha": sha16(dnsScript),
 						},
+					},
+					"spec": map[string]interface{}{
 						"serviceAccountName": dnsSA,
 						"containers": []interface{}{
 							map[string]interface{}{
@@ -878,9 +880,14 @@ UPSTREAM_PORT = 53
 
 def build_response(query, qname_lower, qtype):
     """Return a minimal DNS response bytes or None to forward."""
-    # Only handle A queries (type 1)
+    # Only A queries get answers — but a non-A query (AAAA, SRV, ...) for a
+    # name INSIDE our zone must still be answered NOERROR/empty. Silently
+    # dropping it starves glibc's happy-eyeballs AAAA probe until its
+    # timeout, which made every guest getent call take 20+ seconds.
     if qtype != 1:
-        return None
+        if qname_lower.endswith(LOCAL_ZONE):
+            return _empty_answer(query)
+        return None  # forward other types upstream
 
     ip = RECORDS.get(qname_lower)
     if ip is None and qname_lower.endswith(WILDCARD_SUFFIX):

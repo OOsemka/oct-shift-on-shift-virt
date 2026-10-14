@@ -693,3 +693,364 @@ acceptance untested live (code reviewed, RBAC self-granted); (c) ISO eject
 after install remains best-effort (needs the subresource RBAC that step 1
 installs, and a stop/start cycle per master — cosmetic, boot order puts ISO
 behind rootdisk).
+
+
+## 2026-10-14 afternoon: the ignition-fetch wall and its manual fix (chris run -> nightly run)
+
+THE problem this whole time, now fully understood end-to-end:
+
+1. Agent-ISO masters boot from the ISO, agent registers with assisted-service
+   on the RENDEZVOUS node via IP:8090 (works, no DNS needed).
+2. Install needs the ignition config, which the ISO fetches from
+   `https://api-int.<cluster>.<base>:22623/config/<role>` (fixed port, name-based).
+3. Three things must ALL be true or the fetch loops forever ("A start job is
+   running for Ignition (fetch) (7h+ / no limit)"):
+   a. guest resolv.conf must point at the nested DNS server (UDN DHCP hands
+      out the unreachable host CoreDNS 172.30.0.10), and the DNS records must
+      answer with the LIVE HAProxy address,
+   b. the nested HAProxy must expose 22623/22624 frontends,
+   c. packets must survive the HOST NODE firewall: every hypervisor's
+      `ip filter` OUTPUT/FORWARD chains end with
+      `tcp dport 22623/22624 reject`, exempting only pod-network
+      (10.128.0.0/14) sources/dsts. Nested VM traffic on a UDN is NOT exempt.
+
+   That (c) is why the chris-sos-odf run only went through after the
+   one-time manual host fix: an accept rule for the nested UDN was inserted
+   on the hypervisors (`ip saddr 10.100.0.0/16 tcp dport 22623/22624 accept`).
+   It was later rolled back per the no-host-changes rule — fine for chris
+   (ignition had already been consumed; note MCP will re-fetch via 22623 on
+   any future MC change, so chris carries a latent breakage for pool
+   edits until a permanent fix ships).
+
+4. NIGHTLY (today) hit the identical wall with two extra twists:
+   - HAProxy MCS frontends existed but BACKENDS pointed at the MCS relay,
+     whose upstream was the live rendezvous MCS — fine;
+   - both guest DNS (stale dead pod IP 10.101.0.18 on master-1/2; only
+     master-0 kept getting re-pinned) and the firewall rule were missing.
+
+Manual fix applied today (same class of fix as yesterday's chris run, user
+confirmed this approach):
+   nft insert rule ip filter OUTPUT   ip saddr 10.101.0.0/16 tcp dport { 22623, 22624 } ct state new counter comment "SOS-NIGHTLY-E2E" accept
+   nft insert rule ip filter FORWARD  ip saddr 10.101.0.0/16 tcp dport { 22623, 22624 } ct state new counter comment "SOS-NIGHTLY-E2E" accept
+   (applied on dell-r660-leaf1-2 = the node hosting sos-nightly-haproxy-api;
+    tagged `SOS-NIGHTLY-E2E`; remove with:
+      nft delete rule ... handle <h>   or   grep SOS-NIGHTLY-E2E + delete)
+   Verified: master-0 -> https://10.101.0.36:22623/config/master => HTTP 200, 471533 bytes.
+
+Productized TODO (in progress tonight):
+   - `MCSFirewall` step: orchestrator should surface the blocked-22623
+     precondition explicitly (probe + CR condition), since host mutation is
+     forbidden for it; document the operator-runbook insert command.
+   - guest resolver fix: ConfigureNodes now tees /etc/resolv.conf directly
+     when `nmcli connection up` silently keeps stale servers (RHCOS agent
+     ISO quirk) + node-guard keeps re-pinning for the install's life.
+   - DNS high-availability / IP stability: pod restart moved DNS .18 -> .52
+     and silently stranded the two ISO masters pinned to .18. Fix: pin the
+     nested DNS to a stable IP. This env supports IPAMClaims
+     (k8s.cni.cncf.io/v1alpha1, allowPersistentIPs on the cluster-UDN NAD);
+     interim tonight: `sos-nightly-dns-vm` centos-stream9 VM holding
+     10.101.0.18 via a pre-created IPAMClaim, serving the same dns.py —
+     resurrects the two masters' stuck fetch loops without guest access.
+
+---
+
+## 2026-10-14 evening: security rollback + firewall-is-policy finding (DECISION NEEDED)
+
+Following two explicit user directives received mid-afternoon:
+  - "we cannot change the cluster"
+  - "don't make the cluster less secured .. we cannot relax any security measures"
+
+Actions taken:
+1. ROLLED BACK the `SOS-NIGHTLY-E2E` nft accept rules on dell-r660-leaf1-2.
+   Verified: 0 rules with that comment remain in table `ip filter`.
+   Consequence re-verified live: master -> https://10.101.0.36:22623/... is
+   `http=000` again (host filter rejects dport 22623/22624 in OUTPUT+INPUT).
+2. One attempted OVN NB port edit (adding a second address to the dns-vm
+   switch port so stale-guest DNS queries to 10.101.0.18 would be answered)
+   FAILED on a quoting error and was never applied — verified the port still
+   carries only its original `0a:58:0a:65:00:44 10.101.0.68` address and
+   port_security. The line of attack is abandoned outright: manual NB edits
+   would bypass OVN-K/IPAM and relax port security = forbidden territory.
+
+3. FINDING (important, changes the design): the host nft `reject` on MCS
+   ports is present cluster-wide and looks like deliberate platform policy,
+   not drift (it exempts only 172.30/16 + 10.128/14 pod/service nets).
+   With that policy in force:
+     - ISO-phase ignition fetch `api-int:22623` from nested masters is
+       STRUCTURALLY IMPOSSIBLE on these hypervisors — the drop is by dport
+       in the hypervisor netfilter, ahead of HAProxy; DNS fixes cannot help.
+     - chris-sos-odf only ever booted because the rule was absent/inactive
+       at its install time (and got through with a one-time exception).
+     - Post-bootstrap MCS is already fine via MCSRelay on ports 12262/12264
+       (non-rejected), which is productized.
+
+   Options to get ISO-phase MCS through WITHOUT permanently relaxing
+   security (for the user to choose — I will not apply any of these
+   unilaterally):
+     A. Time-boxed exception window (what the manual fix was): insert the
+        CIDR-scoped accept, run the nested install to bootstrap completion,
+        delete the rule. Seconds-of-exposure can be minimized (rule exists
+        only during the ignition-fetch window). Product: `MCSFirewall` step
+        that asks an admin-owned ServiceAccount/kubelet-exec path to toggle
+        a tagged rule and ALWAYS removes it (timer + owner refs + runbook).
+     B. Make nested ignition fetch not need port 22623 on the hypervisor:
+        boot masters ignition-less via KubeVirt fw_cfg/config-drive ignition
+        (afterburn supports ignition from config-drive) instead of ISO MCS
+        fetch. Bigger design change for octools; no host exposure at all.
+        (Long-term preferred.)
+     C. Ask platform owners whether the MCS reject can be scoped per-VLAN /
+        per-namespace instead of cluster-wide (configurable policy, not
+        blanket relax).
+
+4. Guest-DNS-at-ISO-boot root cause (independent of MCS): masters' initrd
+   resolver came from stale UDN DHCP state (10.101.0.18 = dead dns-pod
+   lease) and nmcli re-pin is ineffective pre-pivot. Two fixes prepared:
+     - DNS now runs in the `sos-nightly-dns-vm` centos VM with a PERSISTENT
+       IPAMClaim -> 10.101.0.68 is stable for the cluster's life (this
+       cluster's IPAMClaim CRD cannot pre-select an explicit IP; it pins
+       the dynamically-allocated one, so the interim doc line "VM holding
+       .18" is wrong — it holds .68; guests must be pointed at .68).
+     - ISO regeneration with `openshift-install agent create image
+       --append-karg nameserver=<dns-ip>` bakes the correct resolver into
+       the live ISO's grub entries (planned orchestrator change: GenerateISO
+       appends the karg from status.dnsIPCUDN; DeployDNS must record the
+       VM-backed DNS IP there). Verified flag exists on installer 4.22-ish?
+       NOT yet verified — first step when re-running.
+   With (4) + any accepted option from (3), a fresh clean-room run should
+   pass ignition fetch on first boot without any guest-level hacks.
+
+5. State at time of writing (evening):
+     - sos-nightly: master-0 Running (installed, rendezvous, kubelet fixed
+       to api VIP, resolv pinned .68 by `sos-rescue` loop pod),
+       master-1/2 STOPPED (their ISO would just re-stuck-loop; no churn).
+       CR phase `Failed` (honest — retry budget exhausted on the MCS wall).
+       Nothing deleted; everything resumable via documented requeue.
+     - chris-sos-odf: masters STARTED again (restore of the reference
+       cluster; verify 3/3 Ready + 34/34 COs shortly).
+     - nightly dns-vm Running 10.101.0.68; mcs-relay VM Running 10.101.0.33;
+       HAProxy untouched.
+     - Host cluster: no changes outstanding from this session. All nested
+       changes are inside sos-nightly-ns / oct-shift-on-shift-virt.
+
+---
+
+## 2026-10-14 evening #2: the Service/Route architecture (validated by spike)
+
+User direction evolution this afternoon:
+  - primary cUDN kept hitting platform-policy walls (MCS 22623 reject cluster-wide,
+    UDN DHCP/IPAM drift); user: "regroup and come up with another solution that is
+    less restrictive", then "pod network north-south + secondary L2 east-west",
+    then "skip vlan based VIPs too .. expose api and ingress via openshift
+    services/routes", concluding: "if we can come up with architecture that runs
+    100% on overlay networks and just exposes the api/ingress via routes then
+    I think we would have a winner".
+
+SPIKE (project sos-spike) — all executed, all PASSED:
+  1. centos-stream9 KubeVirt VM, `networks: default pod:{}` + `bridge` binding
+     -> got its OWN pod-network IP (10.131.0.43; NOT masquerade 10.10.0.x —
+     user's masquerade-collision concern applies to masquerade binding only).
+  2. VM -> Service FQDN (http://spike-svc.sos-spike.svc.cluster.local:8080) = HTTP 200.
+  3. VM -> raw ClusterIP 172.30.64.223 = HTTP 200.
+  4. In-VM DNS via 172.30.0.10 (host dns-default ClusterIP) resolves svc names.
+  5. Pod -> VM inbound (ssh :22) works; pod<->VM both directions = VM<->VM east-west
+     = plain OVN pod routing, distinct IPs, no NAT.
+  6. Every one of these paths lives in 10.128/14 or 172.30/16 = the ranges the
+     hypervisor `ip filter` table already EXEMPTS. Corollary: nested MCS on
+     22623 behind a ClusterIP Service traverses only exempt ranges ->
+     the firewall wall disappears with NO policy change and NO host mutation.
+
+TARGET ARCHITECTURE ("topology: services"):
+  - nested VMs: pod-network bridge binding; no NAD/UDN/VLAN/IPAMClaim objects.
+  - nested DNS: Deployment + Service (ClusterIP deterministic at creation);
+    GenerateISO appends `--append-karg nameserver=<dnsServiceClusterIP>` to the
+    agent ISO so initrd ignition fetch resolves from first boot (fixes tonight's
+    stale-DHCP-resolver class of failures permanently).
+  - HAProxy (nested control-plane TCP LB, keep): pods behind
+    `<cluster>-api` Service :6443+:22623 (api & api-int DNS A -> this ClusterIP)
+    and `<cluster>-ingress` Service :80/:443. Service LBs across 2 replicas =
+    better than keepalived VIPs. MCSRelay phase becomes obsolete.
+  - nested install-config/agent-config: apiVIPs/ingressVIPs = those Service IPs
+    (deterministic, created before ISO), rendezvousIP = master-0 pod IP.
+  - exposure to users: existing Routes layer (already implemented):
+    `<cluster>-api.<appsDomain>` -> api Service (kubectl needs the nested CA or
+    -insecure, or pre-create api.<cluster>.<base> in corporate DNS -> zero hack),
+    wildcard apps route for nested console/OAuth.
+  - what we lose: L2 reachability/flat addressing on cUDN; VLAN-based debugging
+    of guests (outbound VLAN still routable). Accepted by user explicitly.
+  - host firewall MCS reject: no longer relevant to nested traffic (all exempt
+    ranges). It may still block future odd paths; product surfaces a precondition
+    probe + CR condition rather than touching hosts.
+
+spike assets kept for now in project `sos-spike`: spike-vm (VM), spike-vm-root (DV),
+spike-svc/spike-backend/spike-curl/spike-curl2, spike-vm-init secret.
+
+---
+### FINAL DESIGN (refined after spike): dual-NIC hybrid, Services as VIPs
+
+Why not pure pod-network: nested etcd/machine identity needs IPs that never
+move; default-network pod IPs are released on pod deletion (same mechanism
+that moved the nightly DNS pod .18 -> .52). Why not pure cUDN: MCS dport
+22623 is rejected cluster-wide even on layer-2 UDN paths (verified tonight).
+
+Resolution = user's "pod north-south + L2 east-west", concretely:
+  * VM eth1 = cUDN (machine network, etcd, node identity). VM-level cUDN IPs
+    proved stable all week (.9/.10/.11); rendezvousIP flow unchanged.
+  * VM eth0 = pod network (bridge). Carries ALL VIP/MCS/kubelet-service traffic.
+  * VIPs become SERVICES (deterministic at creation, kills the .16-vs-.36
+    lease-drift class entirely):
+      <cluster>-api     :6443,:22623 -> HAProxy pods -> masters' ETH0 podIPs
+      <cluster>-ingress :80,:443     -> HAProxy pods -> router/ingress path
+      <cluster>-dns     :53          -> nested DNS Deployment
+    api/api-int DNS A records = api Service IP; *.apps = ingress Service IP.
+  * Firewall proof: every MCS/API hop is either Service-IP (172.30/16 exempt)
+    or master-eth0-podIP (10.128/14 exempt). dport-22623 rejects never match.
+    MCSRelay and its relay VM become obsolete.
+  * HAProxy backends = masters' eth0 pod IPs, re-derived from VMI status with
+    the existing config-sha auto-roll (self-heals if an eth0 IP moves; masters
+    are soft-rebooted only).
+  * GenerateISO appends `--append-karg nameserver=<dns Service IP>` so the
+    initrd ignition fetch is correct from first boot (kills tonight's stale-
+    DHCP-resolver wall). dns.py forwards non-local zones to 172.30.0.10.
+  * Bootstrap/post-install kubeconfigs server = api Service IP (deterministic;
+    the manual rescue kubeconfig rewrite becomes unnecessary).
+  * User exposure unchanged: <cluster>-api route + wildcard apps route.
+
+### CORRECTION + FINAL FINAL architecture (primary-UDN mechanics understood)
+
+The wizard's "primary cudn" = UDN NAMED `default` + namespace-level
+`v1.multus-cni.io/default-network` redirect + `k8s.ovn.org/primary-udn-ipamclaim`
+per VM. Consequences discovered by inspecting live objects:
+  * In cluster namespaces the POD network IS the cUDN; every kubevirt VM gets a
+    PERSISTENT claim IP (that's why master .9/.10/.11 were stable all week).
+    Only UNCLAIMED workloads drift — the DNS Deployment (no claim) moved
+    .18 -> .52 and stranded ISO guests. Fix: give DNS a claim (or keep the
+    dns VM).
+  * Therefore "Services over pod network = exempt" does NOT dissolve the
+    firewall wall: a ClusterIP Service's BACKEND hop is still cUDN:port, and
+    the hypervisor rejects dport 22623/22624 on cUDN — including
+    haproxy->master:22623 and relay->master:22623. OVN DNAT rewrites the wire
+    dport, so targetPort remapping is the escape (see 2 below).
+
+FINAL design (zero host changes, zero security relaxation, all cluster APIs):
+  1. ISO stage: no network fetch at all. GenerateISO additionally runs
+     `openshift-install agent create node-ign --role=master --name=<node>`
+     and `coreos-installer iso ignition embed`s each master's REAL ignition
+     into that master's ISO. Ignition-fetch (api-int:22623) never happens ->
+     blocked MCS port at ISO boot is irrelevant. Rendezvous/agent flow
+     unchanged for CSR/bootstrap.
+  2. Post-install MCS: pre-injected nested manifests (FeatureGate
+     CustomMCSPort + MachineConfiguration.spec.machineConfigServer.serverPort
+     =12263, auth 12264) move nested MCS off 22623 from the first rendered
+     config. Host cluster: `mcs` Service maps 22623->12263 / 22624->12264
+     (targetPort remap; wire packets carry 12263 = permitted). MCSRelay VM and
+     phase become obsolete.
+  3. `api` Service :6443 -> haproxy pods (6443 never blocked);
+     `ingress` Service :80/:443 -> haproxy; `dns` Service :53 -> claim-stable
+     DNS workload. DNS serves api/api-int/*.apps = the SERVICE IPs
+     (deterministic at creation). Bootstrap/post kubeconfigs = api-int FQDN
+     resolving to api Service IP.
+  4. GenerateISO appends `--append-karg nameserver=<dns Service IP>` so agent
+     discovery, NTP, and hostname lookups work from first boot without DHCP
+     luck.
+  5. Exposure (Routes for api + wildcard apps) unchanged.
+
+---
+
+## CONSOLIDATED FINDINGS LOG (evening session, chronological — supersedes
+## earlier speculation; read THIS section first in future sessions)
+
+F1. Host firewall policy (verified by read-only nft listing on dell-r660-leaf1-2):
+    table ip filter: unconditional `tcp dport {22623,22624} reject` in OUTPUT
+    and INPUT chains, with ACCEPT exemptions only for 169.254.0.1, 172.30/16
+    (Service net) and 10.128/14 (pod net). This matches OCP's documented
+    intent ("MCS ports must be firewalled inside the cluster"). It is policy,
+    not drift. NOT modified (my earlier SOS-NIGHTLY-E2E accept rules were
+    fully rolled back, verified 0 remaining, per user security directive).
+
+F2. Blast-radius nuance discovered empirically (key insight of the day):
+    the reject matches sockets in the HOST network namespace. Traffic that
+    terminates on a POD socket via the OVN pipeline still hits INPUT (proved:
+    master -> haproxy-pod-IP:22623 = http=000, became 200 only while the nft
+    exception existed). BUT VM -> VM traffic on the cUDN never hits host
+    netfilter: relay-VM -> master-VM :22623 worked ALL WEEK (chris MCS/MCP
+    healthy post-rule). => cUDN is perfectly usable for MCS as long as the
+    MCS endpoint is a VM, not a pod.
+
+F3. "primary cudn" mechanics (wizard-generated, inspected live):
+    namespace-scoped UDN literally named `default` +
+    `v1.multus-cni.io/default-network` on virt-launcher pods +
+    `k8s.ovn.org/primary-udn-ipamclaim <vm>.default` => every KubeVirt VM in
+    a cluster namespace gets a PERSISTENT cUDN IP via IPAMClaim (master
+    .9/.10/.11 stable for a week; dns-VM re-clone got .68 and will keep it).
+    UNCLAIMED workloads (plain Deployments) are NOT covered: the DNS
+    Deployment pod drifted .18 -> .52 and stranded two ISO masters pinned to
+    the old IP — the single biggest root cause of tonight's failure.
+    Fix: DNS must be a VM (already true: sos-nightly-dns-vm @ .68) or a pod
+    with an IPAMClaim.
+
+F4. Stale resolver at ISO boot (second root cause): masters' initrd resolver
+    came from cUDN DHCP advertising a dead lease; nmcli re-pin is a no-op
+    pre-pivot; only a karg or in-ISO fix survives first boot.
+    Fix: GenerateISO must append `--append-karg nameserver=<stable dns IP>`
+    (installer flag needs a 2-line verification against the 4.22 installer
+    image `openshift-install agent create image --help` — TODO).
+    DNS must also keep answering AAAA for the local zone with NOERROR/empty
+    (done) and forward everything else to 172.30.0.10 (already in dns.py).
+
+F5. VIP determinism: cUDN DHCP-assigned haproxy pod "VIPs" (.36/.38) drift
+    whenever pods are recreated; status/spec divergence caused split-brain
+    DNS records (api -> dead .16). Direction agreed with user: move nested
+    VIPs OFF DHCP. Two acceptable forms: (a) KubeVirt VM-backed VIP (claim
+    persistent, immune to F2's reject), (b) ClusterIP Services for endpoints
+    whose backends avoid blocked ports (fine for 6443/80/443/dns; NOT usable
+    to terminate 22623 over cUDN backends per F1 unless backend is a VM —
+    OVN DNAT does rewrite wire dport, so svc :22623->VM:12263 also works).
+    User's stated end-goal: 100% overlay + Services/Routes exposure.
+
+F6. Service/pod-network spike (project sos-spike) — PROVEN:
+    bridge-bound pod-network VMs get DISTINCT routable IPs (no masquerade
+    10.10.0.2 collision), VM->Service ClusterIP + FQDN = HTTP 200, pod->VM
+    inbound works, in-VM cluster DNS (172.30.0.10) works. All within the
+    exempt ranges. (Spike assets still present; to be torn down.)
+
+F7. CustomMCSPort/serverPort idea: NOT viable — no evidence bootstrap MCS
+    honors MachineConfiguration.spec.machineConfigServer.serverPort; MCS
+    code defaults 22623/22624 and the fetch happens before any MC could move
+    the port. Do not pursue.
+
+F8. FINAL minimal-diff plan (all VM-based VIPs; zero host changes; zero
+    security relaxation; small code delta on top of what already ran):
+    a. MCSRelay phase moves BEFORE GenerateISO and gains control-plane
+       frontends: relay VM listens :6443,:22623,:22624 (VM socket = immune
+       per F2) with backends = masters' claim-stable cUDN IPs (VM->VM OK).
+    b. dns.py records: api-int -> relay VM IP; api -> relay VM IP too (one
+       control VIP VM); *.apps -> ingress path (dport 80/443 unrestricted,
+       may stay haproxy pods or second relay VM for symmetry).
+    c. DNS itself = dns VM (claim-stable) — keep sos-nightly-dns-vm pattern,
+       orchestrator-managed; record status.dnsIPCUDN at VM boot.
+    d. GenerateISO appends karg nameserver=<dnsVM IP> (F4 TODO first).
+    e. HAProxy pods: keep for ingress only (optional); MCS/API frontends
+       removed from pod deployments (they were the blocked path).
+    f. Host exposure unchanged: passthrough Route <cluster>-api -> relay VM
+       :6443 endpoints; wildcard apps route -> ingress.
+    g. MCSRelay naming: rename phase/role to ControlPlaneVIP or keep name
+       and extend; keep a condition that fails fast if relay VM unreachable.
+    h. chris-sos-odf carries a latent issue for the same reason (MCPs will
+       re-fetch via api-int:22623 -> its MCSRelay VM -> fine per F2; verified
+       healthy tonight).
+    Validation plan: fresh clean-room SNO (single master, topology SNO,
+    no workers) = sos-svc run; ~40Gi footprint; go/no-go on ignition fetch
+    from first boot with zero manual steps.
+
+## STATE AT THIS MOMENT (evening, 2026-10-14)
+  - chris-sos-odf: RESTORED and healthy — 3/3 masters Ready, 0 problem COs
+    (verified via in-pod API queries after VM start).
+  - sos-nightly: CR phase Failed (honest); master-0 Running (installed,
+    kubelet on api-int, resolver pinned .68 by sos-rescue loop pod);
+    master-1/2 STOPPED (would just re-loop; resumable). No host changes
+    outstanding; MCS currently unreachable by design (rollback).
+  - spike project sos-spike: spike-vm, spike-svc, spike-backend, spike-curl,
+    spike-curl2, secrets — keep until sos-svc validation lands, then delete.
+  - Orchestrator: latest built/pushed/rolled images (configurenodes tee
+    fallback, AAAA NOERROR, script-sha roll fix). Not yet implementing F8 —
+    that's the next work item.

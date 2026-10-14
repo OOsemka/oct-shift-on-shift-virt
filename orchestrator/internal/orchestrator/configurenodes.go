@@ -410,25 +410,27 @@ fi
 install -m 600 /sshkey/ssh-privatekey /tmp/id_key
 
 SSHOPT="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6 -o LogLevel=ERROR -i /tmp/id_key"
-fail=0
+configured=0
 
 for ip in $NODE_IPS; do
     up=0
-    for i in $(seq 1 60); do
+    for i in $(seq 1 18); do
         if ssh $SSHOPT "$SSH_USER@$ip" true 2>/dev/null; then up=1; break; fi
         sleep 10
     done
     if [ $up -ne 1 ]; then
-        echo "FAIL $ip: SSH never came up (10min)"
-        fail=1
+        # Not fatal: a node stuck pre-sshd (e.g. ignition retry loop) is
+        # still picked up by the node-guard Deployment, which re-runs the
+        # same fix every 30s for the life of the install.
+        echo "WARN $ip: ssh not up (3min) — leaving to node-guard"
         continue
     fi
     echo "OK $ip: ssh reachable"
     if ssh $SSHOPT "$SSH_USER@$ip" "bash -s -- $DNS_IP $API_IP $INGRESS_IP $CLUSTER_DOMAIN" < /scripts/fix-node.sh; then
         echo "OK $ip: dns configured"
+        configured=$((configured+1))
     else
         echo "FAIL $ip: dns configuration"
-        fail=1
     fi
 done
 
@@ -452,11 +454,11 @@ if [ -n "$rdv" ]; then
     curl -s --max-time 10 "http://$rdv:8090/api/assisted-install/v2/clusters" >/dev/null 2>&1 || true
 fi
 
-if [ $fail -ne 0 ]; then
-    echo "configure-nodes: one or more nodes failed"
+if [ $configured -eq 0 ]; then
+    echo "configure-nodes: no node could be configured over ssh"
     exit 1
 fi
-echo "configure-nodes: all nodes configured"
+echo "configure-nodes: $configured node(s) configured now; stragglers owned by node-guard"
 `
 
 // guardLoopScript runs in the node-guard Deployment pod (cluster namespace).
@@ -484,34 +486,42 @@ const guardNodeScript = `#!/bin/bash
 set -uo pipefail
 DNS_IP=$1; API_IP=$2; DOMAIN=$3
 
-# 1. Post-pivot kubeconfig bug: kubelet must reach the API VIP, never
-#    "localhost:6443" (on non-bootstrap masters that points at nothing and
-#    the node silently never registers). Only once per change.
-if [ -f /etc/kubernetes/kubeconfig ] && sudo grep -q "server: https://localhost:6443" /etc/kubernetes/kubeconfig 2>/dev/null; then
-    sudo sed -i "s#server: https://localhost:6443#server: https://$API_IP:6443#" /etc/kubernetes/kubeconfig
-    sudo systemctl restart kubelet
-    echo "FIX kubeconfig server -> https://$API_IP:6443 (kubelet restarted)"
-fi
-
-# 2. Resolver revert: pivot/MCO rewrites resolv.conf from DHCP (host CoreDNS
-#    — unreachable on this UDN). Re-pin on the connection owning the default
-#    route: pre-pivot that is enp1s0's conn, post-pivot the OVS bridge-port
-#    conn ovs-if-br-ex (the PHYS port conn rejects ipv4 settings outright).
+# 1. Resolver revert FIRST: pivot/MCO rewrites resolv.conf from DHCP (host
+#    CoreDNS — unreachable on this UDN). Everything below resolves names.
 if ! grep -q "nameserver $DNS_IP" /etc/resolv.conf 2>/dev/null; then
     DEV=$(ip route show default | awk '/default/ {print $5; exit}')
     CON=$(nmcli -g NAME,DEVICE connection show --active 2>/dev/null | awk -F: -v d="$DEV" '$2==d {print $1; exit}')
     if [ -n "$CON" ]; then
         if sudo nmcli connection modify "$CON" ipv4.ignore-auto-dns yes ipv4.dns "$DNS_IP" ipv4.dns-search "$DOMAIN" ipv4.dns-priority 10 >/dev/null 2>&1            && sudo nmcli connection up "$CON" >/dev/null 2>&1; then
             echo "FIX dns re-pinned via conn $CON"
-            # During install the agent's next-step-runner snapshots
-            # resolv.conf at container creation; restart recreates it.
-            systemctl cat agent.service >/dev/null 2>&1 && sudo systemctl restart agent.service
         else
             echo "WARN dns re-pin failed via conn $CON"
         fi
     else
         echo "WARN no NM connection owns default dev $DEV yet"
     fi
+    # Some RHCOS builds (especially the live agent ISO) do not honour
+    # ipv4.dns on activation — the profile updates but resolv.conf keeps
+    # the stale servers. Writing the file directly is sticky: NM leaves a
+    # hand-managed resolv.conf alone on this image.
+    if ! grep -q "nameserver $DNS_IP" /etc/resolv.conf 2>/dev/null; then
+        printf 'search %s\nnameserver %s\n' "$DOMAIN" "$DNS_IP" | sudo tee /etc/resolv.conf >/dev/null
+        echo "FIX resolv.conf written directly (nmcli ineffective)"
+    fi
+    # During install the agent's next-step-runner snapshots resolv.conf at
+    # container creation; restart recreates it.
+    systemctl cat agent.service >/dev/null 2>&1 && sudo systemctl restart agent.service
+fi
+
+# 2. Post-pivot kubeconfig bug: kubelet must reach the API through the
+#    api-int NAME, never "localhost:6443" (on non-bootstrap masters that
+#    points at nothing and the node silently never registers). The NAME
+#    (not the HAProxy cUDN IP) is deliberate: haproxy pod rolls change the
+#    cUDN lease, DNS absorbs that. Only once per change.
+if [ -f /etc/kubernetes/kubeconfig ] && sudo grep -q "server: https://localhost:6443" /etc/kubernetes/kubeconfig 2>/dev/null; then
+    sudo sed -i "s#server: https://localhost:6443#server: https://api-int.$DOMAIN:6443#" /etc/kubernetes/kubeconfig
+    sudo systemctl restart kubelet
+    echo "FIX kubeconfig server -> https://api-int.$DOMAIN:6443 (kubelet restarted)"
 fi
 exit 0
 `
@@ -552,6 +562,14 @@ sudo nmcli connection modify "$CON" \
     ipv4.dns-search "$DOMAIN" \
     ipv4.dns-priority 10
 sudo nmcli connection up "$CON" >/dev/null
+
+# nmcli activation silently keeps stale servers on some RHCOS builds (live
+# agent ISO): if resolv.conf didn't follow, write it directly. Sticky — NM
+# leaves a hand-managed resolv.conf alone on this image.
+if ! grep -q "nameserver $DNS_IP" /etc/resolv.conf 2>/dev/null; then
+    printf 'search %s\nnameserver %s\n' "$DOMAIN" "$DNS_IP" | sudo tee /etc/resolv.conf >/dev/null
+    echo "resolv.conf written directly (nmcli ineffective)"
+fi
 
 # next-step-runner caches /etc/resolv.conf for its whole life — restarting
 # the agent recreates it with the new resolver. (Never 'podman kill
