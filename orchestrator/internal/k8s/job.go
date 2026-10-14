@@ -169,12 +169,42 @@ func (c *Client) CreatePVC(ctx context.Context, namespace, name, storageClass, s
 	}
 	_, err := c.Clientset.CoreV1().PersistentVolumeClaims(namespace).Create(ctx, pvc, metav1.CreateOptions{})
 	if errors.IsAlreadyExists(err) {
-		return nil
+		return c.reclaimTerminatingPVC(ctx, namespace, name, func() error {
+			_, err := c.Clientset.CoreV1().PersistentVolumeClaims(namespace).Create(ctx, pvc, metav1.CreateOptions{})
+			if errors.IsAlreadyExists(err) {
+				return nil
+			}
+			return err
+		})
 	}
 	if err != nil {
 		return fmt.Errorf("creating PVC %s/%s: %w", namespace, name, err)
 	}
 	return nil
+}
+
+// reclaimTerminatingPVC closes the AlreadyExists-while-terminating race:
+// the API reports "already exists" for a PVC whose deletion is still being
+// finalized, so a create-if-absent caller no-ops and the object then
+// vanishes underneath it (observed: generate-iso job orphaned against a
+// PVC deleted by a prior teardown). If the existing object carries a
+// DeletionTimestamp, wait for it to disappear and retry the create once.
+func (c *Client) reclaimTerminatingPVC(ctx context.Context, namespace, name string, retryCreate func() error) error {
+	existing, err := c.Clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil || existing.DeletionTimestamp == nil {
+		return nil // genuinely present (or vanished: next loop re-creates)
+	}
+	for i := 0; i < 150; i++ { // up to 5 min for ceph finalize
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+		if _, gerr := c.Clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{}); errors.IsNotFound(gerr) {
+			return retryCreate()
+		}
+	}
+	return fmt.Errorf("PVC %s/%s stuck terminating after 5m", namespace, name)
 }
 
 func (c *Client) CreateBlockPVC(ctx context.Context, namespace, name, storageClass, size string) error {
@@ -200,7 +230,13 @@ func (c *Client) CreateBlockPVC(ctx context.Context, namespace, name, storageCla
 	}
 	_, err := c.Clientset.CoreV1().PersistentVolumeClaims(namespace).Create(ctx, pvc, metav1.CreateOptions{})
 	if errors.IsAlreadyExists(err) {
-		return nil
+		return c.reclaimTerminatingPVC(ctx, namespace, name, func() error {
+			_, err := c.Clientset.CoreV1().PersistentVolumeClaims(namespace).Create(ctx, pvc, metav1.CreateOptions{})
+			if errors.IsAlreadyExists(err) {
+				return nil
+			}
+			return err
+		})
 	}
 	if err != nil {
 		return fmt.Errorf("creating block PVC %s/%s: %w", namespace, name, err)
