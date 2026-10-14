@@ -1531,3 +1531,22 @@ first mounts too — wiping zeros on blank RBD disks is a no-op and means
 the bootindex trap is closed on EVERY mount path, not just retries).
 karg verified in job log: `nameserver=10.101.0.18`. Next: PowerOn/
 WaitBootstrap — rendezvous 10.101.0.10 vs master-0's DHCP lease.
+
+### Clean-run catch #4 (18:26 UTC): in-band PowerOn RBAC never existed
+
+`PowerOn failed: forbidden: cannot put
+/subresources.kubevirt.io/v1/.../virtualmachines/master-0/start`. Truth
+chain: run 1/2 never proved in-band power ops (debug virtctl-as-admin and
+pre-PowerOn failures masked it); the startup self-provisioning shim in
+selfrbac.go fails by DESIGN — API-server escalation protection forbids an
+SA granting rules it lacks (my old skill lesson "create on clusterroles is
+enough" was WRONG, corrected in skill). install.yaml already had the right
+rules (fixed earlier) but the LIVE ClusterRole from Oct 1 predates it.
+Fix (a6e3150): applied corrected ClusterRole live as kube:admin (module
+RBAC completion via API: subresources start/stop/restart update, pods/exec,
+endpoints full, routes +update/patch — verified in live role dump), added
+the two missing rule groups to the manifest, default
+ttlSecondsAfterFinished=3600 on all managed jobs (finished generate-iso pod
+was silently holding pvc-protection and hanging teardown). Run 4 starting:
+build+roll, full teardown (VMIs-gone wait + 4-way numeric gone-loop),
+re-apply. First time the engine will stop AND start VMs entirely in-band.
