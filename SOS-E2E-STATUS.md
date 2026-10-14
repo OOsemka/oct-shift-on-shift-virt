@@ -1313,3 +1313,47 @@ correctly env'd) ConfigureNodes + node-guard.
 **ISO PVCs are volumeMode Block + RWO — attach-conflict pitfall recorded:** a
 verification pod mounting them while the VM is running sticks forever in
 ContainerCreating (no error event, just hangs). Stop the VM first, always.
+
+## Running log 2026-10-14 ~17:10 UTC: fetch loop persists WITH baked karg — capture attempts
+
+The 16:43 user screenshot proved the loop persists on the FRESH re-patched
+boot (uptime 3min, resolver `10.1...` first in line = karg IS honored). But
+OVN ground truth contradicts every resolver theory:
+- master-1/2 live dhcp_options rows = `dns_server=172.30.0.10` (NOT .18).
+- dns-vm at .68 answers `api-int -> 10.101.0.36` from rescue pod (pod net)
+  AND master-0 (cUDN). dns.py source (from its init secret) is correct:
+  api+api-int->.36, *.apps->.38, forwards rest to 172.30.0.10 w/ 3s timeout.
+- dns-vm network spec = pod-network VM + launcher cUDN attach; OVN port =
+  `0a:58:0a:65:00:44 10.101.0.68`. Correct.
+- SSH from rescue pod to .10/.9 = **Connection REFUSED** (not timeout):
+  return path to the VMs works at TCP level; VMs alive, pre-sshd (initramfs
+  fetch loop). So L3/L2 both directions fine for TCP... yet DNS UDP "fails".
+
+Open contradiction: if resolv.conf=[.68] and .68 answers everyone, fetch
+should succeed. Missing datum = what the initramfs ACTUALLY queries and what
+comes back. Console line tail (after `on 10.1...`) is unscrollable in web
+console; user advised jumpbox route.
+
+**Capture-tooling lessons (host cluster, RHCOS):**
+- RHCOS hosts have NO tcpdump; `oc debug node --timeout` flag doesn't exist
+  in this version; inside `chroot /host`, host /tmp is `/tmp` (NOT /host/tmp).
+- virt-launcher compute containers have python3+socat but NO CAP_NET_RAW ->
+  python AF_PACKET sniffer = PermissionError. No pcap from launchers either.
+- Next viable captures: (a) purpose-built jumpbox VM (user-endorsed: core
+  user + install key), (b) hostNetwork privileged tcpdump pod (tcpdump from
+  a container image, `--net=host`, capture br-int/geneve) — queued.
+- `oc` token for api.az1.vpc.openinfra.lab EXPIRED mid-investigation
+  (~17:04): writes -> Unauthorized, some cached reads still pass. No
+  client-cert kubeconfig on disk (~/.kube/az1.kubeconfig = token-based too).
+  Requires user `oc login`; keep auth-expiry in mind for long watches.
+
+**Jumpbox staged (ready to apply on re-login):** `/tmp/jumpbox.yaml` =
+`sos-nightly-jumpbox` VM (2c/4Gi, bridge+pod network — reachable to cUDN VMs
+via OVN inter-pod routing WITHOUT cUDN attach), root cloned from
+`sos-nightly-dns-vm-root` PVC (cloud-init-capable base), cloud-init secret
+`sos-nightly-jumpbox-init` (already created) = core user + cluster install
+pubkey, nestdns disabled, hostname sos-jumpbox. RunStrategy field for this
+kubevirt version = `spec.running` (runIfAbsent rejected).
+Then: ssh core@<jumpbox-pod-ip> from rescue pod -> dig @10.101.0.68,
+dig @172.30.0.10, curl -k https://api-int:22623/config/master, ssh into
+master-0 to compare — from inside-cluster position.
