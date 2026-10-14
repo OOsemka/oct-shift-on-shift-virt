@@ -1054,3 +1054,155 @@ F8. FINAL minimal-diff plan (all VM-based VIPs; zero host changes; zero
   - Orchestrator: latest built/pushed/rolled images (configurenodes tee
     fallback, AAAA NOERROR, script-sha roll fix). Not yet implementing F8 —
     that's the next work item.
+
+
+---
+
+## 2026-10-14 evening #3: THE FIREWALL WAS A RED HERRING (major correction)
+
+This section supersedes the MCS/firewall conclusions in "evening: security
+rollback + firewall-is-policy finding". Those conclusions were wrong and were
+built on a probe taken from the wrong network namespace.
+
+### The correction, with evidence
+
+The host `ip filter` ruleset (dell-r660-leaf1-2) is:
+
+```
+chain OUTPUT  { policy accept;
+    tcp flags syn / fin,syn,rst,ack tcp dport 22623 counter packets 2  reject
+    tcp flags syn / fin,syn,rst,ack tcp dport 22624 counter packets 0  reject }
+chain INPUT   { policy accept;  (no MCS rules at all) }
+chain FORWARD { policy drop;
+    ip daddr/saddr 169.254.0.1, 172.30.0.0/16, 10.128.0.0/14  accept
+    tcp flags syn / fin,syn,rst,ack tcp dport 22623 counter packets 0 reject
+    tcp flags syn / fin,syn,rst,ack tcp dport 22624 counter packets 0 reject }
+```
+
+Two properties we had missed:
+
+1. The MCS rules are `tcp flags syn` matches — they reject the *first packet
+   only*, and only in the host's own OUTPUT/FORWARD hooks. They exist to stop
+   **host- and pod-originated** traffic from reaching a nested MCS port.
+2. Nested VM traffic does not traverse those hooks. A nested master's egress
+   rides the OVN/OVS pipeline; it is never evaluated against `ip filter`
+   OUTPUT or FORWARD.
+
+Direct verification, master-0 -> HAProxy cUDN lease, with **zero** firewall
+exceptions in place (all `SOS-NIGHTLY-E2E` rules were rolled back first,
+`remaining: 0`):
+
+```
+vm-to-hap-mcs: https://10.101.0.36:22623/config/master -> HTTP 200
+```
+
+The earlier `http=000` reading that drove the whole "firewall is policy, we
+must route around it" conclusion was taken from a **helper pod**, which
+*does* originate from the host netns and therefore *is* subject to the SYN
+reject. Pod-originated probes to nested MCS ports are the wrong instrument;
+they will always look blocked while the actual VM path is fine.
+
+### What this means for the architecture
+
+- The original design stands: HAProxy pods on the cluster cUDN front API
+  (6443) and MCS (22623/22624) and are reachable from nested VMs. No host
+  firewall exception is needed, so nothing has to be relaxed. `we cannot
+  change the cluster` / `we cannot relax any security measures` is fully
+  satisfied.
+- The MCS relay VM stays useful as a *fallback* VIP front (it also serves the
+  12262/12264 aliases that worked during the chris run), but it is no longer
+  load-bearing by necessity. The relay's alias port was observed dead during
+  this window; the HAProxy lease is the live, authoritative path.
+- VIP precedence is therefore **HAProxy cUDN lease first, relay VM second**.
+  The earlier "VM-first" edit made in the panic was reverted in the same
+  commit that added this correction.
+- The Service/ClusterIP spike (`sos-spike`) remains valid as the mechanism
+  for exposing nested API/ingress to the *host* cluster via Routes. That is
+  orthogonal to the MCS question and still the plan for host-side exposure.
+
+### The real remaining blocker: pre-pivot DNS
+
+`agent-config` v1alpha1 has no `kernelArguments`, so the nested resolver
+cannot be declared. A pre-pivot RHCOS guest instead inherits its resolver
+from UDN DHCP, and DHCP handed out a stale, dead DNS-pod IP
+(`10.101.0.18`). Consequence, exactly as seen on master-1/master-2:
+
+```
+ignition[804]: GET error: Get "https://api-int.sos-nightly.chris.lab:22623/config/master":
+  dial tcp: lookup api-int.sos-nightly.chris.lab on 10.101.0.18:53: i/o timeout
+A start job is running for Ignition (fetch) (21s / no limit) -> (1min 43s ...)
+```
+
+nmcli is a no-op pre-pivot and `Wired connection 1` modifications did not
+move `/etc/resolv.conf`, so there is no in-guest remedy at this stage.
+
+Fix, two layers:
+
+1. **Deterministic DNS endpoint.** DNS moved from a Deployment pod (whose
+   cUDN IP drifts — tonight's outage was `.18` -> `.52` after a reschedule,
+   stranding every pre-pivot guest) to a KubeVirt VM with a claim-persistent
+   cUDN lease: `sos-nightly-dns-vm` at `10.101.0.68`.
+2. **Bake the resolver into the ISO.** `nameserver=` is a dracut karg
+   honoured by the RHCOS live initramfs, i.e. exactly the stage where ignition
+   fetch runs. `coreos-installer iso kargs modify -a nameserver=<dnsIP>` sets
+   it, and — verified today — the binary works **without root** when unpacked
+   from the CentOS Stream 9 AppStream RPM via `rpm2archive` + `tar`
+   (the image has no `cpio`, and the Fedora download path 404s; c9s AppStream
+   carries `coreos-installer-0.25.0-1.el9`).
+
+Live rescue in progress on `sos-nightly`: master-1/2 ISO PVCs are
+`volumeMode: Block` (raw cdrom), so coreos-installer refuses them outright
+("ISO image is incomplete" — it parses the ISO as a whole). Working
+procedure, validated on master-1:
+
+```
+ISO=1422710784   # from the PVD volume_space_size at byte 32848 (LE u32)
+dd if=/dev/m1 of=/tmp/m1.iso bs=4M count=$ISO iflag=skip_bytes,count_bytes
+coreos-installer iso kargs modify -a nameserver=10.101.0.68 /tmp/m1.iso
+dd if=/tmp/m1.iso of=/dev/m1 bs=4M iflag=fullblock conv=notrunc
+# read the front back off the block device and re-verify the karg
+```
+
+Both master-1 and master-2 ISOs now carry `nameserver=10.101.0.68`
+(`verify karg count: 1` read back from the device) and were restarted.
+`/etc/resolv.conf` on master-0 is held at `10.101.0.68` by the
+`sos-rescue` loop pod because NM reverts it every ~30s.
+
+### Code committed (local only, `2c8c324`)
+
+- `internal/orchestrator/dns_vm.go` (new): `DNS_MODE=vm` provisions
+  `<cluster>-dns-vm` via `CreateInfraVM`, embeds the generated `dns.py` in a
+  systemd unit through cloud-init, records `status.dnsIPCUDN` from the VM's
+  claim-persistent lease. Root inside the VM, so no SCC work is needed.
+  Includes `resolveControlPlaneVIP` / `resolveIngressVIP` helpers with the
+  corrected HAProxy-first precedence.
+- `steps.go`: `deployDNS` dispatches to `deployDNSVM` in vm mode; VIP
+  resolution now repairs `status.apiVIPCUDN`/`ingressVIPCUDN` on resume
+  instead of falling back to never-bound spec VIPs; the GenerateISO job
+  injects `nameserver=$DNS_IP` into the generated ISO and receives `DNS_IP`
+  from `status.dnsIPCUDN`.
+- `configurenodes.go`: skips pod-DNS lookup in vm mode; api VIP prefers the
+  HAProxy lease with relay VM fallback.
+- `mcsrelay.go`: relay VM additionally fronts 6443/22623/22624 so it is a
+  genuine fallback VIP, not just an MCS port translator.
+- `go build`, `go vet`, `gofmt` all clean.
+
+### Correction to the consolidated findings log
+
+- **F8 (host firewall is policy; MCS must be worked around) — RETRACTED.**
+  The rule targets pod/host-originated SYN only; nested VM MCS traffic is
+  unfiltered by design and by observation. No workaround is required and the
+  VIP-VM design is demoted from "necessary" to "optional fallback".
+- New standing pitfall: **never probe nested MCS/API ports from a helper
+  pod.** Pod-originated probes hit the SYN reject and read as blocked. Probe
+  from inside a nested VM over SSH, or from the relay VM.
+
+### Next (unchanged)
+
+1. Confirm master-1/master-2 pivot with the karg'd ISOs; watch for the
+   `Ignition (fetch)` wall clearing and bootstrap completion.
+2. Let the orchestrator drive install completion; validate nested 3/3.
+3. Build/roll the corrected image so the ISO karg + DNS-VM path is the
+   default; then validate host-side exposure of nested API and console via
+   Services/Routes using the `sos-spike` mechanism.
+4. Keep `chris-sos-odf` healthy (currently 3/3 masters, 0 problem COs).
