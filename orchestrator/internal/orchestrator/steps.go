@@ -70,7 +70,19 @@ func (s *StepExecutor) Execute(ctx context.Context, nc *crd.NestedCluster, phase
 	case crd.PhaseDeployHAProxy:
 		return s.deployHAProxy(ctx, nc)
 	case crd.PhaseDeployDNS:
-		return s.deployDNS(ctx, nc)
+		if err := s.deployDNS(ctx, nc); err != nil {
+			return err
+		}
+		// Jumpbox alongside DNS: operators get in-cluster SSH from minute
+		// one instead of hand-building a box mid-incident. Best-effort —
+		// a missing jumpbox must never block the install.
+		if jumpboxEnabled() {
+			if err := s.deployJumpbox(ctx, nc); err != nil {
+				s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("jumpbox").
+					Error("jumpbox deploy failed (continuing)", "error", err.Error())
+			}
+		}
+		return nil
 	case crd.PhaseGenerateISO:
 		return s.generateISO(ctx, nc)
 	case crd.PhaseMountISO:
@@ -1290,6 +1302,18 @@ func (s *StepExecutor) mountISO(ctx context.Context, nc *crd.NestedCluster) erro
 		if err := s.client.SetVMPower(ctx, clusterNs, node.Name, false, 3*time.Minute); err != nil {
 			return fmt.Errorf("stopping %s for ISO mount: %w", node.Name, err)
 		}
+		if existing != nil {
+			// BOOTINDEX TRAP (see SOS-E2E-STATUS): KubeVirt boots
+			// rootdisk (bootindex 1) BEFORE the ISO cdrom (2). A node
+			// being re-ISO'd carries a partial/failed install whose
+			// stale bootloader silently wins the boot, so the freshly
+			// patched ISO is never read and the retry re-boots the old
+			// OS forever. Wipe the boot sectors of any rootdisk that
+			// predates this ISO generation.
+			if err := s.wipeRootdiskBoot(ctx, clusterNs, node.Name, nc.Spec.ClusterName); err != nil {
+				return fmt.Errorf("wiping stale rootdisk on %s: %w", node.Name, err)
+			}
+		}
 		if err == nil {
 			if derr := s.client.Clientset.CoreV1().PersistentVolumeClaims(clusterNs).Delete(ctx, isoPVC, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
 				return fmt.Errorf("deleting stale ISO PVC %s: %w", isoPVC, derr)
@@ -1404,6 +1428,71 @@ func (s *StepExecutor) convertISOToBlock(ctx context.Context, namespace, srcPVC,
 		return fmt.Errorf("dd job failed: %w", err)
 	}
 
+	s.client.DeleteJob(ctx, namespace, jobName)
+	return nil
+}
+
+// wipeRootdiskBoot zeroes the first 100Mi of a node's rootdisk PVC so the
+// BIOS falls through to the ISO cdrom (bootindex 2) instead of a stale
+// bootloader left by a previous partial install. Called only on ISO
+// re-generation (retry) paths — the very act of re-mounting an ISO asserts
+// the intent to reinstall that node. No-op when the rootdisk PVC does not
+// exist yet (first mount before DataVolumes).
+func (s *StepExecutor) wipeRootdiskBoot(ctx context.Context, namespace, nodeName, clusterName string) error {
+	log := s.logger.WithCluster(clusterName).WithComponent("installer")
+	rootPVC := nodeName + "-rootdisk"
+	if _, err := s.client.Clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, rootPVC, metav1.GetOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	log.Info("wiping stale rootdisk boot sectors before ISO re-mount", "node", nodeName, "pvc", rootPVC)
+
+	s.client.DeleteJob(ctx, namespace, nodeName+"-rootdisk-wipe")
+	jobName := nodeName + "-rootdisk-wipe"
+	backoffLimit := int32(0)
+	deadline := int64(300)
+	wipeJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"oct-shift-on-shift-virt/cluster":   clusterName,
+				"oct-shift-on-shift-virt/component": "rootdisk-wipe",
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:          &backoffLimit,
+			ActiveDeadlineSeconds: &deadline,
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{{
+						Name:    "wipe",
+						Image:   "docker.io/library/alpine:3.20",
+						Command: []string{"/bin/sh", "-c"},
+						Args:    []string{"dd if=/dev/zero of=/dev/rootdisk bs=1M count=100 conv=fsync && sync"},
+						VolumeDevices: []corev1.VolumeDevice{
+							{Name: "rootdisk", DevicePath: "/dev/rootdisk"},
+						},
+					}},
+					Volumes: []corev1.Volume{{
+						Name: "rootdisk",
+						VolumeSource: corev1.VolumeSource{
+							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: rootPVC},
+						},
+					}},
+				},
+			},
+		},
+	}
+	if err := s.client.CreateJob(ctx, wipeJob); err != nil {
+		return fmt.Errorf("creating rootdisk wipe job: %w", err)
+	}
+	if err := s.client.WaitForJobCompletion(ctx, namespace, jobName, 5*time.Minute); err != nil {
+		return fmt.Errorf("rootdisk wipe job failed: %w", err)
+	}
 	s.client.DeleteJob(ctx, namespace, jobName)
 	return nil
 }
