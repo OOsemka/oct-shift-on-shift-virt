@@ -1560,3 +1560,29 @@ but `--all` in a SHARED namespace is forbidden practice on this cluster —
 scope every delete by `<cluster>-` prefix, lesson applied going forward.
 Run-3's SUCCEEDED generate-iso pod (pre-TTL build) again held the installer
 PVC's pvc-protection; deleted manually — new jobs carry the 1h TTL.
+
+## 2026-10-14 18:33 UTC — run 4 LAUNCHED; catch #5: stuck-Terminating namespace productized (commit 1d31726)
+- Symptom: `sos-nightly-ns` stuck Terminating 20+ min after all workloads gone.
+- Root cause (verified live): VolumeSnapshot↔VolumeSnapshotContent **mutual finalizer
+  hold** — content holds `volumesnapshotcontent-bound-protection` (waits for snapshot
+  object gone), snapshot holds `volumesnapshot-bound-protection` (waits for content
+  gone); both had deletionTimestamps, controller refuses to break either side, and
+  the namespace controller waits on the snapshot forever.
+- Manual unstick: `oc patch volumesnapshotcontent <c> -p '{"metadata":{"finalizers":[]}}'
+  --type=merge` → snapshot finalized → ns drained in seconds.
+- Productized (1d31726):
+  1. `DeleteNamespaceForce` — delete → wait → sweep cluster-scoped contents whose
+     volumeSnapshotRef points into the ns → wait → **discovery-verified empty scan**
+     → only then strip the namespace finalizer. Refuses to push if not verified empty.
+  2. **CR cleanup finalizer** `sos.octools.io/cleanup`: adopted on first reconcile;
+     `oc delete nestedcluster` now actually drives `DeleteCluster` (previously the CR
+     vanished instantly and cleanup never ran — the old TODO).
+  3. `DeleteCluster` name fixes: block snapshot is `<cluster>-iso-block-snap` (code
+     deleted a never-existing `-iso-snap`), also deletes `<cluster>-iso-block` PVC.
+- Note for next iteration: the verified-empty scan counts the stuck snapshot itself
+  as a remaining object → code must treat snapshot/content mutual-hold objects (both
+  deletionTimestamp'd) as sweepable instead of refusing. Tonight's push was done at
+  the content layer, one step earlier, which the sweep does cover.
+- Run 4: CR created 18:33:00 UTC (CollectIPs); image with finalizer/force-push rolling
+  mid-run — finalizer will be adopted once new pod leads. Monitors: proc_406b9a975d1b
+  (phases), proc_1c9448b42faa (rollout).
