@@ -1814,6 +1814,8 @@ func (s *StepExecutor) powerOn(ctx context.Context, nc *crd.NestedCluster) error
 		log.WithNode(node.Name).Info("VM started via KubeVirt API")
 	}
 
+	setNodeLifecycle(nc, "Booting (agent ISO)", "Discovering")
+	s.updateCRStatus(ctx, nc)
 	log.Info("all VMs started, waiting for VMIs to be ready")
 	for _, node := range nc.Status.Nodes {
 		if _, err := s.client.WaitForVMIReady(ctx, clusterNs, node.Name, 10*time.Minute); err != nil {
@@ -2003,6 +2005,8 @@ echo "Bootstrap complete"
 	}
 
 	log.Info("bootstrap complete")
+	setNodeLifecycle(nc, "Installing (pivoted)", "Installing")
+	s.updateCRStatus(ctx, nc)
 	return nil
 }
 
@@ -2239,6 +2243,7 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 	nc.Status.ConsoleURL = nc.ConsoleEndpoint()
 	nc.Status.IngressDomain = nc.IngressWildcard()
 
+	setNodeLifecycle(nc, "Installed", "Done")
 	log.Info("post-install complete",
 		"api", nc.Status.APIEndpoint,
 		"console", nc.Status.ConsoleURL)
@@ -2427,3 +2432,22 @@ func sectionBetween(s, start, end string) string {
 // sshKeyLineRe matches the wizard override template's sshKey line so it can be
 // replaced wholesale with a (possibly multi-key) block scalar.
 var sshKeyLineRe = regexp.MustCompile(`(?m)^sshKey:[ \t]*'?<SSH_KEY>'?[ \t]*$`)
+
+// setNodeLifecycle records where the nodes are in their boot/install
+// lifecycle. These two fields are shown in the console's cluster detail
+// table; they were written once at CreateVMs and never updated, so a fully
+// installed cluster still displayed "Unknown"/"Pending" for every node.
+//
+// The values are deliberately coarse — they track phases the orchestrator
+// actually drives, rather than claiming per-node insight it does not have.
+// Empty strings leave the existing value untouched.
+func setNodeLifecycle(nc *crd.NestedCluster, bootPhase, agentStatus string) {
+	for i := range nc.Status.Nodes {
+		if bootPhase != "" {
+			nc.Status.Nodes[i].BootPhase = bootPhase
+		}
+		if agentStatus != "" {
+			nc.Status.Nodes[i].AgentStatus = agentStatus
+		}
+	}
+}

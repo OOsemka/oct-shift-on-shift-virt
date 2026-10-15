@@ -257,7 +257,7 @@ func (s *Server) getKubeconfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	secretRef, _, _ := unstructured.NestedString(obj.Object, "status", "kubeconfigSecretRef")
-	ns := obj.GetNamespace()
+	ns := clusterSecretNamespace(obj)
 	if secretRef == "" {
 		s.writeError(w, http.StatusNotFound, "kubeconfig not yet available")
 		return
@@ -265,7 +265,7 @@ func (s *Server) getKubeconfig(w http.ResponseWriter, r *http.Request) {
 
 	data, err := s.client.GetSecretData(r.Context(), ns, secretRef, "kubeconfig")
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "failed to read kubeconfig")
+		s.writeError(w, http.StatusInternalServerError, "failed to read kubeconfig from "+ns+"/"+secretRef+": "+err.Error())
 		return
 	}
 
@@ -281,7 +281,7 @@ func (s *Server) getKubeadmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	secretRef, _, _ := unstructured.NestedString(obj.Object, "status", "kubeadminSecretRef")
-	ns := obj.GetNamespace()
+	ns := clusterSecretNamespace(obj)
 	if secretRef == "" {
 		s.writeError(w, http.StatusNotFound, "kubeadmin password not yet available")
 		return
@@ -289,7 +289,7 @@ func (s *Server) getKubeadmin(w http.ResponseWriter, r *http.Request) {
 
 	data, err := s.client.GetSecretData(r.Context(), ns, secretRef, "password")
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "failed to read kubeadmin password")
+		s.writeError(w, http.StatusInternalServerError, "failed to read kubeadmin password from "+ns+"/"+secretRef+": "+err.Error())
 		return
 	}
 
@@ -457,4 +457,17 @@ type notFoundError struct {
 
 func (e *notFoundError) Error() string {
 	return "cluster not found: " + e.name
+}
+
+// clusterSecretNamespace returns the namespace the per-cluster Secrets
+// actually live in. PostInstall writes kubeconfig/kubeadmin into the
+// CLUSTER's namespace (spec.namespace), not the namespace holding the CR, so
+// reading them with obj.GetNamespace() always missed and surfaced as a flat
+// 500 behind the console's Download Kubeconfig / Copy Kubeadmin Password
+// buttons.
+func clusterSecretNamespace(obj *unstructured.Unstructured) string {
+	if ns, _, _ := unstructured.NestedString(obj.Object, "spec", "namespace"); ns != "" {
+		return ns
+	}
+	return obj.GetNamespace()
 }

@@ -102,6 +102,7 @@ const ClusterDetailPage: FC = () => {
   const [showDelete, setShowDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [kubeadminPwd, setKubeadminPwd] = useState<string>();
+  const [actionError, setActionError] = useState<string | undefined>();
 
   const loadCluster = useCallback(() => {
     if (!name) return;
@@ -140,8 +141,14 @@ const ClusterDetailPage: FC = () => {
       a.download = `kubeconfig-${name}`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      // silently handled
+      setActionError(undefined);
+    } catch (e) {
+      // Never swallow this: a failure here looks to the user like a dead
+      // button. The namespace bug behind it (secrets live in the CLUSTER
+      // namespace, not the CR's) produced a 500 that nothing surfaced.
+      setActionError(
+        t('Could not download kubeconfig: {{msg}}', { msg: (e as Error)?.message || String(e) }),
+      );
     }
   };
 
@@ -150,8 +157,11 @@ const ClusterDetailPage: FC = () => {
     try {
       const data = (await fetchKubeadmin(name)) as { password: string };
       setKubeadminPwd(data.password);
-    } catch {
-      // silently handled
+      setActionError(undefined);
+    } catch (e) {
+      setActionError(
+        t('Could not read kubeadmin password: {{msg}}', { msg: (e as Error)?.message || String(e) }),
+      );
     }
   };
 
@@ -280,6 +290,9 @@ const ClusterDetailPage: FC = () => {
                   </Button>
                 </SplitItem>
               </Split>
+              {actionError && (
+                <Alert variant="danger" isInline title={actionError} className="sos-action-error" />
+              )}
               {kubeadminPwd && (
                 <ClipboardCopy isReadOnly className="sos-kubeadmin">
                   {kubeadminPwd}
