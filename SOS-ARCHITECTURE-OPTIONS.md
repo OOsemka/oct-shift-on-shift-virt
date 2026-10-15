@@ -240,3 +240,97 @@ requiring `componentRoutes` and app access out of scope.
 Either way, the `endpoints/restricted` grant discussed earlier should **not** be
 requested — the selector-Service finding removes the need for it, and the live
 ClusterRole should have the three read-only rules only.
+
+---
+
+# Part 3 — API via Route + a graphical bastion (2026-10-15, PROVEN then implemented)
+
+## The proxy question, answered by a live prototype
+
+A proxy in between does work, and I built one end to end before writing any
+product code. From my workstation, with no nested DNS and no VLAN access:
+
+```
+$ oc --kubeconfig <server: https://sos-nightly-api.apps.az1.vpc.openinfra.lab:443> get nodes
+sos-nightly-master-0   Ready   control-plane,master,worker   v1.35.6
+sos-nightly-master-1   Ready   control-plane,master,worker   v1.35.6
+sos-nightly-master-2   Ready   control-plane,master,worker   v1.35.6
+ClusterOperators: total=34 Available=34
+```
+
+Chain: `Route (passthrough) -> Service (selector) -> proxy pod -> VLAN ->
+nested HAProxy -> masters`.
+
+### Why a proxy is REQUIRED (not just convenient)
+* A nested cluster's pods sit in a primary-UDN namespace, which blocks
+  inbound from outside the namespace. Measured: default-network pod ->
+  haproxy pod IP = no TCP, no ICMP.
+* The ingress nodes have no interface on vlan2111 (they are on
+  172.21.66.0/24). Measured from an ingress node:
+  `curl https://172.21.75.103:6443/healthz` -> 000.
+So neither a Service's endpoints nor the hostNetwork router can reach a
+nested cluster directly. A pod in a NORMAL namespace, dual-homed onto the
+pod network and the VLAN, is reachable from both sides and bridges them.
+Cross-namespace NAD reference (`default/vlan2111`) works — no CopyNAD needed.
+
+### Design decisions
+* **One SHARED edge proxy, not one per cluster.** vlan2111 has NO IPAM
+  (`ipam: <none>`, localnet), so every VLAN attachment needs a STATIC
+  address. One proxy per cluster would burn a third VLAN IP per cluster and
+  add a wizard field. A single proxy routes by TLS SNI
+  (`req_ssl_sni`), so N clusters cost one VLAN IP total and zero wizard
+  fields. Per cluster the orchestrator adds only a Route and a backend.
+* **Passthrough, not reencrypt.** Passthrough preserves client certificates,
+  so the admin kubeconfig works unchanged apart from its server URL.
+  Reencrypt would give a trusted host cert but break client-cert auth and
+  force token auth, which drags in nested OAuth (see below).
+* **Honest TLS caveat:** the nested apiserver presents its own cert
+  (`CN=172.30.0.1`, no SAN for the route host), so clients need
+  `--insecure-skip-tls-verify`. The clean fix is to add the route hostname
+  via the nested `APIServer.spec.servingCerts.namedCertificates`; not done
+  yet.
+
+### Why ingress/apps is NOT exposed the same way
+Measured against the nested ingress VLAN IP:
+```
+https://172.21.75.104:443/                                        -> 503
+  same request + Host: console-openshift-console.apps.<nested>    -> 200
+```
+The nested router dispatches on Host/SNI. A passthrough Route carries the
+HOST-side hostname, which the nested router does not know -> 503. Serving
+apps would require the proxy to terminate TLS and rewrite Host, and even then
+the console redirects the browser to `oauth-openshift.apps.<nested>`, which
+does not resolve outside. That needs nested
+`Ingress.spec.componentRoutes` + a serving cert. Out of scope here, and the
+reason the graphical bastion is the better answer for console access.
+
+## The graphical bastion
+
+The bastion already sits on the cUDN AND runs the nested DNS, so from inside
+it every nested name resolves and the console works natively — no routes, no
+hostname rewriting, no OAuth problem. Adding a desktop turns it into the
+console access path.
+
+**Access method: the OpenShift console's own VM console (KubeVirt VNC).**
+This needs no network exposure at all — it goes through the KubeVirt API, not
+through the cUDN — so there is no extra VLAN IP, no Route, and no new attack
+surface. The operator is already in the OpenShift UI, so it is one click from
+the VM list.
+
+Decisions:
+* XFCE (X11) rather than Wayland: VNC through the KubeVirt console is an X11
+  path, and XFCE is the lightest desktop that gives a real browser.
+* The desktop install runs in the BACKGROUND from cloud-init. It is a few
+  hundred MB over UDN egress and must never hold up the DeployDNS phase.
+* RAM goes 2Gi -> 4Gi and 1 -> 2 vCPU when graphical is enabled, otherwise a
+  browser is unusable.
+* resolv.conf on the bastion is pinned to 127.0.0.1 so the browser resolves
+  the nested zone from the DNS server running on the same box.
+* Credentials come from the wizard. The password is stored as a SHA-512 crypt
+  hash in the cloud-init secret, never as plaintext; when not supplied, one is
+  generated and surfaced in a Secret rather than silently set to a default.
+
+Net effect, side by side with external DNS:
+1. `oc` against the nested API through the host Route (no DNS needed).
+2. The nested console in a browser on the bastion, via the OpenShift VM console.
+3. Corporate DNS to the VLAN VIPs still works exactly as before.
