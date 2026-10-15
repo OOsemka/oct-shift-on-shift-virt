@@ -562,6 +562,12 @@ type InfraVMParams struct {
 	// network. Name is the kubevirt network/interface name; NetworkName is
 	// the NAD (bare name = the VM's own namespace).
 	ExtraNetworks []InfraNetwork
+	// Graphical adds a USB tablet. Without it the VM only has the emulated
+	// PS/2 mouse, which is a RELATIVE pointing device: a remote console
+	// sends absolute coordinates, the guest applies them as deltas, and the
+	// local and remote cursors drift apart. A tablet is absolute, so they
+	// track. Nothing is needed inside the guest — usbhid/evdev are standard.
+	Graphical bool
 }
 
 type InfraNetwork struct {
@@ -570,6 +576,24 @@ type InfraNetwork struct {
 }
 
 func (c *Client) CreateInfraVM(ctx context.Context, p InfraVMParams) error {
+
+	devices := map[string]interface{}{
+		"disks": []interface{}{
+			map[string]interface{}{
+				"name":      "rootdisk",
+				"disk":      map[string]interface{}{"bus": "virtio"},
+				"bootOrder": int64(1),
+			},
+		},
+		"interfaces": []interface{}{
+			map[string]interface{}{"name": "default", "bridge": map[string]interface{}{}},
+		},
+	}
+	if p.Graphical {
+		devices["inputs"] = []interface{}{
+			map[string]interface{}{"name": "tablet", "type": "tablet", "bus": "usb"},
+		}
+	}
 	// KubeVirt caps inline cloudInitNoCloud userData at 2048 bytes; the
 	// relay unit is bigger, so ship it as a Secret and reference it.
 	secretName := p.Name + "-cloudinit"
@@ -609,20 +633,9 @@ func (c *Client) CreateInfraVM(ctx context.Context, p InfraVMParams) error {
 					"spec": map[string]interface{}{
 						"evictionStrategy": "None",
 						"domain": map[string]interface{}{
-							"cpu":    map[string]interface{}{"cores": int64(p.Cores)},
-							"memory": map[string]interface{}{"guest": fmt.Sprintf("%dGi", p.MemoryGi)},
-							"devices": map[string]interface{}{
-								"disks": []interface{}{
-									map[string]interface{}{
-										"name":      "rootdisk",
-										"disk":      map[string]interface{}{"bus": "virtio"},
-										"bootOrder": int64(1),
-									},
-								},
-								"interfaces": []interface{}{
-									map[string]interface{}{"name": "default", "bridge": map[string]interface{}{}},
-								},
-							},
+							"cpu":     map[string]interface{}{"cores": int64(p.Cores)},
+							"memory":  map[string]interface{}{"guest": fmt.Sprintf("%dGi", p.MemoryGi)},
+							"devices": devices,
 						},
 						"networks": []interface{}{
 							map[string]interface{}{"name": "default", "pod": map[string]interface{}{}},
