@@ -10,8 +10,10 @@ func TestComputeIPPlanSmoke(t *testing.T) {
 	if p.NetworkName != "cluster_udn_sos-nightly" || p.Prefix != 16 {
 		t.Fatalf("network/prefix: %s/%d", p.NetworkName, p.Prefix)
 	}
-	if p.DNSVM.String() != "10.101.0.18" || p.Jumpbox.String() != "10.101.0.19" || p.MCSRelay.String() != "10.101.0.12" {
-		t.Fatalf("infra offsets: dns=%s jb=%s relay=%s", p.DNSVM, p.Jumpbox, p.MCSRelay)
+	// One bastion VM now carries DNS + MCS relay + jumpbox; it keeps the old
+	// mcs-relay offset so existing clusters' IPAMClaims stay valid.
+	if p.Bastion.String() != "10.101.0.12" {
+		t.Fatalf("bastion offset: %s", p.Bastion)
 	}
 	want := []string{"10.101.0.100", "10.101.0.101", "10.101.0.102"}
 	for i, w := range want {
@@ -28,12 +30,16 @@ func TestComputeIPPlanSmoke(t *testing.T) {
 	if _, err := computeIPPlan("x", "10.101.0.0/16", 3, "10.101.0.101", ""); err == nil {
 		t.Fatal("expected VIP/plan collision failure")
 	}
+	// a CR VIP landing on the bastion address must also be rejected
+	if _, err := computeIPPlan("x", "10.101.0.0/16", 3, "10.101.0.12", ""); err == nil {
+		t.Fatal("expected VIP/bastion collision failure")
+	}
 	// /29 too small even for infra offsets
 	if _, err := computeIPPlan("x", "10.101.0.0/29", 1, "", ""); err == nil {
 		t.Fatal("expected size guard failure on /29")
 	}
 	// gateway itself: a /16 at base .0 never assigns +1 to anything we create
-	if p.MCSRelay.String() == "10.101.0.1" {
-		t.Fatal("relay sits on the gateway")
+	if p.Bastion.String() == "10.101.0.1" {
+		t.Fatal("bastion sits on the gateway")
 	}
 }

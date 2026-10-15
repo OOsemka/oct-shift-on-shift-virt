@@ -199,6 +199,7 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
 	statusMap["message"] = "Deletion requested"
 	obj.Object["status"] = statusMap
 
+	// Status first, so the UI reflects the request immediately.
 	_, err = s.client.DynamicClient.Resource(nestedClusterGVR).
 		Namespace(obj.GetNamespace()).UpdateStatus(r.Context(), obj, metav1.UpdateOptions{})
 	if err != nil {
@@ -207,7 +208,21 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.logger.Info("cluster marked for deletion", "cluster", name)
+	// Then actually delete the object. Marking the phase alone tore down the
+	// cluster's resources but left the CR behind forever, showing "Deleting"
+	// with no deletionTimestamp (chris-sos-odf lingered for an hour that way,
+	// and removing its finalizer by hand did nothing because there was no
+	// deletion in flight to unblock). The real Delete sets a deletionTimestamp,
+	// which drives the sos.octools.io/cleanup finalizer -> DeleteCluster ->
+	// finalizer release -> the object disappears. That path is already proven.
+	if err := s.client.DynamicClient.Resource(nestedClusterGVR).
+		Namespace(obj.GetNamespace()).Delete(r.Context(), name, metav1.DeleteOptions{}); err != nil {
+		s.logger.Error("failed to delete cluster object", "error", err.Error())
+		s.writeError(w, http.StatusInternalServerError, "failed to delete cluster")
+		return
+	}
+
+	s.logger.Info("cluster deletion requested", "cluster", name)
 	s.writeJSON(w, http.StatusOK, map[string]string{"status": "deleting"})
 }
 

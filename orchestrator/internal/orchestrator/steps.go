@@ -72,19 +72,13 @@ func (s *StepExecutor) Execute(ctx context.Context, nc *crd.NestedCluster, phase
 	case crd.PhaseDeployHAProxy:
 		return s.deployHAProxy(ctx, nc)
 	case crd.PhaseDeployDNS:
-		if err := s.deployDNS(ctx, nc); err != nil {
-			return err
+		// One bastion VM now carries nested DNS, the MCS relay and the
+		// operator jumpbox (see bastion.go). DNS mode "pod" keeps the old
+		// in-namespace Deployment for environments without KubeVirt.
+		if dnsVMMode() {
+			return s.deployBastion(ctx, nc)
 		}
-		// Jumpbox alongside DNS: operators get in-cluster SSH from minute
-		// one instead of hand-building a box mid-incident. Best-effort —
-		// a missing jumpbox must never block the install.
-		if jumpboxEnabled() {
-			if err := s.deployJumpbox(ctx, nc); err != nil {
-				s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("jumpbox").
-					Error("jumpbox deploy failed (continuing)", "error", err.Error())
-			}
-		}
-		return nil
+		return s.deployDNS(ctx, nc)
 	case crd.PhaseGenerateISO:
 		return s.generateISO(ctx, nc)
 	case crd.PhaseMountISO:
@@ -94,7 +88,10 @@ func (s *StepExecutor) Execute(ctx context.Context, nc *crd.NestedCluster, phase
 	case crd.PhaseConfigureNodes:
 		return s.configureNodes(ctx, nc)
 	case crd.PhaseMCSRelay:
-		return s.deployMCSRelay(ctx, nc)
+		// No VM here any more: just pin the bastion's reserved address so
+		// DeployHAProxy's FIRST config already points at it (see
+		// reserveBastionIP for why that ordering matters).
+		return s.reserveBastionIP(ctx, nc)
 	case crd.PhaseWaitBootstrap:
 		return s.waitBootstrap(ctx, nc)
 	case crd.PhaseWaitInstall:
@@ -230,18 +227,11 @@ func (s *StepExecutor) createVMs(ctx context.Context, nc *crd.NestedCluster) err
 		return fmt.Errorf("computing IP plan: %w", err)
 	}
 	p := func(ip net.IP) string { return fmt.Sprintf("%s/%d", ip.String(), plan.Prefix) }
-	if err := s.client.PreseedIPAMClaim(ctx, nc.Spec.Namespace, dnsVMName(nc.Spec.ClusterName), plan.NetworkName, plan.DNSVM.String(), plan.Prefix); err != nil {
-		return fmt.Errorf("preseeding dns-vm IP: %w", err)
-	}
-	if err := s.client.PreseedIPAMClaim(ctx, nc.Spec.Namespace, jumpboxVMName(nc.Spec.ClusterName), plan.NetworkName, plan.Jumpbox.String(), plan.Prefix); err != nil {
-		return fmt.Errorf("preseeding jumpbox IP: %w", err)
-	}
-	if err := s.client.PreseedIPAMClaim(ctx, nc.Spec.Namespace, relayVMName(nc.Spec.ClusterName), plan.NetworkName, plan.MCSRelay.String(), plan.Prefix); err != nil {
-		return fmt.Errorf("preseeding mcs-relay IP: %w", err)
+	if err := s.client.PreseedIPAMClaim(ctx, nc.Spec.Namespace, bastionVMName(nc.Spec.ClusterName), plan.NetworkName, plan.Bastion.String(), plan.Prefix); err != nil {
+		return fmt.Errorf("preseeding bastion IP: %w", err)
 	}
 	log.Info("IP plan preseeded", "network", plan.NetworkName,
-		"dns_vm", p(plan.DNSVM), "jumpbox", p(plan.Jumpbox), "mcs_relay", p(plan.MCSRelay),
-		"masters", fmt.Sprint(plan.Masters))
+		"bastion", p(plan.Bastion), "masters", fmt.Sprint(plan.Masters))
 
 	for i, node := range nodes {
 		nodeLog := log.WithNode(node.Name)
@@ -683,10 +673,9 @@ backend ingress-http-backend
 %s`, httpsServers, httpServers)
 }
 
+// deployDNS is the pod-mode fallback (DNS_MODE != "vm"). The default path is
+// the bastion VM — see deployBastion.
 func (s *StepExecutor) deployDNS(ctx context.Context, nc *crd.NestedCluster) error {
-	if dnsVMMode() {
-		return s.deployDNSVM(ctx, nc)
-	}
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("dns")
 	targetNs := nc.Spec.Namespace
 

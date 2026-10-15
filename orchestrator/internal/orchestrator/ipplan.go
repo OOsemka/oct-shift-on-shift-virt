@@ -28,17 +28,16 @@ import (
 type ipPlan struct {
 	NetworkName string // cluster_udn_<cluster>, matches the generated NAD
 	Prefix      int    // subnet prefix length (mask bits)
-	MCSRelay    net.IP
-	DNSVM       net.IP
-	Jumpbox     net.IP
-	Masters     []net.IP
+	// Bastion is the single helper VM: nested DNS, the MCS relay and the
+	// operator jumpbox all run on it (see bastion.go). It keeps the old
+	// mcs-relay offset so existing clusters' claims stay valid.
+	Bastion net.IP
+	Masters []net.IP
 }
 
 const (
-	offsetMCSRelay = 12
-	offsetDNSVM    = 18
-	offsetJumpbox  = 19
-	offsetMasters  = 100
+	offsetBastion = 12
+	offsetMasters = 100
 )
 
 func computeIPPlan(clusterName, cudnSubnet string, masterCount int, apiVIP, ingressVIP string) (*ipPlan, error) {
@@ -68,16 +67,14 @@ func computeIPPlan(clusterName, cudnSubnet string, masterCount int, apiVIP, ingr
 
 	// Size guard: the reserved offsets must live inside the subnet.
 	last := at(offsetMasters + masterCount - 1)
-	if !ipNet.Contains(last) || !ipNet.Contains(at(offsetJumpbox)) {
+	if !ipNet.Contains(last) || !ipNet.Contains(at(offsetBastion)) {
 		return nil, fmt.Errorf("cudnSubnet %q too small for the deterministic plan (needs base+%d)", cudnSubnet, offsetMasters+masterCount-1)
 	}
 
 	p := &ipPlan{
 		NetworkName: "cluster_udn_" + clusterName,
 		Prefix:      ones,
-		MCSRelay:    at(offsetMCSRelay),
-		DNSVM:       at(offsetDNSVM),
-		Jumpbox:     at(offsetJumpbox),
+		Bastion:     at(offsetBastion),
 	}
 	for i := 0; i < masterCount; i++ {
 		p.Masters = append(p.Masters, at(offsetMasters+i))
@@ -93,7 +90,7 @@ func computeIPPlan(clusterName, cudnSubnet string, masterCount int, apiVIP, ingr
 			reservedByOthers[k] = v + " (spec.network)"
 		}
 	}
-	wants := map[string]string{p.MCSRelay.String(): "mcs-relay", p.DNSVM.String(): "dns-vm", p.Jumpbox.String(): "jumpbox"}
+	wants := map[string]string{p.Bastion.String(): "bastion"}
 	for i, m := range p.Masters {
 		wants[m.String()] = fmt.Sprintf("master-%d", i)
 	}
@@ -105,8 +102,6 @@ func computeIPPlan(clusterName, cudnSubnet string, masterCount int, apiVIP, ingr
 	return p, nil
 }
 
-// dnsVMName/jumpboxVMName/relayVMName are the infra VM names (also the IPAM
-// claim key — keep in lockstep with the deploy* functions).
-func dnsVMName(cluster string) string     { return cluster + "-dns-vm" }
-func jumpboxVMName(cluster string) string { return cluster + "-jumpbox" }
-func relayVMName(cluster string) string   { return cluster + "-mcs-relay" }
+// bastionVMName is the single helper VM's name (also the IPAM claim key —
+// keep in lockstep with deployBastion).
+func bastionVMName(cluster string) string { return cluster + "-bastion" }

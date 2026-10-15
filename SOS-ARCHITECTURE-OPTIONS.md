@@ -74,6 +74,34 @@ pod->VM L4 checks flapped and blackholed the VIP, run 12).
 **Decision: implement option 1 first, then option 3 once validated.** Not both
 at once — a failure in a combined change would not say which half caused it.
 
+### IMPLEMENTED 2026-10-15 — and the SSH push turned out to be unnecessary
+
+Option 1 shipped, but *better* than specified: no record push is needed.
+
+The ordering constraint was never really about the relay VM existing — it was
+about HAProxy's first config needing the relay's ADDRESS. Since the
+deterministic ipPlan already reserves that address up front (preseeded
+IPAMClaim created in CreateVMs, landed in 7cb2347), HAProxy can be pointed at
+the bastion before it boots. So:
+
+* `MCSRelay` phase no longer creates anything — it pins
+  `status.mcsRelayIP = plan.Bastion` so DeployHAProxy's FIRST config is
+  already correct (`reserveBastionIP`).
+* `DeployDNS` phase creates ONE `<cluster>-bastion` VM with DNS records AND
+  MCS backends AND the SSH key all baked at cloud-init, because by then the
+  HAProxy leases are known (`deployBastion`).
+
+Net: **3 helper VMs -> 1**, one IPAMClaim instead of three, no SSH push, no
+extra phase, no CRD change, and still zero HAProxy reloads. `dns_vm.go` keeps
+only the VIP resolvers and `indentBlock`; `mcsrelay.go` keeps the HAProxy
+rewire plus the relay script as a const; `jumpbox.go` is deleted. The bastion
+keeps the old mcs-relay offset (base+12) so existing clusters' claims stay
+valid. Pod-mode DNS (`DNS_MODE != "vm"`) is untouched as a fallback.
+
+Validated offline before shipping: rendered cloud-config parses as YAML, both
+embedded Python programs parse, both SSH keys are present, and the DNS
+records/zone/AAAA-fix and relay master IPs are all asserted present.
+
 ---
 
 # Part 2 — Exposing the nested API/ingress via host Services and Routes
