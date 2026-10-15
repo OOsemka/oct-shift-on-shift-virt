@@ -61,7 +61,7 @@ networking:
 platform:
   none: {}
 pullSecret: '%s'
-sshKey: '%s'`,
+%s`,
 		spec.ClusterName,
 		spec.BaseDomain,
 		workerReplicas,
@@ -70,7 +70,7 @@ sshKey: '%s'`,
 		spec.Network.CUDNSubnet,
 		serviceNetworkCIDR,
 		escapeSingleQuotes(pullSecret),
-		sshKey,
+		SSHKeyYAML(sshKey),
 	)
 
 	return config
@@ -157,4 +157,34 @@ func escapeSingleQuotes(s string) string {
 // when replacing <PULL_SECRET> placeholders in user-edited config overrides.
 func EscapeSingleQuotes(s string) string {
 	return escapeSingleQuotes(s)
+}
+
+// SSHKeyYAML renders the install-config sshKey entry. A single key stays a
+// single-quoted scalar; MULTIPLE keys (user-supplied + the generated
+// automation key) are emitted as a block scalar, because an embedded newline
+// inside single quotes is invalid YAML.
+//
+// Multiple keys are safe downstream: the installer validates only the first
+// key (validate.SSHPublicKey -> ssh.ParseAuthorizedKey ignores the rest) and
+// passes the whole string through as ONE ignition SSHAuthorizedKey entry, so
+// authorized_keys ends up with one key per line and sshd honours both.
+func SSHKeyYAML(sshKey string) string {
+	keys := []string{}
+	for _, l := range strings.Split(sshKey, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			keys = append(keys, l)
+		}
+	}
+	if len(keys) <= 1 {
+		k := ""
+		if len(keys) == 1 {
+			k = keys[0]
+		}
+		return "sshKey: '" + escapeSingleQuotes(k) + "'"
+	}
+	out := "sshKey: |-"
+	for _, k := range keys {
+		out += "\n  " + k
+	}
+	return out
 }

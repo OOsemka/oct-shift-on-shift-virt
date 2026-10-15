@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -175,6 +176,40 @@ func (s *StepExecutor) createSecrets(ctx context.Context, nc *crd.NestedCluster)
 		if err := s.client.UpdateSecretData(ctx, ns, sshSecretName, "ssh-privatekey", val); err != nil {
 			return fmt.Errorf("storing SSH private key from ref: %w", err)
 		}
+	default:
+		// The console wizard collects only the PUBLIC half — there is no
+		// private-key field, and asking anyone to paste a private key into a
+		// web form would be worse. Without a private key ConfigureNodes and
+		// node-guard cannot SSH to any node, and the run dies at
+		// ConfigureNodes with "ssh private key not mounted". So generate a
+		// dedicated automation keypair here.
+		//
+		// The key the user pasted in the wizard IS kept and stays
+		// authorised — the generated key is ADDED alongside it. Both land in
+		// install-config as a YAML block scalar (see installer.SSHKeyYAML):
+		// the installer validates only the first key and passes the whole
+		// string through as one ignition SSHAuthorizedKey entry, so
+		// authorized_keys gets one key per line and sshd honours both.
+		priv, pub, gerr := k8s.GenerateSSHKeyPair("sos-" + nc.Spec.ClusterName)
+		if gerr != nil {
+			return fmt.Errorf("generating SSH keypair: %w", gerr)
+		}
+		authorized := string(pub)
+		userKey := strings.TrimSpace(nc.Spec.SSHKey)
+		if userKey != "" {
+			authorized = userKey + "\n" + string(pub)
+		}
+		if err := s.client.CreateSSHKeySecret(ctx, ns, sshSecretName, authorized); err != nil {
+			return fmt.Errorf("creating generated SSH key secret: %w", err)
+		}
+		if err := s.client.UpdateSecretData(ctx, ns, sshSecretName, "ssh-privatekey", priv); err != nil {
+			return fmt.Errorf("storing generated SSH private key: %w", err)
+		}
+		s.logger.WithCluster(nc.Spec.ClusterName).Info(
+			"no sshPrivateKey supplied (the console wizard cannot collect one): generated an automation keypair; your pasted key remains authorised alongside it",
+			"secret", sshSecretName, "user_key_kept", userKey != "")
+		nc.Spec.SSHKey = authorized
+		nc.Spec.SSHKeyRef = crd.SecretRef{Name: sshSecretName}
 	}
 
 	return nil
@@ -1160,6 +1195,12 @@ func (s *StepExecutor) generateISO(ctx context.Context, nc *crd.NestedCluster) e
 		// The preview API uses literal "<PULL_SECRET>" and "<SSH_KEY>" placeholders
 		// so secrets don't leak to the browser. Replace them with actual values.
 		installConfig = strings.ReplaceAll(installConfig, "<PULL_SECRET>", installer.EscapeSingleQuotes(string(pullSecret)))
+		// The wizard's override template carries `sshKey: '<SSH_KEY>'`. When
+		// the value holds MORE THAN ONE key (the user's plus the generated
+		// automation key) a plain substitution would put a newline inside
+		// single quotes = invalid YAML, so replace the whole line with a
+		// block scalar instead.
+		installConfig = sshKeyLineRe.ReplaceAllString(installConfig, installer.SSHKeyYAML(string(sshKey)))
 		installConfig = strings.ReplaceAll(installConfig, "<SSH_KEY>", string(sshKey))
 	}
 
@@ -2393,3 +2434,7 @@ func sectionBetween(s, start, end string) string {
 	}
 	return strings.TrimSpace(head[startIdx+len(start) : endIdx])
 }
+
+// sshKeyLineRe matches the wizard override template's sshKey line so it can be
+// replaced wholesale with a (possibly multi-key) block scalar.
+var sshKeyLineRe = regexp.MustCompile(`(?m)^sshKey:[ \t]*'?<SSH_KEY>'?[ \t]*$`)
