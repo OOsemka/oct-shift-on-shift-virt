@@ -20,268 +20,261 @@ metadata:
   labels:
     app.kubernetes.io/part-of: oct-shift-on-shift-virt
 rules:
-  - apiGroups:
-      - ""
-    resources:
-      - namespaces
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - delete
-  - apiGroups:
-      - kubevirt.io
-    resources:
-      - virtualmachines
-      - virtualmachineinstances
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
-  - apiGroups:
-      - kubevirt.io
-    resources:
-      - virtualmachines/status
-      - virtualmachineinstances/status
-    verbs:
-      - get
-      - list
-      - watch
-      - patch
-  - apiGroups:
-      - kubevirt.io
-    resources:
-      - virtualmachines/restart
-      - virtualmachines/start
-      - virtualmachines/stop
-    verbs:
-      - create
-  # virtctl-style power ops are PUTs against the subresources.kubevirt.io
-  # aggregated API; RBAC sees them as `update` on that group's subresources.
-  # Without this the orchestrator cannot stop/start VMs (ISO mount, eject).
-  - apiGroups:
-      - subresources.kubevirt.io
-    resources:
-      - virtualmachines/restart
-      - virtualmachines/start
-      - virtualmachines/stop
-    verbs:
-      - update
-  - apiGroups:
-      - subresources.kubevirt.io
-    resources:
-      - virtualmachineinstances/pause
-      - virtualmachineinstances/unpause
-    verbs:
-      - create
-      - update
-  - apiGroups:
-      - cdi.kubevirt.io
-    resources:
-      - datavolumes
-      - volumeimportsources
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
-  - apiGroups:
-      - k8s.ovn.org
-    resources:
-      - clusteruserdefinednetworks
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - delete
-  - apiGroups:
-      - k8s.cni.cncf.io
-    resources:
-      - network-attachment-definitions
-    verbs:
-      - get
-      - list
-      - create
-      - delete
-  - apiGroups:
-      - k8s.cni.cncf.io
-    resources:
-      - ipamclaims
-      - ipamclaims/status
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-  - apiGroups:
-      - security.openshift.io
-    resources:
-      - securitycontextconstraints
-    resourceNames:
-      - anyuid
-    verbs:
-      - use
-  - apiGroups:
-      - storage.k8s.io
-    resources:
-      - storageclasses
-    verbs:
-      - get
-      - list
-  - apiGroups:
-      - snapshot.storage.k8s.io
-    resources:
-      - volumesnapshots
-      - volumesnapshotcontents
-      - volumesnapshotclasses
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
-  - apiGroups:
-      - ""
-    resources:
-      - persistentvolumeclaims
-      - secrets
-      - configmaps
-      - services
-      - serviceaccounts
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
-  - apiGroups:
-      - ""
-    resources:
-      - pods
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - delete
-  - apiGroups:
-      - ""
-    resources:
-      - pods/exec
-    verbs:
-      - create
-  - apiGroups:
-      - ""
-    resources:
-      - pods/log
-    verbs:
-      - get
-  - apiGroups:
-      - apps
-    resources:
-      - deployments
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
-  - apiGroups:
-      - batch
-    resources:
-      - jobs
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - delete
-  - apiGroups:
-      - route.openshift.io
-    resources:
-      - routes
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
-  # Read-only, needed ONLY to learn the HOST cluster's apps domain so the
-  # nested API/console Routes can be given a hostname. Without these,
-  # PostInstall logs "exposure degraded (cluster still healthy)" and skips
-  # route creation — the nested cluster itself is unaffected.
-  - apiGroups:
-      - config.openshift.io
-    resources:
-      - infrastructures
-      - dnses
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - operator.openshift.io
-    resources:
-      - ingresscontrollers
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - ""
-    resources:
-      - endpoints
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
-  - apiGroups:
-      - rbac.authorization.k8s.io
-    resources:
-      - clusterroles
-      - clusterrolebindings
-    verbs:
-      - get
-      - list
-      - create
-      - delete
-  - apiGroups:
-      - octools.io
-    resources:
-      - nestedclusters
-      - nestedclusters/status
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
+- apiGroups:
+  - ''
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachines
+  - virtualmachineinstances
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachines/status
+  - virtualmachineinstances/status
+  verbs:
+  - get
+  - list
+  - watch
+  - patch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachines/restart
+  - virtualmachines/start
+  - virtualmachines/stop
+  verbs:
+  - create
+- apiGroups:
+  - subresources.kubevirt.io
+  resources:
+  - virtualmachines/restart
+  - virtualmachines/start
+  - virtualmachines/stop
+  verbs:
+  - update
+- apiGroups:
+  - subresources.kubevirt.io
+  resources:
+  - virtualmachineinstances/pause
+  - virtualmachineinstances/unpause
+  verbs:
+  - create
+  - update
+- apiGroups:
+  - cdi.kubevirt.io
+  resources:
+  - datavolumes
+  - volumeimportsources
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - k8s.ovn.org
+  resources:
+  - clusteruserdefinednetworks
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+- apiGroups:
+  - k8s.cni.cncf.io
+  resources:
+  - network-attachment-definitions
+  verbs:
+  - get
+  - list
+  - create
+  - delete
+- apiGroups:
+  - k8s.cni.cncf.io
+  resources:
+  - ipamclaims
+  - ipamclaims/status
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+- apiGroups:
+  - security.openshift.io
+  resources:
+  - securitycontextconstraints
+  resourceNames:
+  - anyuid
+  verbs:
+  - use
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  - volumesnapshotcontents
+  - volumesnapshotclasses
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ''
+  resources:
+  - persistentvolumeclaims
+  - secrets
+  - configmaps
+  - services
+  - serviceaccounts
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+- apiGroups:
+  - ''
+  resources:
+  - pods/exec
+  verbs:
+  - create
+- apiGroups:
+  - ''
+  resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+- apiGroups:
+  - route.openshift.io
+  resources:
+  - routes
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - config.openshift.io
+  resources:
+  - infrastructures
+  - dnses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - operator.openshift.io
+  resources:
+  - ingresscontrollers
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ''
+  resources:
+  - endpoints
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterroles
+  - clusterrolebindings
+  verbs:
+  - get
+  - list
+  - create
+  - delete
+- apiGroups:
+  - octools.io
+  resources:
+  - nestedclusters
+  - nestedclusters/status
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -294,9 +287,9 @@ roleRef:
   kind: ClusterRole
   name: oct-shift-on-shift-virt-orchestrator
 subjects:
-  - kind: ServiceAccount
-    name: sos-orchestrator
-    namespace: oct-shift-on-shift-virt
+- kind: ServiceAccount
+  name: sos-orchestrator
+  namespace: oct-shift-on-shift-virt
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -317,35 +310,35 @@ spec:
         app: oct-shift-on-shift-virt
     spec:
       containers:
-        - name: plugin
-          image: quay.io/cjanisze/oct-shift-on-shift-virt:0.1.0-ocp4.22
-          ports:
-            - containerPort: 9443
-              protocol: TCP
-          volumeMounts:
-            - name: plugin-serving-cert
-              readOnly: true
-              mountPath: /var/serving-cert
-          resources:
-            requests:
-              cpu: 10m
-              memory: 50Mi
-            limits:
-              cpu: 100m
-              memory: 128Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            runAsNonRoot: true
-            seccompProfile:
-              type: RuntimeDefault
-            capabilities:
-              drop:
-                - ALL
-      volumes:
+      - name: plugin
+        image: quay.io/cjanisze/oct-shift-on-shift-virt:0.1.0-ocp4.22
+        ports:
+        - containerPort: 9443
+          protocol: TCP
+        volumeMounts:
         - name: plugin-serving-cert
-          secret:
-            secretName: plugin-serving-cert
-            defaultMode: 420
+          readOnly: true
+          mountPath: /var/serving-cert
+        resources:
+          requests:
+            cpu: 10m
+            memory: 50Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: plugin-serving-cert
+        secret:
+          secretName: plugin-serving-cert
+          defaultMode: 420
       restartPolicy: Always
 ---
 apiVersion: v1
@@ -360,10 +353,10 @@ metadata:
     service.beta.openshift.io/serving-cert-secret-name: plugin-serving-cert
 spec:
   ports:
-    - name: 9443-tcp
-      protocol: TCP
-      port: 9443
-      targetPort: 9443
+  - name: 9443-tcp
+    protocol: TCP
+    port: 9443
+    targetPort: 9443
   selector:
     app: oct-shift-on-shift-virt
   type: ClusterIP
@@ -388,55 +381,60 @@ spec:
     spec:
       serviceAccountName: sos-orchestrator
       containers:
-        - name: orchestrator
-          image: quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator:0.1.0-ocp4.22
-          imagePullPolicy: Always
-          ports:
-            - name: https
-              containerPort: 8443
-              protocol: TCP
-          volumeMounts:
-            - name: serving-cert
-              readOnly: true
-              mountPath: /var/serving-cert
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8443
-              scheme: HTTPS
-            initialDelaySeconds: 10
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: 8443
-              scheme: HTTPS
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 3
-          resources:
-            requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              cpu: 500m
-              memory: 1Gi
-          securityContext:
-            allowPrivilegeEscalation: false
-            runAsNonRoot: true
-            seccompProfile:
-              type: RuntimeDefault
-            capabilities:
-              drop:
-                - ALL
-      volumes:
+      - name: orchestrator
+        image: quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator:0.1.0-ocp4.22
+        imagePullPolicy: Always
+        ports:
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        volumeMounts:
         - name: serving-cert
-          secret:
-            secretName: sos-orchestrator-serving-cert
-            defaultMode: 420
+          readOnly: true
+          mountPath: /var/serving-cert
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop:
+            - ALL
+        env:
+        - name: EDGE_PROXY_VLAN_IP
+          value: 172.21.75.200
+        - name: EDGE_PROXY_NAD
+          value: default/vlan2111
+      volumes:
+      - name: serving-cert
+        secret:
+          secretName: sos-orchestrator-serving-cert
+          defaultMode: 420
       restartPolicy: Always
 ---
 apiVersion: v1
@@ -451,10 +449,10 @@ metadata:
     service.beta.openshift.io/serving-cert-secret-name: sos-orchestrator-serving-cert
 spec:
   ports:
-    - name: https
-      protocol: TCP
-      port: 8443
-      targetPort: 8443
+  - name: https
+    protocol: TCP
+    port: 8443
+    targetPort: 8443
   selector:
     app: sos-orchestrator
   type: ClusterIP
@@ -473,10 +471,10 @@ spec:
       port: 9443
       basePath: /
   proxy:
-    - alias: orchestrator
-      endpoint:
-        type: Service
-        service:
-          name: sos-orchestrator
-          namespace: oct-shift-on-shift-virt
-          port: 8443
+  - alias: orchestrator
+    endpoint:
+      type: Service
+      service:
+        name: sos-orchestrator
+        namespace: oct-shift-on-shift-virt
+        port: 8443

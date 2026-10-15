@@ -222,6 +222,26 @@ spec:
                 sshKey:
                   type: string
                   description: Inline SSH public key (stored temporarily, moved to a Secret during CreateSecrets phase).
+                bastion:
+                  type: object
+                  description: >-
+                    The single helper VM (nested DNS + MCS relay + SSH). With graphical enabled it also
+                    gets a desktop, so the nested console can be opened in a browser ON the bastion via
+                    the OpenShift VM console - the bastion already resolves the nested zone, so this
+                    needs no Route and no extra network exposure.
+                  properties:
+                    graphical:
+                      type: boolean
+                      description: Install a desktop (XFCE + Firefox) on the bastion. Raises it to 2 vCPU / 4 GiB.
+                    username:
+                      type: string
+                      description: Desktop login name. Defaults to "core", the same identity used for SSH.
+                    password:
+                      type: string
+                      description: >-
+                        Desktop password. Write-only - the orchestrator copies it into the
+                        <cluster>-bastion-password Secret and clears this field. Leave empty to have
+                        one generated.
                 sshPrivateKey:
                   type: string
                   description: Inline SSH private key matching sshKey. Required by the ConfigureNodes phase, which SSHes into nested VMs (as a Job inside the cluster namespace) to correct UDN-supplied DNS and discover the rendezvous node.

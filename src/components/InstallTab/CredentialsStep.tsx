@@ -7,6 +7,8 @@ import {
   HelperText,
   HelperTextItem,
   TextArea,
+  TextInput,
+  Checkbox,
 } from '@patternfly/react-core';
 import { ClusterConfig } from './types';
 import { validatePullSecret, validateSSHKey } from '../../utils/validation';
@@ -74,6 +76,60 @@ const CredentialsStep: FC<Props> = ({ config, onChange }) => {
           </HelperText>
         </FormHelperText>
       </FormGroup>
+
+      <FormGroup label={t('Graphical bastion')} fieldId="bastion-graphical">
+        <Checkbox
+          id="bastion-graphical"
+          isChecked={config.bastion.graphical}
+          onChange={(_e, checked) =>
+            onChange({ bastion: { ...config.bastion, graphical: checked } })
+          }
+          label={t('Install a desktop on the bastion VM')}
+        />
+        <FormHelperText>
+          <HelperText>
+            <HelperTextItem>
+              {t(
+                'The bastion runs the nested cluster DNS, so a browser on it reaches the nested console directly. Open it from Virtualization → VirtualMachines → <cluster>-bastion → Console. Adds ~2 vCPU / 4 GiB to the bastion.',
+              )}
+            </HelperTextItem>
+          </HelperText>
+        </FormHelperText>
+      </FormGroup>
+
+      {config.bastion.graphical && (
+        <>
+          <FormGroup label={t('Bastion username')} fieldId="bastion-user">
+            <TextInput
+              id="bastion-user"
+              value={config.bastion.username}
+              onChange={(_e, val) =>
+                onChange({ bastion: { ...config.bastion, username: val } })
+              }
+              placeholder="core"
+            />
+          </FormGroup>
+          <FormGroup label={t('Bastion password')} fieldId="bastion-password">
+            <TextInput
+              id="bastion-password"
+              type="password"
+              value={config.bastion.password}
+              onChange={(_e, val) =>
+                onChange({ bastion: { ...config.bastion, password: val } })
+              }
+            />
+            <FormHelperText>
+              <HelperText>
+                <HelperTextItem>
+                  {t(
+                    'Used to log in to the bastion desktop. Stored in a Secret and cleared from the cluster resource; leave blank to have one generated.',
+                  )}
+                </HelperTextItem>
+              </HelperText>
+            </FormHelperText>
+          </FormGroup>
+        </>
+      )}
     </Form>
   );
 };

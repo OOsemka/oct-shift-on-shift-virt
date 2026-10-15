@@ -24,6 +24,22 @@ export interface ExternalAccessConfig {
   ingressIP: string;
 }
 
+/**
+ * The bastion is the single helper VM (nested DNS + MCS relay + SSH). With
+ * graphical enabled it also gets a desktop, so the nested console can be
+ * opened in a browser ON the bastion through the OpenShift VM console — the
+ * bastion already resolves the nested zone, so this needs no Route and no
+ * extra network exposure.
+ *
+ * The password is write-only: the orchestrator copies it into a Secret and
+ * clears it from the CR.
+ */
+export interface BastionConfig {
+  graphical: boolean;
+  username: string;
+  password: string;
+}
+
 export interface ClusterConfig {
   clusterName: string;
   baseDomain: string;
@@ -39,6 +55,7 @@ export interface ClusterConfig {
   storageClassName: string;
   pullSecret: string;
   sshKey: string;
+  bastion: BastionConfig;
   installConfigOverrides: string;
   agentConfigOverrides: string;
 }
@@ -114,6 +131,7 @@ export const DEFAULT_CLUSTER_CONFIG: ClusterConfig = {
   storageClassName: '',
   pullSecret: '',
   sshKey: '',
+  bastion: { graphical: false, username: 'core', password: '' },
   installConfigOverrides: '',
   agentConfigOverrides: '',
 };
