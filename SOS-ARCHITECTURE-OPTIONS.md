@@ -102,6 +102,37 @@ Validated offline before shipping: rendered cloud-config parses as YAML, both
 embedded Python programs parse, both SSH keys are present, and the DNS
 records/zone/AAAA-fix and relay master IPs are all asserted present.
 
+#### CORRECTION — the SSH push IS needed after all (caught live, first run)
+
+The claim that "the ordering constraint dissolves" was WRONG, and the first
+GUI run proved it within three minutes:
+
+```
+haproxy-ingress pod lease : 10.100.0.12
+bastion IPAMClaim         : 10.100.0.12/16     <- direct collision
+```
+
+**A preseeded IPAMClaim does not remove an address from OVN's dynamic pool.**
+It only pins the address once it is bound to a running workload. The old
+MCSRelay phase kept base+12 safe purely as a side effect of *creating the VM
+there* — the VM physically occupied the address before any HAProxy pod
+existed. Recording the address in status reserves nothing.
+
+So option 1 is implemented as originally specified:
+* `MCSRelay` -> `deployBastionEarly`: creates the bastion (MCS relay + sshd)
+  and waits for it, so it owns base+12 before DeployHAProxy runs.
+* `DeployDNS` -> `configureBastionDNS`: renders dns.py from the now-known
+  HAProxy leases and pushes it over SSH from a Job in the cluster namespace,
+  then PROVES the server answers — an A record matching the API VIP *and* a
+  prompt NOERROR for AAAA (a dropped AAAA is invisible to getent but hangs
+  every AF_UNSPEC client). It also fails loudly if a HAProxy lease has landed
+  on the bastion's address.
+Still 3 helper VMs -> 1; the cost is one extra Job, not an extra VM.
+
+Note this collision class disappears entirely under option 3: with no HAProxy
+pods there is no dynamic lease to collide with, and the DNS records are the
+bastion's own address.
+
 ---
 
 # Part 2 — Exposing the nested API/ingress via host Services and Routes
