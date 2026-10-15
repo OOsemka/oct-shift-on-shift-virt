@@ -1,0 +1,183 @@
+# S-O-S architecture options (2026-10-15)
+
+Two open architectural questions, each written up with what is **proven live**
+on AZ1 versus what is **inferred**. Nothing here is implemented yet.
+
+Companion to `SOS-E2E-STATUS.md` (run history and defect log). Written after
+runs 16/17 reached `Ready` unassisted (3/3 masters, 34/34 ClusterOperators).
+
+---
+
+# Part 1 — Consolidating the helper VMs
+
+Today every nested cluster gets **three** helper VMs in its namespace, all of
+them the same small CentOS Stream 9 image:
+
+| VM | Service | Ports | Required? |
+| --- | --- | --- | --- |
+| `<cluster>-dns-vm` | `dns.py` for the nested zone | 53/udp+tcp | **Yes** |
+| `<cluster>-mcs-relay` | TCP relay to masters' MCS | 12262, 12264 | **Yes, conditionally** |
+| `<cluster>-jumpbox` | sshd for operators | 22 | No — diagnostics only |
+
+### Why DNS must be a VM with a stable IP
+Nothing else resolves `api/api-int/*.apps.<cluster>.<base>`. It must be
+claim-stable because GenerateISO bakes `nameserver=<ip>` into the agent ISO as
+a kernel argument, and because an unclaimed Deployment pod drifts its cUDN
+lease — that drift stranded two masters in an earlier run (`.18 -> .52`).
+
+### Why the MCS relay exists
+The hypervisors' nftables reject TCP SYN to 22623/22624 for host- and
+pod-originated traffic. HAProxy is a **pod**, so it cannot reach the masters'
+MCS directly. The relay is a **VM**, and VM->VM traffic never traverses those
+hooks, so it listens on 12262/12264 (not rejected) and forwards to 22623.
+The constraint is the *pod->VM hop*, not MCS itself — which is why option 3
+below removes the need for the relay entirely.
+
+### The only real obstacle to one VM: ordering
+`MCSRelay` runs **before** `DeployHAProxy` deliberately, so HAProxy's first
+generated config already contains the MCS backend. A later config change rolls
+the HAProxy pod, which changes its cUDN DHCP lease, which silently stales the
+DNS records (the lease-drift bug class). But the DNS records *need* that lease,
+which only exists *after* HAProxy starts. One VM cannot currently bake both at
+cloud-init time.
+
+### Options
+
+**Option 1 — one bastion, DNS records pushed over SSH. (RECOMMENDED FIRST)**
+Create `<cluster>-bastion` early (at the current MCSRelay point) running the
+relay + sshd + a DNS daemon with empty records; `DeployDNS` then writes
+`/etc/sos/dns-records` over SSH and restarts the service. Reuses machinery
+already proven in ConfigureNodes (ops SA, `sos-ssh-helper`, cluster key).
+*3 helper VMs -> 1.* Saves ~2 vCPU, ~4 Gi RAM, 64 Gi of RBD clones per cluster.
+Risk: low. One new moving part (the record push).
+
+**Option 2 — one bastion, HAProxy pods get preseeded IPAMClaims.**
+Make the HAProxy VIPs deterministic before anything starts, so the bastion can
+bake DNS records at creation. Also kills the lease-drift class permanently.
+Status: documented as GA for Layer2 primary UDN but **unproven here**. Live
+check today: the only IPAMClaims present are the six auto-created
+`<vm>.default` ones; the HAProxy pods get their cUDN IP implicitly with no
+claim. An earlier attempt failed only because it used
+`k8s.v1.cni.cncf.io/networks` (which OVN rejects for a primary network)
+instead of `v1.multus-cni.io/default-network` with `ipam-claim-reference`.
+
+**Option 3 — one bastion that also replaces the HAProxy pods.**
+The relay VM already fronts 6443/22623/22624 (commit 2c8c324). Move all TCP
+proxying onto the bastion and delete both HAProxy Deployments:
+*3 VMs + 2 pods -> 1 VM.* Every hop becomes VM->VM, so the pod->VM:22623
+firewall constraint disappears; the VIP is a claim-stable VM address rather
+than a drifting pod lease; DNS records are known at plan time; zero HAProxy
+reloads. Costs: single point of failure for the nested control-plane VIP, and
+the loss of HAProxy health checking (already removed deliberately — the
+pod->VM L4 checks flapped and blackholed the VIP, run 12).
+
+**Decision: implement option 1 first, then option 3 once validated.** Not both
+at once — a failure in a combined change would not say which half caused it.
+
+---
+
+# Part 2 — Exposing the nested API/ingress via host Services and Routes
+
+The goal: reach the nested cluster's API and ingress through the **host**
+cluster's Routes, so no corporate DNS entries are needed.
+
+## What was measured today (all live, on the healthy `sos-nightly` cluster)
+
+1. **A selector-based Service in the UDN namespace works at the API level.**
+   Creating a Service with `selector: component=haproxy-api` auto-populated
+   EndpointSlices with the HAProxy pod's **default-network** IP and allocated a
+   ClusterIP:
+   ```
+   addresses=["10.131.0.62"]  ready=true  ports=6443   clusterIP=172.30.14.150
+   ```
+   No manual Endpoints and **no `endpoints/restricted` RBAC** — so the
+   privileged grant that run 17 asked for is not actually needed.
+
+2. **…but those endpoints carry no traffic.** From a default-network pod:
+   ```
+   https://172.30.14.150:6443/healthz  -> 000   (ClusterIP)
+   https://10.131.0.62:6443/healthz    -> 000   (pod IP direct)
+   nc -z 10.131.0.62 6443              -> CLOSED/filtered
+   ping 10.131.0.62                    -> no reply
+   ```
+   A primary-UDN namespace isolates its pods **inbound**: they can egress via
+   eth0, but nothing outside the namespace can reach them on it. So pointing a
+   host Service at the HAProxy pods can never work — with or without RBAC. The
+   endpoints-restriction error in run 17 was only the first wall.
+
+3. **The nested VLAN addresses are unreachable from the cluster too.**
+   From a default-network pod: `172.21.75.103:6443` -> 000,
+   `172.21.75.104:443` -> 000.
+   From an ingress **node** (routers are `hostNetwork: true`, so this is the
+   path a Route would take):
+   ```
+   ip route get 172.21.75.103 -> via 172.21.66.1 dev br-ex
+   curl https://172.21.75.103:6443/healthz -> 000
+   ```
+   The nodes sit on 172.21.66.0/24; vlan2111 is a separate L2 they have no
+   interface on, and the gateway does not forward to it. (The workstation
+   reaches 172.21.75.x over the corporate/VPN path, which is not available to
+   the cluster.)
+
+**Conclusion: from the host cluster — pods *and* nodes — there is currently no
+working path into a nested cluster.** Any Route-based exposure therefore
+requires a new bridging component. This is a correction to the earlier design
+note that assumed the HAProxy pods' pod-network IPs were a usable bridge.
+
+## Options
+
+**Option E0 — corporate DNS (works today, nothing to build).**
+Two A records per cluster:
+```
+api.<cluster>.<base>     A  <externalAccess.apiIP>       # 172.21.75.x
+*.apps.<cluster>.<base>  A  <externalAccess.ingressIP>
+```
+Everything is native: `oc login`, console, OAuth redirects, and TLS all use the
+cluster's real hostnames with valid certs. The wizard's review step already
+prints exactly these records. Requires the ability to add DNS entries.
+
+**Option E1 — edge-proxy pod in a normal namespace + Service + Routes.**
+Add a small HAProxy/nginx Deployment in `oct-shift-on-shift-virt` (NOT a UDN
+namespace, so it is reachable normally), dual-homed:
+* `eth0` pod network — reachable by a selector Service and by the hostNetwork
+  router;
+* `net1` on a CopyNAD'd `vlan2111` — reaches the nested `apiIP`/`ingressIP`.
+
+Then `Service (selector) -> edge proxy -> VLAN -> nested HAProxy -> masters`,
+with passthrough Routes in front. Uses only proven primitives (CopyNAD already
+exists; selector Services proven above; no privileged RBAC).
+
+Honest scope of what E1 delivers:
+* **API: yes.** Passthrough preserves client certificates, so the admin
+  kubeconfig works. The nested serving cert has no SAN for the route hostname,
+  so either `--insecure-skip-tls-verify`, or add the route hostname via the
+  nested `APIServer.spec.servingCerts.namedCertificates` and ship the CA in the
+  distributed kubeconfig (clean, more work).
+* **Console: only with extra work.** The console redirects to
+  `oauth-openshift.apps.<nested>`, which a browser outside cannot resolve. Fix
+  by setting the nested `Ingress.spec.componentRoutes` for `console` and
+  `oauth-openshift` to the host-side route hostnames plus a serving cert.
+* **Arbitrary nested apps: no.** A passthrough Route selects the backend by
+  SNI, and the nested router then matches the same hostname. Unless a nested
+  app's Route hostname equals the host-side hostname, it returns 503. There is
+  no general wildcard rewrite.
+
+**Option E2 — exposure from the bastion VM.** Does not help on its own: the
+bastion lives in the cluster namespace (it must, to be on the cUDN), so the
+host router still cannot reach it. It would still need E1's edge proxy. A VM in
+a normal namespace cannot attach to another namespace's cUDN (multus
+cross-namespace attach is blocked).
+
+**Option E3 — NodePort/LoadBalancer.** Same dead end: the endpoints are the
+unreachable UDN pods.
+
+## Recommendation
+Keep **E0** as the supported path — it is already implemented, needs no new
+components, and is the only option where TLS, OAuth and arbitrary apps all work
+properly. Build **E1** only if DNS control is genuinely unavailable, and ship it
+labelled as what it is: an API-access convenience, with console support
+requiring `componentRoutes` and app access out of scope.
+
+Either way, the `endpoints/restricted` grant discussed earlier should **not** be
+requested — the selector-Service finding removes the need for it, and the live
+ClusterRole should have the three read-only rules only.

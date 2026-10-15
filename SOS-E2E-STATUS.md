@@ -2514,3 +2514,46 @@ Exposure failure is non-fatal by design and the CR still reaches Ready.
 - Host cluster: 4/4 nodes Ready; no host mutation at any point; the only
   host-cluster write this session was the approved read-only ClusterRole
   patch.
+
+---
+
+## 2026-10-15 ~14:00 UTC — GUI-created cluster + two architecture findings
+
+### chris-sos-odf2 (created from the console wizard)
+Exposed a gap no CR-driven run could: **the wizard collects only the PUBLIC
+SSH key**, and CreateSecrets only stored a private half if `sshPrivateKey` or
+`sshPrivateKeyRef` was set. ConfigureNodes/node-guard SSH from Jobs inside the
+cluster namespace, so without a private key the run dies at ConfigureNodes.
+Every validated run so far passed a private key from a hand-written CR, so
+this path was never exercised — "validated" covered the CR path, not the UI.
+Fixed: CreateSecrets generates an RSA keypair (stdlib only; verified by having
+`ssh-keygen -y` derive the public key from it) and authorises it **alongside**
+the user's pasted key. Multi-key required install-config to emit a YAML block
+scalar instead of a single-quoted scalar — safe because the installer
+validates only the first key and passes the whole string through as one
+ignition SSHAuthorizedKey entry, so authorized_keys gets one key per line.
+chris-sos-odf2 itself was created ~1 min before that image rolled, so it still
+fails; it is to be deleted and re-created.
+
+### Finalizer left stranded by a mid-teardown image roll
+`chris-sos-odf`'s teardown completed (`cluster resources deleted`, namespace
+gone, no VMs/PVCs/snapshot contents) but the CR stayed in `Deleting` with
+`sos.octools.io/cleanup` attached — almost certainly because the orchestrator
+was rolled three times during that window. TODO: re-drive deletion on startup
+so a restart cannot strand a CR. Manual release:
+`oc patch nestedcluster chris-sos-odf -n oct-shift-on-shift-virt --type=merge -p '{"metadata":{"finalizers":[]}}'`
+
+### Architecture evaluation -> SOS-ARCHITECTURE-OPTIONS.md
+Helper-VM consolidation and host-side Route exposure are written up there with
+live measurements. Two findings that change earlier assumptions:
+1. **A selector-based Service in the UDN namespace DOES populate endpoints**
+   (`addresses=["10.131.0.62"] ready=true`, ClusterIP allocated) with no
+   `endpoints/restricted` RBAC — so that privileged grant is NOT needed and
+   should not be requested.
+2. **But nothing outside the namespace can reach those endpoints**, and the
+   nested VLAN IPs are unreachable from both pods and ingress nodes
+   (`curl -> 000` in every direction; routers are hostNetwork and the nodes
+   have no interface on vlan2111). So there is currently NO path from the host
+   cluster into a nested cluster, and Route-based exposure needs a new
+   edge-proxy component. This corrects the earlier design note that treated
+   the HAProxy pods' pod-network IPs as a usable bridge.
