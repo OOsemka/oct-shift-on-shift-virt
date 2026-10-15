@@ -2040,10 +2040,16 @@ cp /state/kubeadmin-password /tmp/work/config/auth/kubeadmin-password
 
 openshift-install agent wait-for install-complete --dir=/tmp/work/config --log-level=info
 
+# xtrace OFF for the dump: with set -x bash echoes '+ echo "=== KUBECONFIG ==="'
+# to the same log, postInstall's Index() matches the marker inside THAT trace
+# line, and the kubeconfig it stores starts with a stray quote + "+ cat ..."
+# — invalid YAML, unusable secret (run 15/16).
+set +x
 echo "=== KUBECONFIG ==="
 cat /tmp/work/config/auth/kubeconfig
 echo "=== KUBEADMIN ==="
 cat /tmp/work/config/auth/kubeadmin-password
+echo ""
 echo "=== DONE ==="
 `},
 							Env: []corev1.EnvVar{
@@ -2137,18 +2143,24 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 
 	logStr := string(logBytes)
 
-	var kubeconfigData, kubeadminData string
-	if idx := strings.Index(logStr, "=== KUBECONFIG ==="); idx >= 0 {
-		after := logStr[idx+len("=== KUBECONFIG ==="):]
-		if end := strings.Index(after, "=== KUBEADMIN ==="); end >= 0 {
-			kubeconfigData = strings.TrimSpace(after[:end])
-		}
+	// Markers are matched on the LAST occurrence before the next marker: with
+	// xtrace on (older images) bash echoes its own '+ echo "=== MARKER ==="'
+	// line first, and anchoring on the first hit captures that trace plus a
+	// dangling quote. Belt and braces with the `set +x` now in the job script.
+	kubeconfigData := sectionBetween(logStr, "=== KUBECONFIG ===", "=== KUBEADMIN ===")
+	kubeadminData := sectionBetween(logStr, "=== KUBEADMIN ===", "=== DONE ===")
+	// Drop any surviving shell-trace preamble: a kubeconfig always starts at
+	// its first YAML key, never at a quote or a '+ cat ...' line.
+	if i := strings.Index(kubeconfigData, "apiVersion:"); i > 0 {
+		kubeconfigData = kubeconfigData[i:]
 	}
-	if idx := strings.Index(logStr, "=== KUBEADMIN ==="); idx >= 0 {
-		after := logStr[idx+len("=== KUBEADMIN ==="):]
-		if end := strings.Index(after, "=== DONE ==="); end >= 0 {
-			kubeadminData = strings.TrimSpace(after[:end])
-		}
+	if kubeconfigData != "" && !strings.HasPrefix(kubeconfigData, "apiVersion:") {
+		return fmt.Errorf("wait-install log did not yield a parseable kubeconfig (got %.40q)", kubeconfigData)
+	}
+	if kubeadminData != "" {
+		// the password is a single line; trace remnants would add more
+		lines := strings.Fields(kubeadminData)
+		kubeadminData = lines[len(lines)-1]
 	}
 
 	if kubeconfigData != "" {
@@ -2364,4 +2376,20 @@ func toInterfaceMap(m map[string]string) map[string]interface{} {
 		result[k] = v
 	}
 	return result
+}
+
+// sectionBetween returns the text between the LAST occurrence of start that
+// still precedes an end marker, and that end marker. Anchoring on the last
+// start defeats bash xtrace echoing the marker before the real one.
+func sectionBetween(s, start, end string) string {
+	endIdx := strings.Index(s, end)
+	if endIdx < 0 {
+		return ""
+	}
+	head := s[:endIdx]
+	startIdx := strings.LastIndex(head, start)
+	if startIdx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(head[startIdx+len(start) : endIdx])
 }
