@@ -99,7 +99,7 @@ func (c *Client) PreseedIPAMClaim(ctx context.Context, namespace, vmName, networ
 
 // clusterFromVMName best-effort trims known suffixes; only used for labels.
 func clusterFromVMName(vmName string) string {
-	for _, suf := range []string{"-dns-vm", "-jumpbox", "-mcs-relay", "-master-0", "-master-1", "-master-2"} {
+	for _, suf := range []string{"-bastion", "-dns-vm", "-jumpbox", "-mcs-relay", "-master-0", "-master-1", "-master-2"} {
 		if len(vmName) > len(suf) && vmName[len(vmName)-len(suf):] == suf {
 			return vmName[:len(vmName)-len(suf)]
 		}
