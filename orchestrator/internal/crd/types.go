@@ -90,12 +90,25 @@ type NestedClusterSpec struct {
 	// ConfigureNodes phase (in-cluster SSH into VMs to fix DNS after boot —
 	// the primary-UDN DHCP hands VMs the host cluster's CoreDNS, which is
 	// unreachable from the UDN, so it must be replaced post-boot).
-	SSHPrivateKey          string    `json:"sshPrivateKey,omitempty"`
-	SSHPrivateKeyRef       SecretRef `json:"sshPrivateKeyRef,omitempty"`
-	PullSecretRef          SecretRef `json:"pullSecretRef"`
-	SSHKeyRef              SecretRef `json:"sshKeyRef"`
-	InstallConfigOverrides string    `json:"installConfigOverrides,omitempty"`
-	AgentConfigOverrides   string    `json:"agentConfigOverrides,omitempty"`
+	SSHPrivateKey    string    `json:"sshPrivateKey,omitempty"`
+	SSHPrivateKeyRef SecretRef `json:"sshPrivateKeyRef,omitempty"`
+	PullSecretRef    SecretRef `json:"pullSecretRef"`
+	SSHKeyRef        SecretRef `json:"sshKeyRef"`
+	// Bastion controls the single helper VM (nested DNS + MCS relay + ssh).
+	// With Graphical set it also gets a desktop, so the nested console can be
+	// opened in a browser ON the bastion via the OpenShift VM console — the
+	// bastion already resolves the nested zone, so no Route or DNS is needed.
+	Bastion                BastionConfig `json:"bastion,omitempty"`
+	InstallConfigOverrides string        `json:"installConfigOverrides,omitempty"`
+	AgentConfigOverrides   string        `json:"agentConfigOverrides,omitempty"`
+}
+
+// BastionConfig is collected by the wizard. Password is write-only: it is
+// hashed into the VM's cloud-init and never stored back on the CR.
+type BastionConfig struct {
+	Graphical bool   `json:"graphical,omitempty"`
+	Username  string `json:"username,omitempty"`
+	Password  string `json:"password,omitempty"`
 }
 
 type NodeSizing struct {
