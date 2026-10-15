@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { ListPageHeader } from '@openshift-console/dynamic-plugin-sdk';
 import {
   Alert,
+  HelperText,
+  HelperTextItem,
   Breadcrumb,
   BreadcrumbItem,
   Button,
@@ -78,6 +80,7 @@ interface ClusterDetail {
       success: boolean;
       message: string;
     }>;
+    hostAPIRoute?: string;
     installConfig?: string;
     agentConfig?: string;
   };
@@ -103,6 +106,10 @@ const ClusterDetailPage: FC = () => {
   const [deleting, setDeleting] = useState(false);
   const [kubeadminPwd, setKubeadminPwd] = useState<string>();
   const [actionError, setActionError] = useState<string | undefined>();
+  // Controlled ExpandableSection needs an onToggle, otherwise clicking does
+  // nothing: once the cluster was Ready the log was collapsed forever and
+  // looked empty.
+  const [logExpanded, setLogExpanded] = useState<boolean | undefined>();
 
   const loadCluster = useCallback(() => {
     if (!name) return;
@@ -230,7 +237,8 @@ const ClusterDetailPage: FC = () => {
             <StackItem>
               <ExpandableSection
                 toggleText={t('Deployment Log')}
-                isExpanded={!isReady}
+                isExpanded={logExpanded ?? !isReady}
+                onToggle={(_e, expanded) => setLogExpanded(expanded)}
               >
                 <CodeBlock>
                   <CodeBlockCode>
@@ -266,13 +274,49 @@ const ClusterDetailPage: FC = () => {
                   </DescriptionListDescription>
                 </DescriptionListGroup>
                 <DescriptionListGroup>
-                  <DescriptionListTerm>{t('API Endpoint')}</DescriptionListTerm>
+                  <DescriptionListTerm>{t('API Endpoint (cluster DNS)')}</DescriptionListTerm>
                   <DescriptionListDescription>
                     <ClipboardCopy isReadOnly variant="inline-compact">
                       {status.apiEndpoint}
                     </ClipboardCopy>
+                    <HelperText>
+                      <HelperTextItem variant="indeterminate">
+                        {t('Needs api.{{fqdn}} in your DNS, pointing at the external VIP.', {
+                          fqdn,
+                        })}
+                      </HelperTextItem>
+                    </HelperText>
                   </DescriptionListDescription>
                 </DescriptionListGroup>
+                {status.hostAPIRoute && (
+                  <>
+                    <DescriptionListGroup>
+                      <DescriptionListTerm>{t('API Endpoint (host route)')}</DescriptionListTerm>
+                      <DescriptionListDescription>
+                        <ClipboardCopy isReadOnly variant="inline-compact">
+                          {status.hostAPIRoute}
+                        </ClipboardCopy>
+                        <HelperText>
+                          <HelperTextItem variant="indeterminate">
+                            {t(
+                              'Served through this cluster\u2019s router \u2014 no extra DNS needed. The nested certificate does not carry this hostname, so --insecure-skip-tls-verify is required.',
+                            )}
+                          </HelperTextItem>
+                        </HelperText>
+                      </DescriptionListDescription>
+                    </DescriptionListGroup>
+                    <DescriptionListGroup>
+                      <DescriptionListTerm>{t('Login command')}</DescriptionListTerm>
+                      <DescriptionListDescription>
+                        <ClipboardCopy isReadOnly variant="expansion" isCode>
+                          {`oc login ${status.hostAPIRoute} -u kubeadmin -p ${
+                            kubeadminPwd || '<click \u201cCopy Kubeadmin Password\u201d>'
+                          } --insecure-skip-tls-verify`}
+                        </ClipboardCopy>
+                      </DescriptionListDescription>
+                    </DescriptionListGroup>
+                  </>
+                )}
                 <DescriptionListGroup>
                   <DescriptionListTerm>{t('Ingress Domain')}</DescriptionListTerm>
                   <DescriptionListDescription>{status.ingressDomain}</DescriptionListDescription>

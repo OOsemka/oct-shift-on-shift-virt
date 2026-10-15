@@ -91,7 +91,8 @@ func (s *StepExecutor) deployBastionEarly(ctx context.Context, nc *crd.NestedClu
 		DataSourceNS:     "openshift-virtualization-os-images",
 		DataSourceName:   bastionBaseImage(),
 		Graphical:        nc.Spec.Bastion.Graphical,
-		UserData:         bastionUserData(name, pubKey, masterIPs, nc.Spec.Bastion.Graphical, desktopUser),
+		UserData: bastionUserData(name, pubKey, masterIPs, nc.Spec.Bastion.Graphical, desktopUser,
+			"https://console-openshift-console.apps."+nc.Spec.ClusterName+"."+nc.Spec.BaseDomain),
 	}); err != nil {
 		return fmt.Errorf("creating bastion VM: %w", err)
 	}
@@ -262,7 +263,7 @@ func (s *StepExecutor) configureBastionDNS(ctx context.Context, nc *crd.NestedCl
 // bastionUserData renders cloud-init for the combined helper VM: the nested
 // DNS server, the MCS relay and the operator SSH key. python3 ships in the
 // cloud image; the VM runs as root so binding :53 needs no privilege work.
-func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool, desktopUser string) string {
+func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool, desktopUser, consoleURL string) string {
 	masters := strings.Join(masterIPs, " ")
 	// An explicit users: block is REQUIRED. The top-level ssh_authorized_keys
 	// key installs onto the image's DEFAULT user, which on CentOS Stream 9 is
@@ -283,8 +284,25 @@ func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool
 				strings.Join(items, "\n") + "\n"
 		}
 	}
-	desktop := ""
+	desktop, desktopFiles := "", ""
 	if graphical && desktopUser != "" {
+		// Firefox enterprise policy: the supported way to set a start page
+		// regardless of profile, and it applies the first time the browser
+		// runs rather than needing a pre-seeded profile directory. The whole
+		// point of the desktop is reaching the nested console, so that is
+		// where it should open.
+		desktopFiles = fmt.Sprintf(`  - path: /etc/firefox/policies/policies.json
+    permissions: '0644'
+    content: |
+      {
+        "policies": {
+          "Homepage": {"URL": %q, "StartPage": "homepage", "Locked": false},
+          "OverrideFirstRunPage": "",
+          "DisableTelemetry": true,
+          "DontCheckDefaultBrowser": true
+        }
+      }
+`, consoleURL)
 		// The desktop is installed in the BACKGROUND: it is a few hundred MB
 		// over UDN egress and must never hold up the DeployDNS phase, which
 		// only needs sshd and the relay to be up.
@@ -324,7 +342,7 @@ func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool
 	return fmt.Sprintf(`#cloud-config
 hostname: %s
 %swrite_files:
-  - path: /opt/mcs-relay/relay.py
+%s  - path: /opt/mcs-relay/relay.py
     permissions: '0755'
     content: |
 %s  - path: /etc/systemd/system/sos-dns.service
@@ -358,7 +376,7 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable --now sos-dns.service
   - systemctl enable --now mcs-relay.service
-%s`, hostname, authorized, indentBlock(mcsRelayScript, "      "), masters, desktop)
+%s`, hostname, authorized, desktopFiles, indentBlock(mcsRelayScript, "      "), masters, desktop)
 }
 
 // bastionPushDNSScript installs the rendered dns.py onto the bastion and
