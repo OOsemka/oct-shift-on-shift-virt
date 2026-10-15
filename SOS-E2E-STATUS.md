@@ -2438,3 +2438,79 @@ unaffected either way; only the host-side convenience Routes are missing.
    x509 crash-loop -> no namespaces -> no CNO -> masters NotReady.
 5. wait-job pod templates unlabelled -> PostInstall could not find its own
    output.
+
+---
+
+## 2026-10-15 10:34–12:58 UTC — RUNS 16 & 17: **VALIDATED — two consecutive clean runs to Ready**
+
+### Run 16 (10:34 -> 11:20, 46 min) — first fully unassisted run to Ready
+```
+CollectIPs MCSRelay DeployHAProxy DeployDNS GenerateISO MountISO PowerOn
+ConfigureNodes WaitBootstrap WaitInstall -> 11:20:47 Ready
+```
+wait-install pod carried the component label, so postInstall used the PRIMARY
+selector (not the fallback) — the labelling fix proven on a clean run.
+
+### Run 16 verification exposed one more real bug: the kubeconfig SECRET was garbage
+The secret did not parse as YAML:
+```
+'
+=== KUBECONFIG ===
++ cat /tmp/work/config/auth/kubeconfig
+apiVersion: v1
+```
+The wait-install job runs under `set -ex`, so bash echoes
+`+ echo '=== KUBECONFIG ==='` into the same log; postInstall anchored on the
+FIRST marker match, which lands inside that trace line, leaving a dangling
+quote + `+ cat` line at the head of every stored kubeconfig.
+**Run 15's secret had the identical defect.** It survived two "successful"
+runs because both clusters were verified with a HAND-EXTRACTED kubeconfig
+instead of the secret the product actually emits. Lesson: always validate the
+artefact the product produces, never a hand-made equivalent.
+Fix: `set +x` around the dump; parser anchors on the LAST marker before the
+terminator, trims to the first `apiVersion:`, reduces the password to its
+final field, and errors rather than storing a non-kubeconfig. Self-contained
+regression test (`TestSectionBetweenIgnoresXtrace`) covers the traced shape.
+
+### Run 17 (12:14 -> 12:57, 43 min) — final validation, everything from the product
+```
+phase=Ready   secret sos-nightly-kubeconfig -> VALID YAML, server https://api.sos-nightly.chris.lab:6443
+              secret sos-nightly-kubeadmin  -> single clean 23-char field
+3/3 masters Ready (control-plane,master,worker, v1.35.6)
+clusterversion 4.22.14  Available=True  Progressing=False
+ClusterOperators total=34  Available=34  Degraded=0
+etcd pods Running: 3
+```
+Acceptance was performed **using the product-generated kubeconfig secret**.
+
+### Remaining gap: host-side Routes need a privileged grant (DECISION NEEDED)
+With the approved read-only grants applied (config.openshift.io
+infrastructures,dnses + operator.openshift.io ingresscontrollers — live role
+patched, verified), the apps-domain lookup now succeeds and exposure gets one
+step further, then stops at:
+```
+exposure degraded (cluster still healthy): api endpoints:
+endpoints "sos-nightly-api" is forbidden: endpoint address 10.131.0.62 is not allowed
+```
+This is OpenShift's endpoints-restriction admission: writing an Endpoints
+object that points at a pod-network address requires `create` on
+`endpoints/restricted`. That is a genuinely privileged capability (it is how
+one would proxy arbitrary in-cluster addresses), so it was NOT granted —
+unlike the read-only lookups, this one deserves an explicit decision.
+Options:
+  a. Grant `endpoints/restricted` create to the orchestrator SA.
+  b. Redesign exposure to a selector-based Service over the haproxy pods
+     (no manual Endpoints, no special permission) — needs thought because the
+     cluster namespace is a primary UDN and the Service must target the pods'
+     DEFAULT-network IPs, not their cUDN leases.
+  c. Leave exposure off: the nested cluster is fully usable via its own DNS
+     names and the kubeconfig secret. Nothing about the nested cluster depends
+     on this.
+Exposure failure is non-fatal by design and the CR still reaches Ready.
+
+### Final state
+- `sos-nightly`: Ready, healthy (left running).
+- `chris-sos-odf`: Ready, 36h, untouched throughout every run.
+- Host cluster: 4/4 nodes Ready; no host mutation at any point; the only
+  host-cluster write this session was the approved read-only ClusterRole
+  patch.
