@@ -2557,3 +2557,62 @@ live measurements. Two findings that change earlier assumptions:
    cluster into a nested cluster, and Route-based exposure needs a new
    edge-proxy component. This corrects the earlier design note that treated
    the HAProxy pods' pod-network IPs as a usable bridge.
+
+---
+
+## 2026-10-15 evening — session wrap-up
+
+### State at close
+- `chris-sos-odf`: **Ready**. 3/3 masters, 34/34 ClusterOperators, 0 degraded,
+  verified THROUGH the host API route. Created from the console wizard.
+- `sos-nightly`: Ready (older three-helper-VM layout, kept as a reference).
+- Host cluster: untouched. The only host-cluster writes all session were the
+  approved read-only ClusterRole grants and the orchestrator's own objects.
+
+### Shipped today (all validated live unless noted)
+| area | change |
+|---|---|
+| Bug A | installer_args via an in-ISO systemd unit ordered before start-cluster-installation |
+| Bug B | no L4 health checks on API/ingress backends; retries + redispatch |
+| DNS | `_empty_answer` implemented — AAAA was silently dropped, starving every AF_UNSPEC client |
+| node-guard | never rewrite the BOOTSTRAP node's kubeconfig |
+| PostInstall | wait-job pods labelled; kubeconfig parsed without shell-trace garbage |
+| secrets | auto-generated SSH keypair; the user's pasted key stays authorised (block scalar) |
+| bastion | 3 helper VMs -> 1; created early so it owns base+12; DNS pushed + verified (A and AAAA) |
+| bastion | optional XFCE desktop (EPEL), lightdm --force, USB tablet, Firefox homepage = nested console |
+| exposure | nested API published as a host Route via a shared SNI-routed edge proxy |
+| networking | **l2bridge** binding -> nested masters are live-migratable |
+| storage | VM root disks RWX **Block** with explicit volumeMode; cdrom and scratch stay RWO |
+| teardown | real Delete from the API; no finalizer re-adoption; stale-latch break; resync; route cleanup |
+| UI | host-route endpoint + `oc login` command; Deployment Log openable; both buttons fixed |
+
+### Open items for next session
+1. **Live migration is proven on a standalone VM, not yet on a nested master.**
+   Masters report `LiveMigratable=True` until the ISO attaches; afterwards the
+   RWO cdrom blocks it (`DisksNotLiveMigratable`). PostInstall ejects the ISO
+   from the TEMPLATE only, so a master becomes migratable after its next
+   restart. Restart one and migrate it to close this out.
+2. `RestartRequired=True` on masters is that same template-only ISO ejection.
+   Benign; clears on restart. Optional: eject only while stopped.
+3. Host-side **ingress/console** is deliberately not routed — the nested
+   router dispatches on Host (503 vs 200 measured). The bastion desktop is
+   the console path. See SOS-ARCHITECTURE-OPTIONS.md.
+4. Bastion with a VLAN NIC (`externalAccess.jumpboxIP`) is untested for
+   migratability — the secondary is a multus localnet attachment, so it may
+   pin that one VM.
+5. Short route hostname (`<cluster>-api.<appsDomain>`) needs
+   `create` on `routes/custom-host`; deliberately not taken.
+6. Pre-existing typecheck error in `src/components/ManageTab/ConfigViewer.tsx`
+   (untouched today).
+7. `git push` is yours — everything is committed locally only.
+
+### Lessons that cost time today
+- Verify the ARTIFACT the product emits, not an equivalent built by hand. The
+  kubeconfig secret, the RWX PVC and the DNS resolver all passed a hand-made
+  check and failed in production form.
+- A watcher that counts `oc` failures as "zero objects" reports false success.
+  Probe the API first and emit ERR, never 0.
+- Check CRD enums before writing status values: one invalid field invalidates
+  the whole status object and silently freezes the CR mid-install.
+- Guest images differ from assumptions: the `core` user, XFCE's repo, and the
+  display-manager symlink each broke in turn.
