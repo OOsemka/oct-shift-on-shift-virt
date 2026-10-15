@@ -76,7 +76,7 @@ func (s *StepExecutor) Execute(ctx context.Context, nc *crd.NestedCluster, phase
 		// operator jumpbox (see bastion.go). DNS mode "pod" keeps the old
 		// in-namespace Deployment for environments without KubeVirt.
 		if dnsVMMode() {
-			return s.deployBastion(ctx, nc)
+			return s.configureBastionDNS(ctx, nc)
 		}
 		return s.deployDNS(ctx, nc)
 	case crd.PhaseGenerateISO:
@@ -88,10 +88,10 @@ func (s *StepExecutor) Execute(ctx context.Context, nc *crd.NestedCluster, phase
 	case crd.PhaseConfigureNodes:
 		return s.configureNodes(ctx, nc)
 	case crd.PhaseMCSRelay:
-		// No VM here any more: just pin the bastion's reserved address so
-		// DeployHAProxy's FIRST config already points at it (see
-		// reserveBastionIP for why that ordering matters).
-		return s.reserveBastionIP(ctx, nc)
+		// Creates the single bastion VM. It must exist BEFORE DeployHAProxy:
+		// an IPAMClaim does not remove an address from OVN's dynamic pool,
+		// so the VM has to occupy base+12 or a haproxy pod will take it.
+		return s.deployBastionEarly(ctx, nc)
 	case crd.PhaseWaitBootstrap:
 		return s.waitBootstrap(ctx, nc)
 	case crd.PhaseWaitInstall:
