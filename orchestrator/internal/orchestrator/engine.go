@@ -45,6 +45,12 @@ func NewEngine(client *k8s.Client, logger *logging.Logger) *Engine {
 func (e *Engine) Watch(ctx context.Context) error {
 	e.logger.Info("starting NestedCluster watcher")
 
+	// Safety net: a deletion only makes progress when an event arrives, so a
+	// missed or stale event leaves a CR stuck in Deleting with its finalizer
+	// held and nothing to retrigger it. Re-drive pending deletions on startup
+	// and periodically thereafter.
+	go e.resyncPendingDeletions(ctx)
+
 	for {
 		watcher, err := e.client.DynamicClient.Resource(nestedClusterGVR).
 			Namespace("").Watch(ctx, metav1.ListOptions{})
@@ -363,6 +369,18 @@ func (e *Engine) patchFinalizers(ctx context.Context, nc *crd.NestedCluster, add
 	if err != nil {
 		return err
 	}
+	// NEVER adopt a finalizer onto an object that is already being deleted.
+	// Reconciles carry the object from the watch event, which can be STALE
+	// (no deletionTimestamp yet). Without this guard such a reconcile falls
+	// into the adoption branch and re-adds the finalizer microseconds after
+	// the teardown released it — the API server can then never complete the
+	// delete, no further events arrive, and the CR is stranded in Deleting
+	// forever with every resource already gone. Observed on both
+	// chris-sos-odf and chris-sos-odf2, and it is also why manually patching
+	// the finalizer away appeared to succeed yet changed nothing.
+	if add && cur.GetDeletionTimestamp() != nil {
+		return nil
+	}
 	finalizers, _, _ := unstructured.NestedStringSlice(cur.Object, "metadata", "finalizers")
 	out := make([]string, 0, len(finalizers)+1)
 	for _, f := range finalizers {
@@ -382,4 +400,48 @@ func (e *Engine) patchFinalizers(ctx context.Context, nc *crd.NestedCluster, add
 		Patch(ctx, nc.Name, types.MergePatchType,
 			[]byte(`{"metadata":{"finalizers":`+string(raw)+`}}`), metav1.PatchOptions{})
 	return err
+}
+
+// resyncPendingDeletions re-drives any NestedCluster that is being deleted but
+// still holds our finalizer. The watch is the only trigger for reconciles, so
+// a single missed/stale event strands such an object permanently — every
+// resource already torn down, the CR sitting in Deleting forever. This sweeps
+// on startup and every two minutes so recovery never needs an operator.
+func (e *Engine) resyncPendingDeletions(ctx context.Context) {
+	tick := time.NewTicker(2 * time.Minute)
+	defer tick.Stop()
+	for {
+		list, err := e.client.DynamicClient.Resource(nestedClusterGVR).
+			Namespace("").List(ctx, metav1.ListOptions{})
+		if err == nil {
+			for i := range list.Items {
+				obj := list.Items[i]
+				if obj.GetDeletionTimestamp() == nil {
+					continue
+				}
+				hasOurs := false
+				for _, f := range obj.GetFinalizers() {
+					if f == cleanupFinalizer {
+						hasOurs = true
+						break
+					}
+				}
+				if !hasOurs {
+					continue
+				}
+				nc, cerr := unstructuredToNestedCluster(&obj)
+				if cerr != nil {
+					continue
+				}
+				e.logger.WithCluster(nc.Spec.ClusterName).
+					Info("re-driving a stranded deletion (deletionTimestamp set, finalizer still held)")
+				e.handleClusterEvent(ctx, nc)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
 }
