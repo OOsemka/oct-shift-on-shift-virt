@@ -121,6 +121,20 @@ func (s *StepExecutor) configureNodes(ctx context.Context, nc *crd.NestedCluster
 		sshSecretName = nc.Spec.ClusterName + "-ssh-key"
 	}
 
+	// Preflight the private key BEFORE creating the Job. The pod mounts
+	// ssh-privatekey as a required secret key, so if it is missing the pod
+	// never starts: no logs, no events the engine surfaces, and the job sits
+	// until ActiveDeadlineSeconds. chris-sos-odf2 burned 40 minutes that way
+	// and reported only "Job was active longer than specified deadline",
+	// which says nothing about the real cause. CreateSecrets now always
+	// provides a key, so this should be unreachable — but a bad
+	// sshPrivateKeyRef must fail in seconds with an actionable message.
+	if key, kerr := s.client.GetSecretData(ctx, clusterNs, sshSecretName, "ssh-privatekey"); kerr != nil || len(key) == 0 {
+		return fmt.Errorf("secret %s/%s has no usable ssh-privatekey — ConfigureNodes and node-guard SSH into the nodes from this namespace and cannot run without it "+
+			"(CreateSecrets generates one automatically when spec.sshPrivateKey/sshPrivateKeyRef are unset; this cluster predates that or its sshPrivateKeyRef is broken)",
+			clusterNs, sshSecretName)
+	}
+
 	jobName := nc.Spec.ClusterName + "-configure-nodes"
 	backoffLimit := int32(6) // absorbs an SCC cache-lag miss or a transient pull error
 	deadlineSec := int64(2400)
