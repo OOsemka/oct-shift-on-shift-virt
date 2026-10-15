@@ -334,6 +334,7 @@ spec:
           capabilities:
             drop:
             - ALL
+        imagePullPolicy: Always
       volumes:
       - name: plugin-serving-cert
         secret:
