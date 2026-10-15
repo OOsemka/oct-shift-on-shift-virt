@@ -141,7 +141,15 @@ func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) 
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
-		e.startReconcile(ctx, nc)
+		if !e.startReconcile(ctx, nc) {
+			// An older reconcile is still deregistering. Clear the flag so
+			// the next event (or the resync) retries — leaving it set made
+			// chris-sos-odf unreachable to EVERY subsequent event, including
+			// the resync that exists to rescue exactly this case.
+			e.mu.Lock()
+			delete(e.deleting, key)
+			e.mu.Unlock()
+		}
 		return
 	}
 
@@ -152,13 +160,17 @@ func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) 
 	e.startReconcile(ctx, nc)
 }
 
-func (e *Engine) startReconcile(ctx context.Context, nc *crd.NestedCluster) {
+// startReconcile reports whether a reconcile was actually started. Callers
+// that set per-key state first (the deletion branch) MUST check it: a silent
+// dedupe here with that state left behind latches the cluster out of every
+// future event.
+func (e *Engine) startReconcile(ctx context.Context, nc *crd.NestedCluster) bool {
 	key := nc.Namespace + "/" + nc.Name
 
 	e.mu.Lock()
 	if _, exists := e.running[key]; exists {
 		e.mu.Unlock()
-		return
+		return false
 	}
 	reconcileCtx, cancel := context.WithCancel(ctx)
 	e.running[key] = cancel
@@ -172,6 +184,7 @@ func (e *Engine) startReconcile(ctx context.Context, nc *crd.NestedCluster) {
 		}()
 		e.reconcile(reconcileCtx, nc)
 	}()
+	return true
 }
 
 func (e *Engine) cancelReconcile(name string) {
@@ -433,6 +446,19 @@ func (e *Engine) resyncPendingDeletions(ctx context.Context) {
 				if cerr != nil {
 					continue
 				}
+				// Break a stale latch: if the key is marked deleting but no
+				// reconcile is running, nothing will ever clear it and
+				// handleClusterEvent would just return.
+				key := nc.GetNamespace() + "/" + nc.GetName()
+				e.mu.Lock()
+				if e.deleting[key] {
+					if _, busy := e.running[key]; !busy {
+						delete(e.deleting, key)
+						e.logger.WithCluster(nc.Spec.ClusterName).
+							Info("cleared a stale deleting latch (no reconcile was running)")
+					}
+				}
+				e.mu.Unlock()
 				e.logger.WithCluster(nc.Spec.ClusterName).
 					Info("re-driving a stranded deletion (deletionTimestamp set, finalizer still held)")
 				e.handleClusterEvent(ctx, nc)
