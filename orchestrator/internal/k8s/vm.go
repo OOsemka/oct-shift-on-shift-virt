@@ -113,7 +113,10 @@ func (c *Client) CreateVM(ctx context.Context, params VMCreateParams) (string, e
 								// handover. Verified that the RBD StorageClass
 								// binds RWX Block, so no StorageClass change is
 								// needed alongside the l2bridge switch.
+								// Block is explicit, not inferred from the
+								// source: RWX+Filesystem is invalid on RBD.
 								"accessModes": []interface{}{"ReadWriteMany"},
+								"volumeMode":  "Block",
 								"resources": map[string]interface{}{
 									"requests": map[string]interface{}{
 										"storage": fmt.Sprintf("%dGi", params.DiskGi),
@@ -685,7 +688,14 @@ func (c *Client) CreateInfraVM(ctx context.Context, p InfraVMParams) error {
 						"spec": map[string]interface{}{
 							"pvc": map[string]interface{}{
 								// RWX: required for live migration (see above).
+								// volumeMode MUST be set explicitly: RBD does
+								// not support RWX with Filesystem, and a clone
+								// that does not inherit Block from its source
+								// leaves the PVC Pending forever (the bastion
+								// hung for 10 minutes exactly this way while
+								// the masters, which inherited Block, were fine).
 								"accessModes":      []interface{}{"ReadWriteMany"},
+								"volumeMode":       "Block",
 								"storageClassName": p.StorageClassName,
 								"resources": map[string]interface{}{
 									"requests": map[string]interface{}{"storage": fmt.Sprintf("%dGi", p.DiskGi)},
