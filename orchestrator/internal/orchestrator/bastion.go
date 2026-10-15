@@ -236,18 +236,23 @@ func (s *StepExecutor) configureBastionDNS(ctx context.Context, nc *crd.NestedCl
 // cloud image; the VM runs as root so binding :53 needs no privilege work.
 func bastionUserData(hostname, pubKey string, masterIPs []string) string {
 	masters := strings.Join(masterIPs, " ")
+	// An explicit users: block is REQUIRED. The top-level ssh_authorized_keys
+	// key installs onto the image's DEFAULT user, which on CentOS Stream 9 is
+	// cloud-user — so SSHing as core (what every helper job does, matching
+	// RHCOS) is denied. That is the same trap that left the old dns-vm with
+	// "no working SSH user"; the jumpbox got it right with a users: block.
 	authorized := ""
 	if pubKey != "" {
-		// Multiple keys (the user's plus the generated automation key) arrive
-		// newline-separated; cloud-init wants a YAML list.
 		var items []string
 		for _, k := range strings.Split(pubKey, "\n") {
 			if k = strings.TrimSpace(k); k != "" {
-				items = append(items, "  - "+k)
+				items = append(items, "      - "+k)
 			}
 		}
 		if len(items) > 0 {
-			authorized = "ssh_authorized_keys:\n" + strings.Join(items, "\n") + "\n"
+			authorized = "users:\n  - name: core\n    groups: wheel\n    shell: /bin/bash\n" +
+				"    sudo: 'ALL=(ALL) NOPASSWD:ALL'\n    ssh_authorized_keys:\n" +
+				strings.Join(items, "\n") + "\n"
 		}
 	}
 	return fmt.Sprintf(`#cloud-config
@@ -299,28 +304,34 @@ set -uo pipefail
 install -m 600 /sshkey/ssh-privatekey /tmp/k
 SSHOPT="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o LogLevel=ERROR -i /tmp/k"
 
-up=0
+# core is what every helper job uses (RHCOS convention, and the bastion's
+# cloud-init creates it). Fall back to the cloud image's default users so a
+# different BASTION_BASE_IMAGE cannot silently wedge this phase.
+USER_OK=""
 for i in $(seq 1 60); do
-    if ssh $SSHOPT "core@$BASTION_IP" true 2>/dev/null; then up=1; break; fi
+    for u in core cloud-user centos fedora; do
+        if ssh $SSHOPT "$u@$BASTION_IP" true 2>/dev/null; then USER_OK=$u; break; fi
+    done
+    [ -n "$USER_OK" ] && break
     sleep 10
 done
-if [ "$up" -ne 1 ]; then
-    echo "FATAL: bastion $BASTION_IP is not reachable over ssh after 10min"
+if [ -z "$USER_OK" ]; then
+    echo "FATAL: bastion $BASTION_IP is not reachable over ssh as core/cloud-user/centos/fedora after 10min"
     exit 1
 fi
-echo "OK: bastion $BASTION_IP reachable"
+echo "OK: bastion $BASTION_IP reachable as $USER_OK"
 
-ssh $SSHOPT "core@$BASTION_IP" "sudo install -D -m 0755 /dev/stdin /opt/sos-dns/dns.py" < /dns/dns.py || {
+ssh $SSHOPT "$USER_OK@$BASTION_IP" "sudo install -D -m 0755 /dev/stdin /opt/sos-dns/dns.py" < /dns/dns.py || {
     echo "FATAL: could not write dns.py onto the bastion"; exit 1; }
-ssh $SSHOPT "core@$BASTION_IP" "sudo systemctl restart sos-dns.service" || {
+ssh $SSHOPT "$USER_OK@$BASTION_IP" "sudo systemctl restart sos-dns.service" || {
     echo "FATAL: sos-dns.service would not start"; exit 1; }
 echo "OK: dns.py installed and service restarted"
 
 # Prove it ANSWERS, against the server itself — a getent here would query the
 # bastion's own (DHCP) resolver, not ours, and tell us nothing.
-ssh $SSHOPT "core@$BASTION_IP" "sudo install -D -m 0755 /dev/stdin /tmp/verify-dns.py" < /dns/verify-dns.py || exit 1
+ssh $SSHOPT "$USER_OK@$BASTION_IP" "sudo install -D -m 0755 /dev/stdin /tmp/verify-dns.py" < /dns/verify-dns.py || exit 1
 for i in $(seq 1 30); do
-    if ssh $SSHOPT "core@$BASTION_IP" "python3 /tmp/verify-dns.py api-int.$CLUSTER_DOMAIN $API_IP"; then
+    if ssh $SSHOPT "$USER_OK@$BASTION_IP" "python3 /tmp/verify-dns.py api-int.$CLUSTER_DOMAIN $API_IP"; then
         echo "DNS_VERIFIED"
         exit 0
     fi
