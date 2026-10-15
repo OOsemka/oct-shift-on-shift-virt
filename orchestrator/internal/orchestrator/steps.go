@@ -2333,6 +2333,19 @@ func (s *StepExecutor) DeleteCluster(ctx context.Context, nc *crd.NestedCluster)
 
 	s.client.DynamicClient.Resource(deployGVR).Namespace(crNs).Delete(ctx, nc.Spec.ClusterName+"-iso-server", metav1.DeleteOptions{})
 
+	// The API Route lives in the OPERATOR namespace, so the cluster
+	// namespace cascade never touches it. Without this a deleted cluster
+	// leaves a Route behind pointing at a dead backend forever (observed:
+	// a route from 19:09 survived its cluster and was still present when a
+	// new one was created an hour later). The shared edge proxy's own
+	// config self-heals, because collectEdgeBackends rebuilds it from the
+	// live NestedCluster list on the next reconcile.
+	routeGVR := schema.GroupVersionResource{Group: "route.openshift.io", Version: "v1", Resource: "routes"}
+	if err := s.client.DynamicClient.Resource(routeGVR).Namespace(crNs).
+		Delete(ctx, nc.Spec.ClusterName+"-api", metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		log.Info("could not delete the api route (non-fatal)", "error", err.Error())
+	}
+
 	// Clean up DNS resources (deployed in the target namespace alongside VMs)
 	s.client.DynamicClient.Resource(deployGVR).Namespace(clusterNs).Delete(ctx, nc.Spec.ClusterName+"-dns", metav1.DeleteOptions{})
 	svcGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
