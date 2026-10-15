@@ -18,3 +18,8 @@ orchestrator/Containerfile.prebuilt
 
 # Go toolchain telemetry written into the build dir — local artefacts, not source
 orchestrator/.config/
+
+# Compiled Go binaries — build output, never source
+orchestrator/orchestrator
+orchestrator/sos-orchestrator
+orchestrator/ca-certificates.crt
