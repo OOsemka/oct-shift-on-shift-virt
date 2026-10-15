@@ -288,6 +288,22 @@ func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool
 		// over UDN egress and must never hold up the DeployDNS phase, which
 		// only needs sshd and the relay to be up.
 		//
+		// XFCE is NOT in CentOS Stream 9 AppStream — it comes from EPEL, and
+		// so does lightdm. The first attempt here installed neither (the
+		// group install failed, the fallback failed, and only firefox and
+		// some X libraries landed), leaving graphical.target enabled with no
+		// desktop and no display manager: a text console. Each step is
+		// chained with && so a failure is visible in the log instead of
+		// silently producing that same half-state. Verified live on the
+		// bastion before being written here: epel-release installs from
+		// extras, the Xfce group then resolves, lightdm comes from EPEL and
+		// gdm would come from AppStream.
+		//
+		// A display manager is what makes this work through the OpenShift
+		// VM console: that console is VNC onto the VM's emulated display, so
+		// X has to run on the VM's own console — a VNC server inside the
+		// guest would be the wrong tool.
+		//
 		// resolv.conf is pinned to 127.0.0.1 so a browser on this box
 		// resolves the nested zone from the DNS server running beside it —
 		// that is the whole point of putting the console here rather than
@@ -296,7 +312,7 @@ func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool
 		desktop = fmt.Sprintf(`  - useradd -m -s /bin/bash -G wheel %[1]s || true
   - printf 'nameserver 127.0.0.1\n' > /etc/resolv.conf
   - chattr +i /etc/resolv.conf || true
-  - nohup bash -c 'dnf -y group install "Xfce" || dnf -y install @xfce-desktop-environment; dnf -y install firefox tigervnc-server; systemctl set-default graphical.target; systemctl isolate graphical.target' >/var/log/sos-desktop.log 2>&1 &
+  - nohup bash -c 'dnf -y install epel-release && dnf -y group install Xfce && dnf -y install lightdm lightdm-gtk-greeter firefox && systemctl enable lightdm && systemctl set-default graphical.target && systemctl isolate graphical.target' >/var/log/sos-desktop.log 2>&1 &
 `, desktopUser)
 	}
 	return fmt.Sprintf(`#cloud-config
