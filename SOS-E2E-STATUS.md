@@ -2305,3 +2305,76 @@ warning. Python ast.parse syntax gate on the generated script.
 - Do not use `pkill -f <pattern>` here: the pattern matches its own parent
   shell and kills the command mid-flight (cost two commands this session).
   Resolve PIDs via ss/pgrep and kill by PID.
+
+---
+
+## 2026-10-15 07:29–09:35 UTC — RUN 14: DNS fix proven; masters JOINED; blocker = node-guard corrupting the BOOTSTRAP kubeconfig
+
+### What the DNS fix bought (verified on the wire, both masters)
+```
+                         run 13            run 14
+AAAA api-int        5.01s TIMEOUT    0.001s rcode=0 answers=0
+api-int by NAME     000              200
+```
+And the consequence: **masters 1 and 2 actually joined.** From the bootstrap
+API (`oc --kubeconfig <localhost variant> get nodes`):
+```
+sos-nightly-master-1   NotReady   control-plane,master   99m   v1.35.6
+sos-nightly-master-2   NotReady   control-plane,master   99m   v1.35.6
+```
+kubelet client certs issued (CSRs approved), MCD firstboot completed at
+07:47 applying rendered-master-624cd54. Deepest the project has ever reached.
+
+### Why it still stalled: node-guard rewrote the bootstrap node's kubeconfig
+Bootstrap CVO static pod, **ATTEMPT 23**, crash-looping:
+```
+Failed to watch v1.FeatureGate: Get "https://api-int.sos-nightly.chris.lab:6443/
+  apis/config.openshift.io/v1/featuregates": tls: failed to verify certificate:
+  x509: certificate signed by unknown authority
+```
+Proven by direct A/B on master-0 (read-only, a copy of the file):
+```
+oc --kubeconfig /etc/kubernetes/kubeconfig    get nodes -> x509 unknown authority
+oc --kubeconfig <same file, server=localhost> get nodes -> WORKS (lists both masters)
+```
+`/etc/kubernetes/kubeconfig` on the rendezvous node must stay
+`server: https://localhost:6443`. The bootstrap control-plane static pods
+(cluster-version-operator, cloud-credential-operator, ...) mount that exact
+file; routed through api-int they get a serving cert their CA bundle does not
+trust. node-guard's section-2 "post-pivot kubeconfig" repair — whose own
+comment says *non-bootstrap masters* — never excluded the bootstrap node, so
+it "fixed" master-0 once (07:45) and broke the whole install.
+
+Cascade: CVO cannot read FeatureGates -> never creates openshift-config /
+openshift-config-managed / openshift-machine-config-operator -> cluster-bootstrap
+loops "namespaces not found" on every release manifest and exits (~20 min),
+restarting all bootstrap static pods (ATTEMPT 5) -> CNO never deploys -> the
+joined masters stay NotReady with "no CNI configuration file" -> assisted-service
+marks masters 1/2 `installing-pending-user-action` ("timed out pulling the
+configuration files") and the cluster sits `installing-pending-user-action`.
+
+Note the warning text is misleading: the hosts boot fine and DO reach the API.
+I flagged this exact rewrite as suspicious after run 12 and judged it harmless
+because kubelet NRestarts was 0 — that was the wrong test. The damage is to the
+static pods that mount the file, not to kubelet.
+A mid-investigation detour: cluster-bootstrap itself uses the loopback
+kubeconfig (`rest.Config.Host=https://localhost:6443`), which briefly argued
+against this diagnosis. The static pods are the consumers that matter.
+
+### Fix
+guard-node.sh now detects the bootstrap node and skips the rewrite there:
+`/etc/assisted/node0` (the platform's own node-zero marker — apply-host-config
+.service gates on the same file) or `/etc/kubernetes/bootstrap-secrets/`.
+Both vanish once the node pivots off the live ISO, so the guard resumes normal
+duty for master-0 afterwards. Non-bootstrap masters are unaffected (and in
+run 14 they never needed the repair — their kubeconfigs were already correct,
+only master-0 was ever "FIXed").
+Branch verified functionally in a sandbox: node0 marker -> SKIP,
+bootstrap-secrets -> SKIP, plain joined master -> REWRITE.
+
+### Open/again
+- `WARN PERSIST` keyfile gap: still cosmetic, karg carries the boot.
+- assisted marks hosts pending-user-action once the join window lapses; if a
+  future run joins but trips something slow, the run cannot self-recover.
+  Worth a product guard later (detect + reset host), not needed if bootstrap
+  completes normally.

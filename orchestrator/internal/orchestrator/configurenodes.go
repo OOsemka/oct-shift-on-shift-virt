@@ -558,7 +558,26 @@ fi
 #    points at nothing and the node silently never registers). The NAME
 #    (not the HAProxy cUDN IP) is deliberate: haproxy pod rolls change the
 #    cUDN lease, DNS absorbs that. Only once per change.
-if [ -f /etc/kubernetes/kubeconfig ] && sudo grep -q "server: https://localhost:6443" /etc/kubernetes/kubeconfig 2>/dev/null; then
+#
+#    NEVER on the rendezvous/bootstrap node. There "localhost:6443" is
+#    CORRECT: the bootstrap control-plane static pods (cluster-version-
+#    operator, cloud-credential-operator, ...) mount this very file, and
+#    the api-int path presents a serving cert their CA bundle does not
+#    trust. Run 14 proved the damage: one rewrite here crash-looped the
+#    bootstrap CVO with "x509: certificate signed by unknown authority"
+#    (ATTEMPT 23), so the openshift-config/-managed namespaces were never
+#    created, cluster-bootstrap could not apply the release manifests, CNO
+#    never deployed, and the two masters that HAD joined sat NotReady until
+#    assisted-service timed them out. /etc/assisted/node0 is the platform's
+#    own node-zero marker (apply-host-config.service gates on it) and it
+#    disappears once the node pivots off the live ISO, so the guard resumes
+#    normal duty afterwards.
+if [ -e /etc/assisted/node0 ] || [ -d /etc/kubernetes/bootstrap-secrets ]; then
+    BOOTSTRAP_NODE=1
+else
+    BOOTSTRAP_NODE=0
+fi
+if [ "$BOOTSTRAP_NODE" = 0 ] && [ -f /etc/kubernetes/kubeconfig ] && sudo grep -q "server: https://localhost:6443" /etc/kubernetes/kubeconfig 2>/dev/null; then
     sudo sed -i "s#server: https://localhost:6443#server: https://api-int.$DOMAIN:6443#" /etc/kubernetes/kubeconfig
     sudo systemctl restart kubelet
     echo "FIX kubeconfig server -> https://api-int.$DOMAIN:6443 (kubelet restarted)"
