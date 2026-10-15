@@ -84,12 +84,25 @@ func (s *StepExecutor) exposeCluster(ctx context.Context, nc *crd.NestedCluster)
 		return fmt.Errorf("externalAccess.apiIP is empty — nothing for the edge proxy to forward to")
 	}
 	opNs := operatorNamespace()
-	appsDomain, err := s.client.AppsDomain(ctx)
+	// The Route comes FIRST and the router assigns its hostname. We do not
+	// set spec.host: that needs create on routes/custom-host, a privilege
+	// that lets a service account claim arbitrary hostnames and one this
+	// operator deliberately does not hold. The generated name
+	// (<route>-<namespace>.<appsDomain>) is read back and used for the SNI
+	// rules, so the proxy matches exactly what clients will send.
+	labels := map[string]string{
+		"oct-shift-on-shift-virt/cluster":   nc.Spec.ClusterName,
+		"oct-shift-on-shift-virt/component": "api-route",
+	}
+	routeHost, err := s.client.EnsurePassthroughRoute(ctx, opNs, nc.Spec.ClusterName+"-api", "", edgeProxyName, "api", labels)
 	if err != nil {
-		return fmt.Errorf("host apps domain: %w", err)
+		return fmt.Errorf("api route: %w", err)
+	}
+	if routeHost == "" {
+		return fmt.Errorf("router assigned no hostname to the api route")
 	}
 
-	backends, err := s.collectEdgeBackends(ctx, appsDomain, nc)
+	backends, err := s.collectEdgeBackends(ctx, nc, routeHost)
 	if err != nil {
 		return err
 	}
@@ -99,15 +112,6 @@ func (s *StepExecutor) exposeCluster(ctx context.Context, nc *crd.NestedCluster)
 
 	if err := s.ensureEdgeProxy(ctx, opNs, vlanIP, cfg, cfgSHA); err != nil {
 		return err
-	}
-
-	routeHost := nc.Spec.ClusterName + "-api." + appsDomain
-	labels := map[string]string{
-		"oct-shift-on-shift-virt/cluster":   nc.Spec.ClusterName,
-		"oct-shift-on-shift-virt/component": "api-route",
-	}
-	if err := s.client.EnsurePassthroughRoute(ctx, opNs, nc.Spec.ClusterName+"-api", routeHost, edgeProxyName, "api", labels); err != nil {
-		return fmt.Errorf("api route: %w", err)
 	}
 
 	nc.Status.HostAPIRoute = "https://" + routeHost
@@ -126,7 +130,12 @@ type edgeBackend struct {
 // collectEdgeBackends lists every NestedCluster so the shared config always
 // reflects reality — a deleted cluster's backend disappears on the next
 // reconcile instead of lingering.
-func (s *StepExecutor) collectEdgeBackends(ctx context.Context, appsDomain string, current *crd.NestedCluster) ([]edgeBackend, error) {
+func (s *StepExecutor) collectEdgeBackends(ctx context.Context, current *crd.NestedCluster, currentHost string) ([]edgeBackend, error) {
+	hosts, herr := s.client.RouteHostsByCluster(ctx, operatorNamespace())
+	if herr != nil {
+		return nil, fmt.Errorf("reading api route hosts: %w", herr)
+	}
+	hosts[current.Spec.ClusterName] = currentHost
 	list, err := s.client.DynamicClient.Resource(nestedClusterGVR).Namespace("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing nested clusters for the edge proxy: %w", err)
@@ -134,11 +143,12 @@ func (s *StepExecutor) collectEdgeBackends(ctx context.Context, appsDomain strin
 	seen := map[string]bool{}
 	var out []edgeBackend
 	add := func(name, apiIP string) {
-		if name == "" || strings.TrimSpace(apiIP) == "" || seen[name] {
+		host := hosts[name]
+		if name == "" || strings.TrimSpace(apiIP) == "" || host == "" || seen[name] {
 			return
 		}
 		seen[name] = true
-		out = append(out, edgeBackend{Cluster: name, SNIHost: name + "-api." + appsDomain, APIIP: apiIP})
+		out = append(out, edgeBackend{Cluster: name, SNIHost: host, APIIP: apiIP})
 	}
 	for i := range list.Items {
 		item := list.Items[i]

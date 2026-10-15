@@ -102,7 +102,13 @@ func (c *Client) EnsureEndpoints(ctx context.Context, namespace, name string, ip
 // Passthrough is mandatory here: the nested apiserver/router hold their own
 // certs; the host router must not terminate (it could not present a valid
 // cert for the nested names, and reencrypt health checks would fail).
-func (c *Client) EnsurePassthroughRoute(ctx context.Context, namespace, name, host, serviceName, portName string, labels map[string]string) error {
+// EnsurePassthroughRoute creates the route and returns the hostname it ends
+// up with. An EMPTY host asks the router to generate one
+// (<name>-<namespace>.<appsDomain>), which avoids needing create on
+// routes/custom-host — a privilege that lets a service account claim
+// arbitrary hostnames, and one the orchestrator does not have. The generated
+// host is read back so callers can use it for SNI routing and status.
+func (c *Client) EnsurePassthroughRoute(ctx context.Context, namespace, name, host, serviceName, portName string, labels map[string]string) (string, error) {
 	route := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "route.openshift.io/v1",
@@ -113,7 +119,6 @@ func (c *Client) EnsurePassthroughRoute(ctx context.Context, namespace, name, ho
 				"labels":    toIfaceMap(labels),
 			},
 			"spec": map[string]interface{}{
-				"host": host,
 				"to": map[string]interface{}{
 					"kind":   "Service",
 					"name":   serviceName,
@@ -124,18 +129,32 @@ func (c *Client) EnsurePassthroughRoute(ctx context.Context, namespace, name, ho
 			},
 		},
 	}
-	resource := c.DynamicClient.Resource(routeGVR).Namespace(namespace)
-	existing, err := resource.Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		_, err = resource.Create(ctx, route, metav1.CreateOptions{})
-		if err != nil && strings.Contains(err.Error(), "already exists") {
-			return nil
-		}
-		return err
+	if host != "" {
+		unstructured.SetNestedField(route.Object, host, "spec", "host")
 	}
-	route.SetResourceVersion(existing.GetResourceVersion())
-	_, err = resource.Update(ctx, route, metav1.UpdateOptions{})
-	return err
+	resource := c.DynamicClient.Resource(routeGVR).Namespace(namespace)
+	if existing, gerr := resource.Get(ctx, name, metav1.GetOptions{}); gerr == nil {
+		// Never rewrite spec.host on an existing route: the router assigned
+		// it, and changing it would also need routes/custom-host.
+		cur, _, _ := unstructured.NestedString(existing.Object, "spec", "host")
+		unstructured.SetNestedField(route.Object, cur, "spec", "host")
+		route.SetResourceVersion(existing.GetResourceVersion())
+		if _, uerr := resource.Update(ctx, route, metav1.UpdateOptions{}); uerr != nil {
+			return "", uerr
+		}
+		return cur, nil
+	}
+	created, cerr := resource.Create(ctx, route, metav1.CreateOptions{})
+	if cerr != nil {
+		if !strings.Contains(cerr.Error(), "already exists") {
+			return "", cerr
+		}
+		if created, cerr = resource.Get(ctx, name, metav1.GetOptions{}); cerr != nil {
+			return "", cerr
+		}
+	}
+	assigned, _, _ := unstructured.NestedString(created.Object, "spec", "host")
+	return assigned, nil
 }
 
 func toIfaceMap(in map[string]string) map[string]interface{} {
@@ -144,4 +163,25 @@ func toIfaceMap(in map[string]string) map[string]interface{} {
 		out[k] = v
 	}
 	return out
+}
+
+// RouteHostsByCluster maps cluster name -> the hostname the router assigned
+// to its api route. The hostname is authoritative only after creation, so the
+// SNI rules are built from this rather than from a computed name.
+func (c *Client) RouteHostsByCluster(ctx context.Context, namespace string) (map[string]string, error) {
+	list, err := c.DynamicClient.Resource(routeGVR).Namespace(namespace).
+		List(ctx, metav1.ListOptions{LabelSelector: "oct-shift-on-shift-virt/component=api-route"})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for i := range list.Items {
+		r := list.Items[i]
+		cluster := r.GetLabels()["oct-shift-on-shift-virt/cluster"]
+		host, _, _ := unstructured.NestedString(r.Object, "spec", "host")
+		if cluster != "" && host != "" {
+			out[cluster] = host
+		}
+	}
+	return out, nil
 }
