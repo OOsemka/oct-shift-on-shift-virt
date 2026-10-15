@@ -967,7 +967,7 @@ Replies must be byte-exact: glibc tolerates trailing bytes in the question
 section, Go's resolver (assisted-agent) discards such replies as malformed.
 """
 
-import socketserver, struct, sys
+import socketserver, struct, sys, traceback
 
 RECORDS = {
     "api.%[3]s.":     "%[1]s",
@@ -1019,6 +1019,20 @@ def _nxdomain(query):
     _, qend = parse_qname(query, 12)
     return header + query[12:qend + 4]
 
+def _empty_answer(query):
+    # NOERROR + ANCOUNT=0: the correct reply for a name we DO own that has no
+    # record of the requested type (AAAA on an IPv4-only zone, SRV, ...).
+    # This function was referenced but never defined, so every such query
+    # raised NameError inside the handler and NOTHING was sent back. A silent
+    # drop is far worse than an empty answer: curl/Go/kubelet resolve with
+    # AF_UNSPEC (A + AAAA in parallel) and block until their own timeout, so
+    # api-int became unresolvable for everything except glibc's slow fallback
+    # path — which is why getent looked fine while the masters could never
+    # join (run 12/13: AAAA = 5s timeout, A = 0.01s).
+    header = query[:2] + struct.pack(">HHHHH", 0x8400, 1, 0, 0, 0)
+    _, qend = parse_qname(query, 12)
+    return header + query[12:qend + 4]
+
 def forward(data):
     import socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1061,9 +1075,16 @@ class DNSHandler(socketserver.BaseRequestHandler):
             return
         qtype = struct.unpack(">H", data[offset:offset+2])[0]
 
-        resp = build_response(data, qname.lower(), qtype)
-        if resp is None:
-            resp = forward(data)
+        # NEVER let an exception turn into a silent drop: a dropped reply
+        # costs every client its full resolver timeout and reads like a
+        # network fault (see _empty_answer). SERVFAIL fails fast instead.
+        try:
+            resp = build_response(data, qname.lower(), qtype)
+            if resp is None:
+                resp = forward(data)
+        except Exception:
+            traceback.print_exc()
+            resp = data[:2] + struct.pack(">HHHHH", 0x8402, 1, 0, 0, 0) + data[12:offset + 4]
 
         if isinstance(self.request, tuple):
             sock.sendto(resp, self.client_address)

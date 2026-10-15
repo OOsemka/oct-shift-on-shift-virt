@@ -2230,3 +2230,78 @@ inside a live haproxy pod: EXIT=0 for both.
   BOOTSTRAP node too (its script comment says "non-bootstrap masters"). It did
   no harm here (kubelet NRestarts=0, bootstrap API healthy), but the rewrite
   is wrong for the rendezvous node and should be skipped there.
+
+---
+
+## 2026-10-15 05:46–07:20 UTC — RUN 13: HAProxy fix confirmed; the REAL join blocker is a missing function in dns.py
+
+### Bug B fix: confirmed working
+haproxy-api log is now clean — no `Connection refused` flapping, no
+`backend has no server available`. Generated cfg carries `retries 3` /
+`option redispatch` / no `check`. From the joining masters,
+**`https://10.101.0.10:6443/healthz` (the API VIP, by IP) = 200.** The VIP
+path is healthy.
+(Correction to a probe I ran first: I tested `.11`, which was run 12's lease.
+Run 13's haproxy-api lease is `.10` and DNS answers `.10` — both correct.
+Always read the lease from THIS run's status/annotation, never from memory of
+the previous run.)
+
+### Run 13 still died the same way — and the cause is DNS, not networking
+Same `Host timed out when pulling the configuration files`. Decisive split,
+measured from master-1 (installed OS, br-ex, resolv.conf -> 10.101.0.18):
+```
+api-int NAME :6443  : 000      <- curl: "Resolving timed out after 8000 ms"
+VIP .10:6443        : 200      <- same endpoint, by IP
+getent hosts api-int -> 10.101.0.10        (works!)
+python getaddrinfo   -> 10.101.0.10        (works!)
+```
+Raw query probe against the DNS VM nailed it:
+```
+A         0.01s rcode=0 answers=1
+A+EDNS    0.00s rcode=0 answers=1
+AAAA      5.01s TIMEOUT          <- no reply at all
+AAAA+EDNS 5.01s TIMEOUT
+```
+
+### ROOT CAUSE: `_empty_answer` was called but never defined
+`build_response` does `if qtype != 1: ... return _empty_answer(query)` — and
+that function does not exist anywhere in the generated script. Every non-A
+query for a name in our zone raised `NameError` inside the handler, so the
+server sent **nothing**. The comment above that branch even describes the
+exact failure it was meant to prevent; only the implementation was missing.
+
+Why it hid for so long: glibc falls back to the A answer after its own
+timeout, so every manual check (getent hosts api.$DOMAIN, the ConfigureNodes
+resolve_ok gate) PASSED. Clients that resolve AF_UNSPEC and wait for both
+families — curl, Go, kubelet, MCD — just hang. That is why the masters boot,
+fetch ignition, run kubelet, and then never join: they cannot resolve api-int
+by name, and everything after ignition uses the name.
+
+### Fix
+- `_empty_answer()` implemented: NOERROR + ANCOUNT=0 with the same
+  question-section slicing discipline as `_nxdomain` (no EDNS OPT carry-over).
+- Handler now wraps build_response/forward in try/except and replies
+  **SERVFAIL** on any unexpected exception. A silent drop costs every client
+  its full resolver timeout and reads like a network fault; this makes that
+  whole class of bug fail fast and loud instead.
+
+### Verified before shipping
+Rendered the real generateDNSScript output via a temporary Go test, ran it
+locally, and probed it:
+```
+A api-int     0.000s rcode=0 answers=1      AAAA api-int  0.001s rcode=0 answers=0
+A wildcard    0.001s rcode=0 answers=1      AAAA wildcard 0.000s rcode=0 answers=0
+SRV in-zone   0.001s rcode=0 answers=0      A unknown     0.000s rcode=3 (NXDOMAIN)
+```
+plus dig: A -> 10.101.0.10, AAAA -> status NOERROR, no malformed-packet
+warning. Python ast.parse syntax gate on the generated script.
+
+### Standing lessons
+- **A resolver gate that uses getent proves nothing about Go/curl clients.**
+  ConfigureNodes' resolve_ok must also assert AAAA answers promptly, or it
+  will keep green-lighting a DNS server that silently starves the cluster.
+- Backticks inside the embedded Python terminate the Go raw string literal —
+  one in a comment broke the build this session.
+- Do not use `pkill -f <pattern>` here: the pattern matches its own parent
+  shell and kills the command mid-flight (cost two commands this session).
+  Resolve PIDs via ss/pgrep and kill by PID.
