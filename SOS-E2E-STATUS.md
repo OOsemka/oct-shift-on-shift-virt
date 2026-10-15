@@ -2077,3 +2077,90 @@ with Bug B fix (repo HEAD 755cbd7, image tag :061256f+latest pushed & rolled out
 repo clean; run 10 gone; chris/chris-sos-odf Ready; no physical-node changes.
 NEXT AGENT: run 11 from /tmp/sos-nightly-RUN7.yaml after deciding Bug A approach
 (section above). Bug B fix will be exercised for the first time by run 11's join.
+
+---
+
+## 2026-10-15 03:45–05:0x UTC — RUN 11: Bug A root-caused to a CHANNEL, not a flag (fix verified live before shipping)
+
+### Run 11 outcome
+Phases CollectIPs→ConfigureNodes in **10 minutes**, all in-band, zero manual
+steps (deterministic IPs, MountISO, PowerOn all clean — the run-6..10 fix set
+is solid). Died at ConfigureNodes, and the hard-fail added this session paid
+for itself immediately: the job printed the actual blocker instead of hanging.
+
+### Finding 1 — the ABI REST API requires auth (why every earlier
+### installer_args attempt silently did nothing)
+`GET http://<rdv>:8090/api/assisted-install/v2/infra-envs` ->
+`{"code":401,"message":"unauthenticated for invalid credentials"}`.
+The token is `USER_AUTH_TOKEN` in `/etc/assisted/rendezvous-host.env` on the
+rendezvous node (root-only). Auth header is plain `Authorization: <token>`
+(no "Bearer"). Verified live: same call with the header -> HTTP 200.
+
+### Finding 2 — installer_args IS the right lever; the InfraEnv manifest is not
+`cmd/agentbasedinstaller/host_config.go` (the binary behind
+`apply-host-config.service`) reads ONLY `role`, `mac_addresses` and
+`root-device-hints.yaml` from `/etc/assisted/hostconfig/<host>/`. There is no
+installerArgs path anywhere in the manifest flow — **the run-9/10 infraenv
+`spec.installerArgs` surgery was always dead code**, exactly as the run-10
+snapshot evidence suggested. Removed.
+The real channel is `PATCH /v2/infra-envs/{ie}/hosts/{host}/installer-args`;
+assisted-installer passes `Config.InstallerArgs` straight into
+`WriteImageToDisk`, and `--append-karg` + `--copy-network` are both on
+assisted-service's `allowedFlags` (pkg/validations/validations.go).
+**`--copy-network` matters as much as the karg**: without it assisted-installer
+skips `configureFirstBootNetworking`, so the discovery environment's NM
+keyfiles never reach `/boot/coreos-firstboot-network` — the initramfs network
+config for the installed system's FIRST boot, i.e. the stage that deadlocks.
+
+### Finding 3 — the install auto-starts too fast to patch from a Job (the race)
+Hosts were already `installing-in-progress` ~10 min after PowerOn, before the
+ConfigureNodes job got through its first API call. **Patching installer_args
+out-of-band is unwinnable by design.**
+User screenshot of master-1 at that moment is textbook root cause A:
+`ignition[820]: GET error ... lookup api-int.sos-nightly.chris.lab on 172.`
+= the installed OS resolving against **172.30.0.10** (host CoreDNS from UDN
+DHCP), attempt #53, no limit.
+
+### The fix: a systemd unit inside the ISO, not a job
+`generateISO` now bakes into the agent ISO's ignition:
+ * `/usr/local/bin/sos-set-installer-args.sh` (mode 0755, Ignition-3.x
+   `contents.source` data URL — never `inline`, run-7 lesson), and
+ * `sos-installer-args.service`, `enabled: true`, ordered
+   `After=agent-register-infraenv.service apply-host-config.service`,
+   `Before=start-cluster-installation.service`,
+   `WantedBy=start-cluster-installation.service`,
+   `ConditionPathExists=/etc/assisted/node0`.
+Wired **exactly like the platform's own apply-host-config.service**, so it is
+race-free by construction: the install cannot start until it finishes. It runs
+where `USER_AUTH_TOKEN` already lives (EnvironmentFile), so no credential is
+copied anywhere. It waits for all N hosts, PATCHes
+`["--append-karg","nameserver=<dnsIP>","--copy-network"]`, reads each host
+back, writes `/etc/assisted/sos-installer-args.result`, and **always exits 0**
+(a wedged start-cluster-installation is worse than a degraded resolver).
+ConfigureNodes no longer sets args — it verifies that marker AFTER its DNS fix
+(waiting before would deadlock: the unit only runs once validations pass, and
+the DNS fix is what makes them pass). node-guard gained a `/proc/cmdline`
+evidence line.
+
+### Verification done BEFORE shipping (the run-7/8 discipline)
+1. Offline dry-run of the ignition surgery against a synthetic 61-file config
+   — the read-back verifier CAUGHT A REAL BUG in itself (asserted a literal
+   `nameserver=<ip>` that never appears; the script carries `DNS_IP="<ip>"`
+   and uses `nameserver=$DNS_IP`). Fixed, re-run clean.
+2. Extracted the baked script from the embedded ignition, `bash -n` clean,
+   substitutions confirmed (`DNS_IP="10.101.0.18"`, `WANT=3`).
+3. **Ran the exact baked script on the live rendezvous node**: `hosts
+   registered: 3/3` -> `installer_args verified (http=201)` x3 ->
+   `installer_args applied to 3/3 hosts`. Auth, endpoint, JSON body quoting
+   and read-back proven against the real service, not a mock.
+
+Still unproven (run 12 decides): that coreos-installer lands the karg in the
+INSTALLED bootloader entries. Evidence: node-guard WARN line +
+`/etc/assisted/sos-installer-args.result`.
+
+### Standing lessons
+- Never probe the ABI REST API unauthenticated and conclude "no infra-env".
+- Anything that must beat the install start belongs in the ISO as a unit
+  ordered `Before=start-cluster-installation.service`, not in a Job.
+- `pkill -f <pat>` matches its own parent shell when the pattern appears in
+  the command line — it killed the writing shell here. Use a pidfile.
