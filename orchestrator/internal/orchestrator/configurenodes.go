@@ -214,6 +214,11 @@ func (s *StepExecutor) configureNodes(ctx context.Context, nc *crd.NestedCluster
 	}
 	s.applyRendezvousFindings(ctx, nc, logs, log)
 
+	// The nodes answered SSH and the assisted agents are registered, so the
+	// console can stop showing them as "Pending".
+	setNodeLifecycle(nc, "", "Discovered")
+	s.updateCRStatus(ctx, nc)
+
 	if err := s.ensureNodeGuard(ctx, nc, nodeIPs, dnsIP, apiIP, clusterDomain, sshSecretName); err != nil {
 		// Non-fatal: the guard repairs post-pivot regressions (DNS revert,
 		// bootstrap kubeconfig pointing at localhost:6443). Losing it is

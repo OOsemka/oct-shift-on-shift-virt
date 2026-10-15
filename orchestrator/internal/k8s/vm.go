@@ -108,7 +108,12 @@ func (c *Client) CreateVM(ctx context.Context, params VMCreateParams) (string, e
 						},
 						"spec": map[string]interface{}{
 							"storage": map[string]interface{}{
-								"accessModes": []interface{}{"ReadWriteOnce"},
+								// RWX: live migration needs both the source and
+								// target virt-launcher to hold the volume during
+								// handover. Verified that the RBD StorageClass
+								// binds RWX Block, so no StorageClass change is
+								// needed alongside the l2bridge switch.
+								"accessModes": []interface{}{"ReadWriteMany"},
 								"resources": map[string]interface{}{
 									"requests": map[string]interface{}{
 										"storage": fmt.Sprintf("%dGi", params.DiskGi),
@@ -161,13 +166,22 @@ func (c *Client) ListVMs(ctx context.Context, namespace, clusterName string) ([]
 	return list.Items, nil
 }
 
-// makePrimaryInterface creates a bridge-mode interface on the default pod network.
-// With Primary cUDN, the default pod network IS the UDN — bridge gives the VM
-// direct L2 access to the cUDN subnet.
+// makePrimaryInterface attaches the VM to the default pod network, which on a
+// Primary cUDN IS the UDN, so the VM gets its own address on the cUDN subnet.
+//
+// The l2bridge BINDING PLUGIN is used rather than the legacy core "bridge"
+// binding. Both give the VM a distinct cUDN address, but core bridge is not
+// live-migratable ("cannot migrate VMI which does not use masquerade or a
+// migratable plugin"), while l2bridge uses domainAttachmentType managedTap
+// and declares migration support. Verified on this cluster with a test VM:
+// a pinned MAC and a preseeded IPAMClaim were both honoured, and the VM
+// live-migrated between hosts keeping both. The plugin is registered
+// cluster-wide in the KubeVirt CR as
+// {"l2bridge":{"domainAttachmentType":"managedTap","migration":{}}}.
 func makePrimaryInterface(mac string) map[string]interface{} {
 	iface := map[string]interface{}{
-		"name":   "default",
-		"bridge": map[string]interface{}{},
+		"name":    "default",
+		"binding": map[string]interface{}{"name": "l2bridge"},
 	}
 	if mac != "" {
 		iface["macAddress"] = mac
@@ -198,7 +212,9 @@ func (c *Client) CreateISODataVolume(ctx context.Context, namespace, dvName, sou
 					},
 				},
 				"storage": map[string]interface{}{
-					"accessModes": []interface{}{"ReadWriteOnce"},
+					// Attached to the VM as a cdrom, so it has to be RWX as
+					// well or it alone would block migration.
+					"accessModes": []interface{}{"ReadWriteMany"},
 					"volumeMode":  "Block",
 					"resources": map[string]interface{}{
 						"requests": map[string]interface{}{
@@ -586,7 +602,7 @@ func (c *Client) CreateInfraVM(ctx context.Context, p InfraVMParams) error {
 			},
 		},
 		"interfaces": []interface{}{
-			map[string]interface{}{"name": "default", "bridge": map[string]interface{}{}},
+			map[string]interface{}{"name": "default", "binding": map[string]interface{}{"name": "l2bridge"}},
 		},
 	}
 	if p.Graphical {
@@ -668,7 +684,8 @@ func (c *Client) CreateInfraVM(ctx context.Context, p InfraVMParams) error {
 						},
 						"spec": map[string]interface{}{
 							"pvc": map[string]interface{}{
-								"accessModes":      []interface{}{"ReadWriteOnce"},
+								// RWX: required for live migration (see above).
+								"accessModes":      []interface{}{"ReadWriteMany"},
 								"storageClassName": p.StorageClassName,
 								"resources": map[string]interface{}{
 									"requests": map[string]interface{}{"storage": fmt.Sprintf("%dGi", p.DiskGi)},
