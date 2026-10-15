@@ -156,6 +156,10 @@ func (c *Client) DeleteJob(ctx context.Context, namespace, name string) error {
 	return nil
 }
 
+// CreatePVC makes a FILESYSTEM RWO claim. This is a deliberate exception to
+// the "VM disks are always RWX Block" rule: the only caller is the
+// generate-iso job's scratch directory, which a POD mounts as a filesystem.
+// RWX Block would make it unmountable, and nothing migrates it.
 func (c *Client) CreatePVC(ctx context.Context, namespace, name, storageClass, size string) error {
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -215,6 +219,9 @@ func (c *Client) reclaimTerminatingPVC(ctx context.Context, namespace, name stri
 	return fmt.Errorf("PVC %s/%s stuck terminating after 5m", namespace, name)
 }
 
+// CreateBlockPVC makes an RWO Block claim. Also a deliberate exception: its
+// only caller is the intermediate ISO conversion target in the operator
+// namespace, which exists to be snapshotted and is never attached to a VM.
 func (c *Client) CreateBlockPVC(ctx context.Context, namespace, name, storageClass, size string) error {
 	blockMode := corev1.PersistentVolumeBlock
 	pvc := &corev1.PersistentVolumeClaim{
