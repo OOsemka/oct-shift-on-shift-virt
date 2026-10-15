@@ -402,9 +402,14 @@ func (s *StepExecutor) applyRendezvousFindings(ctx context.Context, nc *crd.Nest
 // namespace, attached to the cUDN — this is the only vantage point that can
 // reach the VMs' overlay IPs).
 const configureNodesScript = `#!/bin/bash
-# One-shot per-cluster node bring-up: SSH into each nested VM to replace the
-# bogus DHCP-provided resolver, restart the assisted agent so its runner
-# re-reads resolv.conf, then discover the rendezvous node via :8090.
+# One-shot per-cluster node bring-up. Two stages, in this order:
+#
+#   0. Set per-host installer_args in the rendezvous node's assisted-service
+#      (THE fix for the installed-OS first-boot deadlock — see below). This
+#      MUST happen before assisted-service decides the cluster is ready and
+#      hands each agent its install step, hence it runs first.
+#   1. SSH into each nested VM to replace the bogus DHCP-provided resolver and
+#      restart the assisted agent so its runner re-reads resolv.conf.
 set -uo pipefail
 
 if [ ! -f /sshkey/ssh-privatekey ]; then
@@ -417,6 +422,109 @@ install -m 600 /sshkey/ssh-privatekey /tmp/id_key
 SSHOPT="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6 -o LogLevel=ERROR -i /tmp/id_key"
 configured=0
 
+# ---------------------------------------------------------------- stage 0 ---
+# Why this exists (run-6/run-10 deadlock, root cause A):
+#
+# After the agent writes RHCOS to disk and the node reboots, the INSTALLED
+# system runs ignition in its initramfs and fetches
+# https://api-int.<domain>:22623/config/master. Only two things can give that
+# initramfs a working resolver:
+#   * the installed bootloader's kernel arguments (nameserver=), and
+#   * /boot/coreos-firstboot-network, which coreos-installer populates from the
+#     live environment's NetworkManager keyfiles — but ONLY when it is invoked
+#     with --copy-network (without it assisted-installer skips
+#     configureFirstBootNetworking entirely).
+# Both are written by coreos-installer during the agent install, and the ONLY
+# channel that reaches that invocation is the per-host installer_args in
+# assisted-service (assisted-installer passes Config.InstallerArgs straight to
+# WriteImageToDisk). Every other lever is rejected on 4.22 — agent-config
+# kernelArguments / ignition / installerArgs / postInstallRebootCmds are all
+# "unknown field", /etc/coreos/installer.d turns the live ISO into
+# auto-install-on-boot and emergency-shells it, and the ISO's embedded InfraEnv
+# manifest has no installerArgs field for assisted-service to read.
+# --append-karg and --copy-network are both on assisted-service's allowedFlags.
+rendezvous_wait() {
+    for i in $(seq 1 90); do
+        for ip in $NODE_IPS; do
+            if (exec 3<>/dev/tcp/"$ip"/8090) 2>/dev/null; then
+                exec 3>&- 3<&-
+                echo "$ip"
+                return 0
+            fi
+        done
+        sleep 10
+    done
+    return 1
+}
+
+# JSON field extraction without jq (the helper image is deliberately tiny).
+# '"id":"<uuid>"' cannot match inside '"infra_env_id":"..."' or
+# '"cluster_id":"..."' because the pattern anchors on the opening quote.
+json_ids() { grep -o '"id":"[0-9a-f][0-9a-f-]\{34\}[0-9a-f]"' | cut -d'"' -f4; }
+
+rdv=$(rendezvous_wait) || rdv=""
+echo "RENDEZVOUS_IP=${rdv:-none}"
+
+args_set=0
+hosts_total=0
+if [ -z "$rdv" ]; then
+    echo "FATAL: no node served assisted-service :8090 within 15min"
+    exit 1
+fi
+
+API="http://$rdv:8090/api/assisted-install/v2"
+INFRA_ENV=""
+for i in $(seq 1 60); do
+    INFRA_ENV=$(curl -s --max-time 10 "$API/infra-envs" | json_ids | head -1)
+    [ -n "$INFRA_ENV" ] && break
+    sleep 5
+done
+if [ -z "$INFRA_ENV" ]; then
+    echo "FATAL: assisted-service on $rdv has no infra-env after 5min"
+    curl -s --max-time 10 "$API/infra-envs" | head -c 500; echo
+    exit 1
+fi
+echo "assisted-service infra-env $INFRA_ENV on $rdv"
+
+# Wait for every node to register before patching: a host that registers after
+# we patch would install with default args and deadlock on its first boot.
+want=$(echo $NODE_IPS | wc -w)
+for i in $(seq 1 90); do
+    hosts_total=$(curl -s --max-time 10 "$API/infra-envs/$INFRA_ENV/hosts" | json_ids | wc -l)
+    [ "$hosts_total" -ge "$want" ] && break
+    sleep 10
+done
+echo "registered hosts: $hosts_total/$want"
+
+INSTALLER_ARGS="{\"args\":[\"--append-karg\",\"nameserver=$DNS_IP\",\"--copy-network\"]}"
+for hid in $(curl -s --max-time 10 "$API/infra-envs/$INFRA_ENV/hosts" | json_ids); do
+    code=$(curl -s -o /tmp/ia.out -w '%{http_code}' --max-time 20 -X PATCH \
+        -H 'Content-Type: application/json' -d "$INSTALLER_ARGS" \
+        "$API/infra-envs/$INFRA_ENV/hosts/$hid/installer-args")
+    if [ "$code" != "201" ] && [ "$code" != "200" ]; then
+        echo "FAIL host $hid: installer-args PATCH http=$code $(head -c 300 /tmp/ia.out)"
+        continue
+    fi
+    # Read back: a 2xx that did not persist is the exact class of failure that
+    # cost run 10 (grep-only verification is banned in this codebase).
+    if curl -s --max-time 10 "$API/infra-envs/$INFRA_ENV/hosts/$hid" | grep -q -- "nameserver=$DNS_IP"; then
+        echo "OK host $hid: installer_args verified (nameserver=$DNS_IP, --copy-network)"
+        args_set=$((args_set+1))
+    else
+        echo "FAIL host $hid: installer_args not present after PATCH http=$code"
+    fi
+done
+echo "INSTALLER_ARGS_SET=$args_set/$hosts_total"
+if [ "$args_set" -eq 0 ]; then
+    echo "FATAL: no host accepted installer_args — the installed OS would"
+    echo "deadlock in initramfs ignition-fetch with an unreachable resolver."
+    exit 1
+fi
+if [ "$args_set" -lt "$want" ]; then
+    echo "WARN: only $args_set/$want hosts carry installer_args"
+fi
+
+# ---------------------------------------------------------------- stage 1 ---
 for ip in $NODE_IPS; do
     up=0
     for i in $(seq 1 18); do
@@ -438,26 +546,6 @@ for ip in $NODE_IPS; do
         echo "FAIL $ip: dns configuration"
     fi
 done
-
-# Rendezvous discovery: only node-zero serves the assisted-service on 8090.
-rdv=""
-for i in $(seq 1 90); do
-    for ip in $NODE_IPS; do
-        if (exec 3<>/dev/tcp/"$ip"/8090) 2>/dev/null; then
-            exec 3>&- 3<&-
-            rdv=$ip
-            break
-        fi
-    done
-    [ -n "$rdv" ] && break
-    sleep 10
-done
-echo "RENDEZVOUS_IP=${rdv:-none}"
-
-# Surface the install progress that is visible from the rendezvous node.
-if [ -n "$rdv" ]; then
-    curl -s --max-time 10 "http://$rdv:8090/api/assisted-install/v2/clusters" >/dev/null 2>&1 || true
-fi
 
 if [ $configured -eq 0 ]; then
     echo "configure-nodes: no node could be configured over ssh"
@@ -527,6 +615,16 @@ if [ -f /etc/kubernetes/kubeconfig ] && sudo grep -q "server: https://localhost:
     sudo sed -i "s#server: https://localhost:6443#server: https://api-int.$DOMAIN:6443#" /etc/kubernetes/kubeconfig
     sudo systemctl restart kubelet
     echo "FIX kubeconfig server -> https://api-int.$DOMAIN:6443 (kubelet restarted)"
+fi
+
+# 3. Evidence line, not a repair: the live ISO carries nameserver= because we
+#    patch the ISO kargs, and the INSTALLED system carries it because of the
+#    assisted-service installer_args --append-karg. Seeing this WARN after a
+#    pivot means that channel did not apply, which is the signature of the
+#    initramfs ignition-fetch deadlock (the node only reaches sshd when the
+#    fetch succeeded, so a WARN here is about future boots).
+if ! grep -q "nameserver=$DNS_IP" /proc/cmdline 2>/dev/null; then
+    echo "WARN karg nameserver=$DNS_IP absent from /proc/cmdline"
 fi
 exit 0
 `
