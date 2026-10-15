@@ -1880,6 +1880,19 @@ func (s *StepExecutor) waitBootstrap(ctx context.Context, nc *crd.NestedCluster)
 			BackoffLimit:          &backoffLimit,
 			ActiveDeadlineSeconds: &deadline,
 			Template: corev1.PodTemplateSpec{
+				// These labels MUST mirror the Job's: postInstall locates the
+				// finished pod by cluster+component to read the kubeconfig and
+				// kubeadmin password out of its log (it deliberately does not
+				// select by job-name, so a retried "-r2" job still wins).
+				// Without them the nested install succeeds and PostInstall then
+				// dies with "no pods found for wait-bootstrap" — run 15 reached a
+				// fully healthy 34/34 nested cluster and still failed the CR.
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"oct-shift-on-shift-virt/cluster":   nc.Spec.ClusterName,
+						"oct-shift-on-shift-virt/component": "wait-bootstrap",
+					},
+				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{
@@ -1998,6 +2011,19 @@ func (s *StepExecutor) waitInstall(ctx context.Context, nc *crd.NestedCluster) e
 			BackoffLimit:          &backoffLimit,
 			ActiveDeadlineSeconds: &deadline,
 			Template: corev1.PodTemplateSpec{
+				// These labels MUST mirror the Job's: postInstall locates the
+				// finished pod by cluster+component to read the kubeconfig and
+				// kubeadmin password out of its log (it deliberately does not
+				// select by job-name, so a retried "-r2" job still wins).
+				// Without them the nested install succeeds and PostInstall then
+				// dies with "no pods found for wait-install" — run 15 reached a
+				// fully healthy 34/34 nested cluster and still failed the CR.
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"oct-shift-on-shift-virt/cluster":   nc.Spec.ClusterName,
+						"oct-shift-on-shift-virt/component": "wait-install",
+					},
+				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{
@@ -2077,8 +2103,24 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 	pods, err := s.client.Clientset.CoreV1().Pods(clusterNs).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
+	// Fallback to the batch-assigned job-name label. By this point the nested
+	// cluster is INSTALLED; losing it to a pod-labelling mismatch is the worst
+	// possible trade (run 15: 34/34 operators healthy, CR Failed). Covers jobs
+	// created by an older image and any future template/selector drift.
 	if err != nil || len(pods.Items) == 0 {
-		return fmt.Errorf("no pods found for wait-install (selector %s)", labelSelector)
+		for _, jn := range []string{nc.Spec.ClusterName + "-wait-install-r2", nc.Spec.ClusterName + "-wait-install"} {
+			byJob, jerr := s.client.Clientset.CoreV1().Pods(clusterNs).List(ctx, metav1.ListOptions{
+				LabelSelector: "job-name=" + jn,
+			})
+			if jerr == nil && len(byJob.Items) > 0 {
+				log.Info("wait-install pod found via job-name fallback (pod template labels missing)", "job", jn)
+				pods, err = byJob, nil
+				break
+			}
+		}
+	}
+	if err != nil || len(pods.Items) == 0 {
+		return fmt.Errorf("no pods found for wait-install (selector %s, job-name fallback also empty)", labelSelector)
 	}
 	// Newest attempt wins (a retried job -r2 carries the authoritative output).
 	newest := pods.Items[0]
