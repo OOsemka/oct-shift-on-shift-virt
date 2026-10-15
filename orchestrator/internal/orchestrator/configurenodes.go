@@ -216,7 +216,7 @@ func (s *StepExecutor) configureNodes(ctx context.Context, nc *crd.NestedCluster
 
 	// The nodes answered SSH and the assisted agents are registered, so the
 	// console can stop showing them as "Pending".
-	setNodeLifecycle(nc, "", "Discovered")
+	setNodeLifecycle(nc, "ISO", "Discovering")
 	s.updateCRStatus(ctx, nc)
 
 	if err := s.ensureNodeGuard(ctx, nc, nodeIPs, dnsIP, apiIP, clusterDomain, sshSecretName); err != nil {
