@@ -90,6 +90,7 @@ func (s *StepExecutor) deployBastionEarly(ctx context.Context, nc *crd.NestedClu
 		StorageClassName: nc.Spec.StorageClassName,
 		DataSourceNS:     "openshift-virtualization-os-images",
 		DataSourceName:   bastionBaseImage(),
+		Graphical:        nc.Spec.Bastion.Graphical,
 		UserData:         bastionUserData(name, pubKey, masterIPs, nc.Spec.Bastion.Graphical, desktopUser),
 	}); err != nil {
 		return fmt.Errorf("creating bastion VM: %w", err)
