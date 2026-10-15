@@ -299,6 +299,11 @@ func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool
 		// extras, the Xfce group then resolves, lightdm comes from EPEL and
 		// gdm would come from AppStream.
 		//
+		// --force on the enable is required: gdm arrives as a dependency and
+		// already owns /etc/systemd/system/display-manager.service, so a
+		// plain enable fails with "file already exists" and, because the
+		// steps are chained, silently skips set-default and isolate.
+		//
 		// A display manager is what makes this work through the OpenShift
 		// VM console: that console is VNC onto the VM's emulated display, so
 		// X has to run on the VM's own console — a VNC server inside the
@@ -312,7 +317,7 @@ func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool
 		desktop = fmt.Sprintf(`  - useradd -m -s /bin/bash -G wheel %[1]s || true
   - printf 'nameserver 127.0.0.1\n' > /etc/resolv.conf
   - chattr +i /etc/resolv.conf || true
-  - nohup bash -c 'dnf -y install epel-release && dnf -y group install Xfce && dnf -y install lightdm lightdm-gtk-greeter firefox && systemctl enable lightdm && systemctl set-default graphical.target && systemctl isolate graphical.target' >/var/log/sos-desktop.log 2>&1 &
+  - nohup bash -c 'dnf -y install epel-release && dnf -y group install Xfce && dnf -y install lightdm lightdm-gtk-greeter firefox && systemctl enable --force lightdm && systemctl set-default graphical.target && systemctl isolate graphical.target' >/var/log/sos-desktop.log 2>&1 &
 `, desktopUser)
 	}
 	return fmt.Sprintf(`#cloud-config
