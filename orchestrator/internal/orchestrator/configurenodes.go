@@ -116,9 +116,28 @@ func (s *StepExecutor) configureNodes(ctx context.Context, nc *crd.NestedCluster
 		}
 	}
 
-	sshSecretName := nc.Spec.SSHKeyRef.Name
-	if sshSecretName == "" {
-		sshSecretName = nc.Spec.ClusterName + "-ssh-key"
+	sshSecretName := sshSecretNameFor(nc)
+
+	// Nothing to do on an already-installed cluster. ConfigureNodes exists to
+	// fix the discovery-time resolver and find the rendezvous node, and both
+	// of those live in the agent ISO: once the masters pivot, assisted-service
+	// on :8090 is gone for good. A requeue would then sit in the rendezvous
+	// wait for its full 15 minutes, fail, and retry up to backoffLimit times
+	// — ~90 minutes of silence on a perfectly healthy cluster. (Seen for real
+	// when a status-validation bug froze a CR at PowerOn and the engine
+	// replayed the phases against an installed cluster.)
+	//
+	// The kubeconfig Secret is the unambiguous signal: only PostInstall
+	// creates it. node-guard is still ensured, because its repair loop is
+	// what keeps the resolver pinned for the life of the cluster.
+	if kc, kerr := s.client.GetSecretData(ctx, clusterNs, nc.Spec.ClusterName+"-kubeconfig", "kubeconfig"); kerr == nil && len(kc) > 0 {
+		log.Info("cluster is already installed (kubeconfig secret present); skipping node configuration and ensuring node-guard only")
+		setNodeLifecycle(nc, "Disk", "Installed")
+		s.updateCRStatus(ctx, nc)
+		if err := s.ensureNodeGuard(ctx, nc, nodeIPs, dnsIP, apiIP, clusterDomain, sshSecretNameFor(nc)); err != nil {
+			log.Error("node-guard deployment failed (continuing)", "error", err.Error())
+		}
+		return nil
 	}
 
 	// Preflight the private key BEFORE creating the Job. The pod mounts
@@ -692,3 +711,17 @@ echo "FAIL: api.$DOMAIN never resolved to $API_IP via $DNS_IP"
 getent hosts "api.$DOMAIN" || true
 exit 1
 `
+
+// sshSecretNameFor resolves the per-cluster SSH secret, honouring an explicit
+// ref when the CR carries one.
+func sshSecretNameFor(nc *crd.NestedCluster) string {
+	if nc.Spec.SSHKeyRef.Name != "" {
+		return nc.Spec.SSHKeyRef.Name
+	}
+	return nc.Spec.ClusterName + "-ssh-key"
+}
+
+// configureNodesGuardDoc records the signal the skip is keyed on, so a test
+// can assert it stays the kubeconfig Secret (created only by PostInstall)
+// rather than something a requeue would reset.
+const configureNodesGuardDoc = "skip when the kubeconfig secret exists; still ensure node-guard"
