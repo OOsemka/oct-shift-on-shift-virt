@@ -2164,3 +2164,69 @@ INSTALLED bootloader entries. Evidence: node-guard WARN line +
   ordered `Before=start-cluster-installation.service`, not in a Job.
 - `pkill -f <pat>` matches its own parent shell when the pattern appears in
   the command line — it killed the writing shell here. Use a pidfile.
+
+---
+
+## 2026-10-15 04:18–05:40 UTC — RUN 12: **BUG A IS DEAD** (proven on the wire); new wall = Bug B in the API backend
+
+### Bug A: fixed, with direct evidence
+The in-ISO `sos-installer-args.service` worked exactly as designed:
+ * GenerateISO: `ignition edited: ... + sos-installer-args.service (want=3)` ->
+   `read-back OK` -> `karg injected`.
+ * ConfigureNodes: `INSTALLER_ARGS_RESULT: installer_args applied to 3/3 hosts`
+   — the unit beat the install auto-start, which no Job ever could.
+ * **The decisive measurement**, on both pivoted masters:
+   ```
+   10.101.0.101: up 11 minutes   nameserver=10.101.0.18
+   10.101.0.102: up 11 minutes   nameserver=10.101.0.18
+   ```
+   SSH OPEN = they booted THROUGH the installed-OS initramfs ignition fetch
+   that killed runs 6/10/11, and `/proc/cmdline` carries our resolver.
+   Compare the 04:0x console capture of the same nodes: `lookup
+   api-int... on 172.30.0.10`, attempt #53, no limit.
+   Masters then ran kubelet + MCO static pods (kube-rbac-proxy-crio), i.e.
+   they fetched and applied their real machine config.
+
+Phases CollectIPs->WaitBootstrap in **12 minutes**, fully in-band.
+
+### Where run 12 died: `Host timed out when pulling the configuration files`
+masters 1/2 never joined. Root cause is **Bug B in a backend the run-10 fix
+did not cover**. Evidence chain:
+ * master-0's bootstrap apiserver is HEALTHY: `localhost:6443/healthz`=200,
+   `10.101.0.100:6443/healthz`=200, listening, kubelet NRestarts=0.
+ * From masters 1/2: `api-int:6443`=000 AND `api-int:22623`=000.
+ * haproxy-api log: `master0 is UP ... master0 is DOWN, Connection refused`
+   alternating, master1/master2 permanently DOWN (Layer4 timeout — correct,
+   they have no apiserver yet), ending in
+   **`backend 'api-server-backend' has no server available!`**
+ * Generated config showed why: `mcs-backend` has NO check (the run-10 fix —
+   and MCS/ignition worked perfectly all run), while `api-server-backend`
+   still had `check` on all three masters.
+ * Addresses were all correct (apiVIPcUDN .11 == haproxy-api's real cUDN
+   lease; my earlier "nominal ingressVIP collision" worry was unfounded).
+
+So: during bootstrap master0 is the ONLY live API backend, and a single
+flapping pod->VM L4 check empties the entire backend and blackholes the VIP
+precisely while the other masters are trying to join.
+
+### Fix (this commit)
+`check` removed from api-server-backend AND both ingress backends; liveness
+moved to `retries 3` + `option redispatch` + `timeout connect 2s` in
+`defaults`. A master that is not serving yet refuses instantly and the
+connection is redispatched to one that is — no flap window, no empty backend,
+and it degrades gracefully as masters join one by one.
+Validated by rendering the REAL generator output (temporary Go test calling
+generateHAProxyConfigAPI/Ingress) and running `haproxy -c -f` against it
+inside a live haproxy pod: EXIT=0 for both.
+
+### Carried forward (not blocking)
+- `WARN PERSIST: no keyfile with the pin` on all nodes: the agent ISO's NM
+  connection is runtime-generated, so `nmcli modify` lands in
+  /run/NetworkManager/system-connections while `--copy-network` reads
+  /etc/NetworkManager/system-connections. The karg layer carried the boot
+  alone, so this is a redundancy gap, not a bug. Fix later by writing a real
+  /etc keyfile.
+- node-guard applies the `localhost:6443 -> api-int` kubeconfig rewrite to the
+  BOOTSTRAP node too (its script comment says "non-bootstrap masters"). It did
+  no harm here (kubelet NRestarts=0, bootstrap API healthy), but the rewrite
+  is wrong for the rendezvous node and should be skipped there.

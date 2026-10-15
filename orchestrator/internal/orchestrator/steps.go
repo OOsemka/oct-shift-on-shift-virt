@@ -538,7 +538,15 @@ func (s *StepExecutor) generateHAProxyConfigAPI(nc *crd.NestedCluster) string {
 		if node.IP == "" {
 			continue
 		}
-		apiServers += fmt.Sprintf("  server master%d %s:6443 check\n", i, node.IP)
+		// NO health check — same reason as the MCS relay below, and proven
+		// again in run 12: pod->VM L4 checks on the cUDN flap, and while
+		// masters 1..n have not joined yet master0 is the ONLY live backend,
+		// so a single flap empties the whole backend ("no server available")
+		// and the joining masters' api-int:6443 goes dark exactly when they
+		// need it. Liveness is handled by retries+redispatch in defaults: a
+		// master that is not serving yet refuses instantly and the connection
+		// is redispatched to one that is.
+		apiServers += fmt.Sprintf("  server master%d %s:6443\n", i, node.IP)
 	}
 
 	// MCS (22623/22624) is fronted here, but its servers can NEVER be the
@@ -564,7 +572,14 @@ func (s *StepExecutor) generateHAProxyConfigAPI(nc *crd.NestedCluster) string {
 
 defaults
   mode tcp
-  timeout connect 10s
+  # Backends are reached pod->VM over the cUDN and come up over time (a
+  # joining master refuses :6443 until its apiserver starts). Health checks
+  # flap on this path, so liveness is handled here instead: a failed connect
+  # is retried on a DIFFERENT server (redispatch) with a short connect
+  # timeout, which costs milliseconds on a refusal.
+  retries 3
+  option redispatch
+  timeout connect 2s
   timeout client  1m
   timeout server  1m
 
@@ -597,8 +612,8 @@ func (s *StepExecutor) generateHAProxyConfigIngress(nc *crd.NestedCluster) strin
 		if node.IP == "" {
 			continue
 		}
-		httpsServers += fmt.Sprintf("  server master%d %s:443 check\n", i, node.IP)
-		httpServers += fmt.Sprintf("  server master%d %s:80 check\n", i, node.IP)
+		httpsServers += fmt.Sprintf("  server master%d %s:443\n", i, node.IP)
+		httpServers += fmt.Sprintf("  server master%d %s:80\n", i, node.IP)
 	}
 
 	return fmt.Sprintf(`global
@@ -606,7 +621,14 @@ func (s *StepExecutor) generateHAProxyConfigIngress(nc *crd.NestedCluster) strin
 
 defaults
   mode tcp
-  timeout connect 10s
+  # Backends are reached pod->VM over the cUDN and come up over time (a
+  # joining master refuses :6443 until its apiserver starts). Health checks
+  # flap on this path, so liveness is handled here instead: a failed connect
+  # is retried on a DIFFERENT server (redispatch) with a short connect
+  # timeout, which costs milliseconds on a refusal.
+  retries 3
+  option redispatch
+  timeout connect 2s
   timeout client  1m
   timeout server  1m
 
