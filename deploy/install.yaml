@@ -226,6 +226,27 @@ rules:
       - update
       - patch
       - delete
+  # Read-only, needed ONLY to learn the HOST cluster's apps domain so the
+  # nested API/console Routes can be given a hostname. Without these,
+  # PostInstall logs "exposure degraded (cluster still healthy)" and skips
+  # route creation — the nested cluster itself is unaffected.
+  - apiGroups:
+      - config.openshift.io
+    resources:
+      - infrastructures
+      - dnses
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - operator.openshift.io
+    resources:
+      - ingresscontrollers
+    verbs:
+      - get
+      - list
+      - watch
   - apiGroups:
       - ""
     resources:

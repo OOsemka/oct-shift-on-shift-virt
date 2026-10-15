@@ -2378,3 +2378,63 @@ bootstrap-secrets -> SKIP, plain joined master -> REWRITE.
   future run joins but trips something slow, the run cannot self-recover.
   Worth a product guard later (detect + reset host), not needed if bootstrap
   completes normally.
+
+---
+
+## 2026-10-15 09:37–10:27 UTC — RUN 15: **E2E ACHIEVED — nested OpenShift fully deployed, 34/34 operators**
+
+### The run
+```
+09:37:49 CollectIPs      09:45:54 MountISO        10:06:38 WaitInstall
+09:38:50 MCSRelay        09:47:24 PowerOn         10:22:47 (PostInstall bug)
+09:40:51 DeployDNS       09:47:55 ConfigureNodes  10:27:00 Ready
+09:43:52 GenerateISO     09:49:26 WaitBootstrap
+```
+**Bootstrap complete 10:06:10** — 29 minutes from CR apply, with ZERO manual
+node intervention. `wait-bootstrap` Complete 1/1 in 16m, `wait-install`
+Complete 1/1 in 16m.
+
+### Acceptance (queried from inside the nested cluster)
+```
+sos-nightly-master-0   Ready   control-plane,master,worker   v1.35.6
+sos-nightly-master-1   Ready   control-plane,master,worker   v1.35.6
+sos-nightly-master-2   Ready   control-plane,master,worker   v1.35.6
+clusterversion  4.22.14  Available=True  Progressing=False
+ClusterOperators: total=34  Available=34  Degraded=0
+```
+
+### The last defect: wait-job pods had no labels
+Install succeeded, then `PostInstall failed: no pods found for wait-install`.
+postInstall selects the finished pod by cluster+component labels (not by
+job-name, so a retried -r2 wins) — but the wait-bootstrap/wait-install Jobs
+carried those labels **only on the Job object; the pod templates had no
+ObjectMeta at all**. The pod existed and had succeeded; nothing matched.
+Fix: both pod templates now mirror the Job labels, AND postInstall falls back
+to the batch `job-name` label before failing — at that point the nested
+cluster is installed and losing it to a labelling mismatch is the worst
+possible trade.
+Verified live against run 15's leftovers (whose pod predates the fix, so the
+FALLBACK path is what ran): phase -> **Ready**, `sos-nightly-kubeconfig` +
+`sos-nightly-kubeadmin` secrets created, status.apiEndpoint/consoleURL set.
+
+### Known gap: route exposure needs two read-only grants
+PostInstall logged, non-fatally and correctly:
+`exposure degraded (cluster still healthy): infrastructures ... forbidden /
+ingresscontrollers ... forbidden`. The orchestrator SA cannot read the HOST
+cluster's apps domain, so no Routes are created. Added to
+`deploy/install.yaml` (config.openshift.io infrastructures,dnses +
+operator.openshift.io ingresscontrollers, get/list/watch — read-only).
+**Not applied to the live ClusterRole** pending user decision, per the
+standing "do not change the host cluster" directive. The nested cluster is
+unaffected either way; only the host-side convenience Routes are missing.
+
+### Full defect chain fixed this session (each gated the next)
+1. installer_args never reached coreos-installer -> installed OS had no
+   resolver -> initramfs ignition-fetch deadlock (runs 6/10/11).
+2. HAProxy L4 health checks flapping -> API VIP blackholed during join.
+3. `_empty_answer` undefined -> AAAA silently dropped -> api-int unresolvable
+   to every Go/curl client (masters booted but never joined).
+4. node-guard rewriting the BOOTSTRAP node's kubeconfig -> bootstrap CVO
+   x509 crash-loop -> no namespaces -> no CNO -> masters NotReady.
+5. wait-job pod templates unlabelled -> PostInstall could not find its own
+   output.
