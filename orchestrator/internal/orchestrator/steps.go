@@ -1814,7 +1814,7 @@ func (s *StepExecutor) powerOn(ctx context.Context, nc *crd.NestedCluster) error
 		log.WithNode(node.Name).Info("VM started via KubeVirt API")
 	}
 
-	setNodeLifecycle(nc, "Booting (agent ISO)", "Discovering")
+	setNodeLifecycle(nc, "ISO", "Discovering")
 	s.updateCRStatus(ctx, nc)
 	log.Info("all VMs started, waiting for VMIs to be ready")
 	for _, node := range nc.Status.Nodes {
@@ -2005,7 +2005,7 @@ echo "Bootstrap complete"
 	}
 
 	log.Info("bootstrap complete")
-	setNodeLifecycle(nc, "Installing (pivoted)", "Installing")
+	setNodeLifecycle(nc, "Disk", "Installing")
 	s.updateCRStatus(ctx, nc)
 	return nil
 }
@@ -2243,7 +2243,7 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 	nc.Status.ConsoleURL = nc.ConsoleEndpoint()
 	nc.Status.IngressDomain = nc.IngressWildcard()
 
-	setNodeLifecycle(nc, "Installed", "Done")
+	setNodeLifecycle(nc, "Disk", "Installed")
 	log.Info("post-install complete",
 		"api", nc.Status.APIEndpoint,
 		"console", nc.Status.ConsoleURL)
@@ -2454,6 +2454,16 @@ var sshKeyLineRe = regexp.MustCompile(`(?m)^sshKey:[ \t]*'?<SSH_KEY>'?[ \t]*$`)
 // The values are deliberately coarse — they track phases the orchestrator
 // actually drives, rather than claiming per-node insight it does not have.
 // Empty strings leave the existing value untouched.
+//
+// They MUST come from the CRD enums, which are:
+//
+//	bootPhase:   ISO | Disk | Unknown
+//	agentStatus: Pending | Discovering | Installing | Installed | Error | Unknown
+//
+// Anything else makes the whole status update invalid, and since every phase
+// transition is written through the same call, one bad value silently freezes
+// the CR: an install ran to completion while the CR still read "PowerOn",
+// because each write after that point was rejected by validation.
 func setNodeLifecycle(nc *crd.NestedCluster, bootPhase, agentStatus string) {
 	for i := range nc.Status.Nodes {
 		if bootPhase != "" {
@@ -2464,3 +2474,7 @@ func setNodeLifecycle(nc *crd.NestedCluster, bootPhase, agentStatus string) {
 		}
 	}
 }
+
+// lifecycleCallSites records the exact values passed to setNodeLifecycle so a
+// test can assert they stay inside the CRD enums.
+const lifecycleCallSites = `ISO/Discovering Disk/Installing Disk/Installed`
