@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1188,6 +1189,9 @@ func (s *StepExecutor) generateISO(ctx context.Context, nc *crd.NestedCluster) e
 								// persistent nested DNS (VM-first); baked as a
 								// nameserver= karg into the live ISO.
 								{Name: "DNS_IP", Value: nc.Status.DNSIPCUDN},
+								// how many hosts sos-installer-args waits for
+								// before patching (see the ISO surgery below).
+								{Name: "HOST_COUNT", Value: strconv.Itoa(len(nc.Status.Nodes))},
 							},
 							Command: []string{"/bin/bash", "-c"},
 							Args: []string{`set -ex
@@ -1225,71 +1229,167 @@ test -n "$CI" || { echo "coreos-installer unavailable"; exit 41; }
 "$CI" --version
 
 if [ -n "${DNS_IP:-}" ]; then
-  # (A) Post-pivot resolver gap: the installed OS re-runs the ignition
-  # fetch in ITS OWN initramfs; only its GRUB kernel args (or DHCP) shape
-  # that stage. Two SUPPORTED layers:
-  #  1) infraenv surgery: add spec.installerArgs ["--append-karg",
-  #     "nameserver=<dnsIP>"] to the embedded /etc/assisted/manifests/
-  #     infraenv.yaml — assisted-service forwards installer_args verbatim
-  #     to the agent's coreos-installer, which bakes the karg into the
-  #     INSTALLED system's bootloader entries (validated end-to-end by
-  #     probe-infraenv-edit2 against this installer build).
-  #  2) live-ISO grub karg (below) for the PRE-pivot fetch stage.
-  # NEVER write /etc/coreos/installer.d: the mere presence of a file there
-  # switches the RHCOS live image into auto-install-on-boot mode (documented
-  # live-media feature); with no dest-device it fails the coreos-installer
-  # unit seconds into boot and its dependency chain emergency-shells every
-  # master (run 8).
-  echo "Adding installerArgs (nameserver=$DNS_IP) to embedded infraenv manifest"
+  # (A) Post-pivot resolver gap: after the agent writes RHCOS to disk, the
+  # INSTALLED system re-runs ignition in ITS OWN initramfs and fetches
+  # api-int:22623/config/<role>. Only two inputs reach that stage — the
+  # installed bootloader's kernel args, and /boot/coreos-firstboot-network
+  # (which coreos-installer only populates when passed --copy-network;
+  # without it assisted-installer skips configureFirstBootNetworking and the
+  # discovery environment's NM keyfiles never reach the installed system).
+  #
+  # Both are written by coreos-installer during the agent install, and the
+  # ONLY channel into that invocation is the per-host installer_args in
+  # assisted-service (assisted-installer hands Config.InstallerArgs straight
+  # to WriteImageToDisk). --append-karg and --copy-network are both on
+  # assisted-service's allowedFlags.
+  #
+  # We set them from a systemd unit ON the rendezvous node rather than from
+  # the ConfigureNodes job, because the install auto-starts within a few
+  # minutes of the agents registering and an out-of-band patch loses that
+  # race (observed: hosts already "installing-in-progress" by the time the
+  # job's first API call lands). Ordering this unit Before= and WantedBy=
+  # start-cluster-installation.service — exactly how the platform's own
+  # apply-host-config.service is wired — makes it race-free by construction.
+  # The unit also runs where USER_AUTH_TOKEN already lives, so no credential
+  # has to be copied anywhere (the ABI REST API rejects unauthenticated
+  # calls with 401).
+  #
+  # Rejected alternatives, all probe-disproven on 4.22: agent-config
+  # kernelArguments / ignition / installerArgs / postInstallRebootCmds are
+  # "unknown field"; the embedded InfraEnv manifest has no installerArgs
+  # field (assisted-service's host_config.go only reads role, mac_addresses
+  # and root-device-hints); and NEVER write /etc/coreos/installer.d — the
+  # mere presence of a file there switches the RHCOS live image into
+  # auto-install-on-boot mode, and with no dest-device its unit fails
+  # seconds into boot and emergency-shells every master (run 8).
+  echo "Injecting sos-installer-args.service (nameserver=$DNS_IP, --copy-network)"
   "$CI" iso ignition show "$ISO" > /tmp/agent.ign
-  DNS_IP="$DNS_IP" python3 - <<'PY'
+  DNS_IP="$DNS_IP" HOST_COUNT="${HOST_COUNT:-3}" python3 - <<'PY'
 import json, os, base64
-from urllib.parse import unquote
+
 dns = os.environ["DNS_IP"]
+want = os.environ["HOST_COUNT"]
+SCRIPT_PATH = "/usr/local/bin/sos-set-installer-args.sh"
+UNIT_NAME = "sos-installer-args.service"
+
+SCRIPT = r'''#!/bin/bash
+# Pin coreos-installer args for every registered host BEFORE the cluster
+# install starts, so the INSTALLED system's first-boot initramfs can resolve
+# api-int (nameserver karg) and keeps the discovery network config
+# (--copy-network -> /boot/coreos-firstboot-network).
+set -uo pipefail
+DNS_IP="@DNS_IP@"
+WANT=@WANT@
+BASE="http://127.0.0.1:8090/api/assisted-install/v2"
+MARK=/etc/assisted/sos-installer-args.result
+AUTH=(-H "Authorization: ${USER_AUTH_TOKEN:-}")
+json_ids() { grep -o '"id":"[0-9a-f][0-9a-f-]\{34\}[0-9a-f]"' | cut -d'"' -f4; }
+
+IE=""
+for i in $(seq 1 60); do
+    IE=$(curl -s --max-time 10 "${AUTH[@]}" "$BASE/infra-envs" | json_ids | head -1)
+    [ -n "$IE" ] && break
+    sleep 5
+done
+if [ -z "$IE" ]; then
+    echo "no infra-env after 5min" | tee $MARK
+    exit 0
+fi
+echo "infra-env $IE"
+
+n=0
+for i in $(seq 1 60); do
+    n=$(curl -s --max-time 10 "${AUTH[@]}" "$BASE/infra-envs/$IE/hosts" | json_ids | wc -l)
+    [ "$n" -ge "$WANT" ] && break
+    sleep 10
+done
+echo "hosts registered: $n/$WANT"
+
+ok=0
+for h in $(curl -s --max-time 10 "${AUTH[@]}" "$BASE/infra-envs/$IE/hosts" | json_ids); do
+    code=$(curl -s -o /tmp/ia.out -w '%{http_code}' --max-time 20 -X PATCH "${AUTH[@]}" \
+        -H 'Content-Type: application/json' \
+        -d "{\"args\":[\"--append-karg\",\"nameserver=$DNS_IP\",\"--copy-network\"]}" \
+        "$BASE/infra-envs/$IE/hosts/$h/installer-args")
+    # Read back from the host object: a 2xx that did not persist is exactly
+    # the class of failure that cost run 10.
+    if curl -s --max-time 10 "${AUTH[@]}" "$BASE/infra-envs/$IE/hosts/$h" | grep -q -- "nameserver=$DNS_IP"; then
+        echo "host $h: installer_args verified (http=$code)"
+        ok=$((ok+1))
+    else
+        echo "host $h: FAILED http=$code $(head -c 200 /tmp/ia.out)"
+    fi
+done
+echo "installer_args applied to $ok/$n hosts" | tee $MARK
+# Never block the install: degrading to the old behaviour is recoverable by
+# the node-guard, a wedged start-cluster-installation.service is not.
+exit 0
+'''.replace("@DNS_IP@", dns).replace("@WANT@", want)
+
+UNIT = """[Unit]
+Description=Pin coreos-installer args for the nested cluster install
+Requires=agent-register-infraenv.service
+After=agent-register-infraenv.service apply-host-config.service
+Before=start-cluster-installation.service
+ConditionPathExists=/etc/assisted/node0
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+EnvironmentFile=/etc/assisted/rendezvous-host.env
+ExecStart=%s
+
+[Install]
+WantedBy=start-cluster-installation.service
+""" % SCRIPT_PATH
+
 ign = json.load(open("/tmp/agent.ign"))
-files = ign.get("storage", {}).get("files", [])
+files = ign.setdefault("storage", {}).setdefault("files", [])
 assert not any("installer.d" in f.get("path", "") for f in files), \
     "installer.d file present in ISO ignition (radioactive, run 8 lesson)"
-hit = 0
-for f in files:
-    if f.get("path", "").endswith("/etc/assisted/manifests/infraenv.yaml"):
-        head, payload = f["contents"]["source"].split(",", 1)
-        body = base64.b64decode(payload).decode() if ";base64" in head else unquote(payload)
-        assert "installerArgs" not in body, "installerArgs already present"
-        out = []
-        done = False
-        for line in body.split("\n"):
-            out.append(line)
-            if line.startswith("spec:"):
-                out += ["  installerArgs:", "  - --append-karg", "  - nameserver=%s" % dns]
-                done = True
-        assert done, "infraenv.yaml has no top-level spec: line"
-        new = "\n".join(out)
-        f["contents"] = {"source": "data:;base64," + base64.b64encode(new.encode()).decode()}
-        hit += 1
-assert hit == 1, "infraenv.yaml hits = %d (expected 1)" % hit
+# Ignition 3.x has no contents.inline — a source-less entry with
+# overwrite:true hard-fails the whole config (run 7 bricked every master).
+files[:] = [f for f in files if f.get("path") != SCRIPT_PATH]
+files.append({
+    "path": SCRIPT_PATH,
+    "mode": 0o755,
+    "overwrite": True,
+    "contents": {"source": "data:;base64," + base64.b64encode(SCRIPT.encode()).decode()},
+})
+units = ign.setdefault("systemd", {}).setdefault("units", [])
+units[:] = [u for u in units if u.get("name") != UNIT_NAME]
+units.append({"name": UNIT_NAME, "enabled": True, "contents": UNIT})
+assert not any("inline" in f.get("contents", {}) for f in files), "inline key present"
 json.dump(ign, open("/tmp/agent.mod", "w"))
-print("infraenv.yaml edited: installerArgs nameserver=%s" % dns)
+print("ignition edited: %s + %s (want=%s hosts)" % (SCRIPT_PATH, UNIT_NAME, want))
 PY
   "$CI" iso ignition embed -f -i /tmp/agent.mod "$ISO"
   # Read-back verification of the EMBEDDED config (grep-only checks are
   # banned by the run 7/8 lessons): re-parse, decode, assert.
   "$CI" iso ignition show "$ISO" | DNS_IP="$DNS_IP" python3 -c 'import json,sys,os,base64
-from urllib.parse import unquote
 dns = os.environ["DNS_IP"]
 ign = json.load(sys.stdin)
 n = 0
 for f in ign.get("storage", {}).get("files", []):
     p = f.get("path", "")
     assert "installer.d" not in p, "installer.d snuck in: " + p
-    if p.endswith("/etc/assisted/manifests/infraenv.yaml"):
+    if p == "/usr/local/bin/sos-set-installer-args.sh":
         head, payload = f["contents"]["source"].split(",", 1)
-        body = base64.b64decode(payload).decode() if ";base64" in head else unquote(payload)
-        assert "installerArgs" in body and ("nameserver=" + dns) in body, "installerArgs missing after embed"
+        assert ";base64" in head, "script entry is not a base64 data URL"
+        body = base64.b64decode(payload).decode()
+        # the script carries the IP as DNS_IP="<ip>" and uses nameserver=$DNS_IP
+        assert ("DNS_IP=\"" + dns + "\"") in body, "script lost its DNS pin"
+        assert "--copy-network" in body and "--append-karg" in body, "script lost its args"
+        assert f.get("mode") == 0o755, "script not executable: %r" % f.get("mode")
         n += 1
-assert n == 1, "infraenv.yaml count %d" % n
-' || { echo "infraenv read-back verification FAILED"; exit 42; }
-  echo "infraenv installerArgs baked and read-back verified"
+u = [x for x in ign.get("systemd", {}).get("units", []) if x.get("name") == "sos-installer-args.service"]
+assert len(u) == 1, "unit count %d" % len(u)
+assert u[0].get("enabled") is True, "unit not enabled"
+assert "Before=start-cluster-installation.service" in u[0]["contents"], "unit not ordered before install"
+assert n == 1, "script count %d" % n
+print("read-back OK: script + enabled unit present")
+' || { echo "installer-args read-back verification FAILED"; exit 42; }
+  echo "sos-installer-args baked and read-back verified"
 
   "$CI" iso kargs modify -a "nameserver=$DNS_IP" "$ISO"
   "$CI" iso kargs show "$ISO" | grep -c "nameserver=$DNS_IP"
