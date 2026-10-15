@@ -221,6 +221,12 @@ func (c *Client) CloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapsho
 }
 
 // CreatePVCFromSnapshot creates a Block-mode PVC restored from a VolumeSnapshot.
+//
+// RWO by design, unlike the VM root disks. This is the agent ISO cdrom: it is
+// read-only, it is ejected from the VM template by PostInstall, and it is not
+// worth an RWX volume. The consequence is explicit — while the ISO is still
+// attached the VM is not live-migratable; masters become migratable once the
+// cdrom is gone.
 func (c *Client) CreatePVCFromSnapshot(ctx context.Context, namespace, name, snapshotName, storageClassName, size string) error {
 	pvc := &unstructured.Unstructured{
 		Object: map[string]interface{}{
