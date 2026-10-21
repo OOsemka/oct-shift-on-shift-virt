@@ -43,7 +43,7 @@
   "consolePlugin": {
     "name": "oct-shift-on-shift-virt",
     "version": "0.1.0",
-    "displayName": "Shift on Shift",
+    "displayName": "Shift-on-Shift Virt",
     "description": "Deploy standalone OpenShift clusters on KubeVirt VMs",
     "exposedModules": {
       "ShiftOnShiftPage": "./components/ShiftOnShiftPage",

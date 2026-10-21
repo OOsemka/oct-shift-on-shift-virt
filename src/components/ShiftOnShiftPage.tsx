@@ -39,10 +39,10 @@ const ShiftOnShiftPage: FC = () => {
           >
             {t('Compute')}
           </BreadcrumbItem>
-          <BreadcrumbItem isActive>{t('Shift on Shift')}</BreadcrumbItem>
+          <BreadcrumbItem isActive>{t('Shift-on-Shift Virt')}</BreadcrumbItem>
         </Breadcrumb>
       </PageSection>
-      <ListPageHeader title={t('Shift on Shift')} />
+      <ListPageHeader title={t('Shift-on-Shift Virt')} />
       <PageSection>
         <Stack hasGutter>
           <StackItem>

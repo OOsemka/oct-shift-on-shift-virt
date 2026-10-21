@@ -191,7 +191,7 @@ const ClusterDetailPage: FC = () => {
               window.location.href = '/community-tools/compute/shift-on-shift-virt';
             }}
           >
-            {t('Shift on Shift')}
+            {t('Shift-on-Shift Virt')}
           </BreadcrumbItem>
           <BreadcrumbItem isActive>{spec.clusterName}</BreadcrumbItem>
         </Breadcrumb>
