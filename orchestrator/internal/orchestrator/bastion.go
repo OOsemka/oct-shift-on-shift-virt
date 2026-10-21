@@ -302,8 +302,43 @@ func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool
           "DontCheckDefaultBrowser": true
         }
       }
+  - path: /etc/systemd/system/sos-desktop-install.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=SOS bastion desktop install (Xfce, lightdm, Firefox)
+      After=network-online.target sos-dns.service
+      ConditionPathExists=!/var/lib/sos-desktop-installed
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/sos-desktop-install
+      Restart=on-failure
+      RestartSec=30
+      TimeoutStartSec=infinity
+      StandardOutput=append:/var/log/sos-desktop.log
+      StandardError=append:/var/log/sos-desktop.log
+      [Install]
+      WantedBy=multi-user.target
+  - path: /usr/local/sbin/sos-desktop-install
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      # resolv.conf points at 127.0.0.1, and dns.py only arrives with the
+      # DeployDNS phase, minutes after boot. Wait for name resolution rather
+      # than failing once and leaving a text console (chris-sos-odf,
+      # 2026-10-21: the dnf run at 9 s uptime died on "Could not resolve host").
+      until getent hosts mirrors.centos.org >/dev/null; do echo "waiting for DNS"; sleep 10; done
+      dnf -y install epel-release
+      dnf -y group install Xfce
+      dnf -y install lightdm lightdm-gtk-greeter firefox
+      systemctl enable --force lightdm
+      systemctl set-default graphical.target
+      touch /var/lib/sos-desktop-installed
+      systemctl start --no-block lightdm
 `, consoleURL)
-		// The desktop is installed in the BACKGROUND: it is a few hundred MB
+		// The desktop is installed in the BACKGROUND by sos-desktop-install
+		// (a retrying oneshot unit, see desktopFiles): it is a few hundred MB
 		// over UDN egress and must never hold up the DeployDNS phase, which
 		// only needs sshd and the relay to be up.
 		//
@@ -311,8 +346,8 @@ func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool
 		// so does lightdm. The first attempt here installed neither (the
 		// group install failed, the fallback failed, and only firefox and
 		// some X libraries landed), leaving graphical.target enabled with no
-		// desktop and no display manager: a text console. Each step is
-		// chained with && so a failure is visible in the log instead of
+		// desktop and no display manager: a text console. Each step runs
+		// under set -e so a failure is visible in the log instead of
 		// silently producing that same half-state. Verified live on the
 		// bastion before being written here: epel-release installs from
 		// extras, the Xfce group then resolves, lightdm comes from EPEL and
@@ -336,7 +371,9 @@ func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool
 		desktop = fmt.Sprintf(`  - useradd -m -s /bin/bash -G wheel %[1]s || true
   - printf 'nameserver 127.0.0.1\n' > /etc/resolv.conf
   - chattr +i /etc/resolv.conf || true
-  - nohup bash -c 'dnf -y install epel-release && dnf -y group install Xfce && dnf -y install lightdm lightdm-gtk-greeter firefox && systemctl enable --force lightdm && systemctl set-default graphical.target && systemctl isolate graphical.target' >/var/log/sos-desktop.log 2>&1 &
+  - systemctl daemon-reload
+  - systemctl enable sos-desktop-install.service
+  - systemctl start --no-block sos-desktop-install.service
 `, desktopUser)
 	}
 	return fmt.Sprintf(`#cloud-config
