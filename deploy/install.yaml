@@ -431,6 +431,8 @@ spec:
           value: ""
         - name: EDGE_PROXY_NAD
           value: ""
+        - name: DNS_MODE
+          value: vm
       volumes:
       - name: serving-cert
         secret:
