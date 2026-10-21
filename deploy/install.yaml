@@ -428,9 +428,9 @@ spec:
             - ALL
         env:
         - name: EDGE_PROXY_VLAN_IP
-          value: 192.0.2.200
+          value: ""
         - name: EDGE_PROXY_NAD
-          value: default/vlan2111
+          value: ""
       volumes:
       - name: serving-cert
         secret:

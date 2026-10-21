@@ -23,3 +23,6 @@ orchestrator/.config/
 orchestrator/orchestrator
 orchestrator/sos-orchestrator
 orchestrator/ca-certificates.crt
+
+# Internal run logs and design notes: they contain lab IPs, hostnames and dates.
+SOS-*.md

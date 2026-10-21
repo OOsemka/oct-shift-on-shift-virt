@@ -55,12 +55,11 @@ const edgeProxyName = "sos-edge-proxy"
 // cluster is unaffected — it stays reachable via its VLAN VIPs and DNS).
 func edgeProxyVLANIP() string { return strings.TrimSpace(os.Getenv("EDGE_PROXY_VLAN_IP")) }
 
-func edgeProxyNAD() string {
-	if v := strings.TrimSpace(os.Getenv("EDGE_PROXY_NAD")); v != "" {
-		return v
-	}
-	return "default/vlan2111"
-}
+// edgeProxyNAD is the <namespace>/<name> of the NetworkAttachmentDefinition
+// that reaches the nested clusters' external VLAN. There is deliberately no
+// default: it is environment-specific, and guessing would attach the proxy to
+// a network that does not exist (or worse, to the wrong one).
+func edgeProxyNAD() string { return strings.TrimSpace(os.Getenv("EDGE_PROXY_NAD")) }
 
 func edgeProxyImage() string {
 	if v := strings.TrimSpace(os.Getenv("EDGE_PROXY_IMAGE")); v != "" {
@@ -76,8 +75,8 @@ func (s *StepExecutor) exposeCluster(ctx context.Context, nc *crd.NestedCluster)
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("expose")
 
 	vlanIP := edgeProxyVLANIP()
-	if vlanIP == "" {
-		log.Info("API route exposure disabled (EDGE_PROXY_VLAN_IP unset); the nested cluster is still reachable via its VLAN VIPs and DNS")
+	if vlanIP == "" || edgeProxyNAD() == "" {
+		log.Info("API route exposure disabled (set EDGE_PROXY_VLAN_IP and EDGE_PROXY_NAD to enable); the nested cluster is still reachable via its VLAN VIPs and DNS")
 		return nil
 	}
 	if strings.TrimSpace(nc.Spec.ExternalAccess.APIIP) == "" {

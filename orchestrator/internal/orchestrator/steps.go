@@ -1606,7 +1606,7 @@ func (s *StepExecutor) mountISO(ctx context.Context, nc *crd.NestedCluster) erro
 			return fmt.Errorf("stopping %s for ISO mount: %w", node.Name, err)
 		}
 		if existing != nil {
-			// BOOTINDEX TRAP (see SOS-E2E-STATUS): KubeVirt boots
+			// BOOTINDEX TRAP (rootdisk bootindex 1, ISO bootindex 2): KubeVirt boots
 			// rootdisk (bootindex 1) BEFORE the ISO cdrom (2). A node
 			// being re-ISO'd carries a partial/failed install whose
 			// stale bootloader silently wins the boot, so the freshly
