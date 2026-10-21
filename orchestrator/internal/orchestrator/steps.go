@@ -2333,7 +2333,13 @@ func (s *StepExecutor) DeleteCluster(ctx context.Context, nc *crd.NestedCluster)
 
 	s.client.DynamicClient.Resource(deployGVR).Namespace(clusterNs).Delete(ctx, nc.Spec.ClusterName+"-haproxy", metav1.DeleteOptions{})
 	s.client.Clientset.CoreV1().ServiceAccounts(clusterNs).Delete(ctx, nc.Spec.ClusterName+"-haproxy", metav1.DeleteOptions{})
-	s.client.DeleteClusterRoleBinding(ctx, "sos-haproxy-anyuid-"+nc.Spec.ClusterName)
+	// anyuid grants are cluster-scoped and name the SA by namespace/name; left
+	// behind, they would hand anyuid to whoever next creates that namespace.
+	for _, crb := range []string{"sos-haproxy-anyuid-", "sos-ops-anyuid-", "sos-dns-anyuid-"} {
+		if err := s.client.DeleteClusterRoleBinding(ctx, crb+nc.Spec.ClusterName); err != nil {
+			log.Info("could not delete anyuid binding (non-fatal)", "binding", crb+nc.Spec.ClusterName, "error", err.Error())
+		}
+	}
 
 	s.client.DynamicClient.Resource(deployGVR).Namespace(crNs).Delete(ctx, nc.Spec.ClusterName+"-iso-server", metav1.DeleteOptions{})
 

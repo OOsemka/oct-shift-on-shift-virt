@@ -239,6 +239,19 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 		if err := e.steps.DeleteCluster(ctx, nc); err != nil {
 			log.Error("deletion failed", "error", err.Error())
 			e.updateStatus(ctx, nc, crd.PhaseFailed, "Deletion failed: "+err.Error())
+			return
+		}
+		// The API handler sets phase Deleting and THEN deletes the CR, so
+		// this branch usually runs on the event without deletionTimestamp,
+		// and the real deletion events are deduped while it runs. Release
+		// the finalizer here too if the live object is being deleted —
+		// otherwise only the 2-minute resync frees it (chris-sos-odf,
+		// 2026-10-21: namespace gone, CR lingering).
+		if cur, err := e.client.DynamicClient.Resource(nestedClusterGVR).Namespace(nc.Namespace).
+			Get(ctx, nc.Name, metav1.GetOptions{}); err == nil && cur.GetDeletionTimestamp() != nil {
+			if err := e.removeFinalizer(ctx, nc); err != nil {
+				log.Error("removing cleanup finalizer failed", "error", err.Error())
+			}
 		}
 		return
 	}
