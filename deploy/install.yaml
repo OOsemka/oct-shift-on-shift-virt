@@ -348,7 +348,7 @@ spec:
     spec:
       containers:
       - name: plugin
-        image: quay.io/cjanisze/oct-shift-on-shift-virt:0.1.0-ocp4.22
+        image: quay.io/cjanisze/oct-shift-on-shift-virt:0.2.0-ocp4.22
         ports:
         - containerPort: 9443
           protocol: TCP
@@ -420,7 +420,7 @@ spec:
       serviceAccountName: sos-orchestrator
       containers:
       - name: orchestrator
-        image: quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator:0.1.0-ocp4.22
+        image: quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator:0.2.0-ocp4.22
         imagePullPolicy: Always
         ports:
         - name: https

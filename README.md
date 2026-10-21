@@ -5,9 +5,9 @@
 Standalone OpenShift Console plugin that deploys full, standalone OpenShift clusters on KubeVirt virtual machines — OpenShift-on-OpenShift, not HyperShift. A wizard collects the cluster definition; an orchestrator drives an agent-based install end to end and hands back a kubeconfig.
 
 - **Plugin ID:** `oct-shift-on-shift-virt`
-- **Version:** `0.1.0`
-- **Image:** `quay.io/cjanisze/oct-shift-on-shift-virt:0.1.0-ocp4.22` and `:0.1.0-ocp4.21` (`<semver>-ocp<major.minor>`; always publish both minors)
-- **Orchestrator image:** `quay.io/cjanisze/sos-orchestrator:latest` (companion; not yet published with two-axis tags)
+- **Version:** `0.2.0`
+- **Image:** `quay.io/cjanisze/oct-shift-on-shift-virt:0.2.0-ocp4.22` and `:0.2.0-ocp4.21` (`<semver>-ocp<major.minor>`; always publish both minors)
+- **Orchestrator image:** `quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator:0.2.0-ocp4.22` and `:0.2.0-ocp4.21` (companion)
 - **Git branch:** `main` tracks the newest supported minor (4.22); an `ocp-X.Y` branch is cut only when PatternFly or console APIs diverge
 
 Validated on OpenShift **4.22** (PatternFly 6), installing nested OpenShift 4.22. Open from **Community Tools → Compute** after the storefront ([oct-storefront](https://github.com/OOsemka/oct-storefront)) and this plugin are enabled.
@@ -58,6 +58,27 @@ Each phase is idempotent and the current phase is stored on the resource, so the
 - The `centos-stream9` DataSource in `openshift-virtualization-os-images` (bastion base image; override with `BASTION_BASE_IMAGE`).
 - A Red Hat **pull secret** and an SSH public key. The orchestrator generates its own automation key pair; your key stays authorised on the nodes.
 - Capacity for the masters you size in the wizard, plus the bastion (1 vCPU / 2 GiB, or 2 vCPU / 4 GiB with the desktop).
+
+## Nested storage and virtualization (optional)
+
+Two checkboxes on the wizard's Storage step:
+
+- **Persistent storage for the nested cluster** — installs the KubeVirt CSI driver in split mode. The nested cluster gets a default `kubevirt-csi` StorageClass. Each nested PVC becomes a DataVolume on the host StorageClass you pick, hot-plugged into the node VM that needs it.
+- **OpenShift Virtualization in the nested cluster** — also installs OpenShift Virtualization from `redhat-operators` and points CDI at `kubevirt-csi`. Implies storage.
+
+Requirements on the host:
+
+- KubeVirt **hot-plug volumes** (`HotplugVolumes`) enabled — the default with current OpenShift Virtualization.
+- A StorageClass that binds **Block** volumes; RWX lets nested VMs live-migrate.
+- Optional: a VolumeSnapshotClass for the same provisioner, which enables nested snapshots and smart clones.
+
+What it does on the host, and nothing more:
+
+- A controller Deployment in the cluster namespace, non-root, with a namespace-scoped Role. The one cluster-scoped grant is `get persistentvolumes`, used for volume expansion.
+- The nested cluster can use **only** the selected host class.
+- A ResourceQuota on the namespace caps its total storage: the VM disks plus the allowance from the wizard, plus 180 GiB for virtualization boot images.
+
+Results appear on the cluster page (`StorageReady`, `VirtualizationReady`). A failure there never fails the cluster install.
 
 ## Accessing a nested cluster
 
