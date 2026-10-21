@@ -81,6 +81,7 @@ interface ClusterDetail {
       message: string;
     }>;
     hostAPIRoute?: string;
+    conditions?: Array<{ type: string; status: string; reason: string; message: string }>;
     installConfig?: string;
     agentConfig?: string;
   };
@@ -95,6 +96,12 @@ const PHASE_VARIANT: Record<string, 'success' | 'info' | 'warning' | 'danger' | 
   Ready: 'success',
   Failed: 'danger',
 };
+
+// Optional post-install features, reported as status conditions.
+const FEATURE_CONDITIONS: Array<{ type: string; label: string }> = [
+  { type: 'StorageReady', label: 'Nested storage' },
+  { type: 'VirtualizationReady', label: 'OpenShift Virtualization' },
+];
 
 const ClusterDetailPage: FC = () => {
   const { name } = useParams<{ name: string }>();
@@ -321,6 +328,20 @@ const ClusterDetailPage: FC = () => {
                   <DescriptionListTerm>{t('Ingress Domain')}</DescriptionListTerm>
                   <DescriptionListDescription>{status.ingressDomain}</DescriptionListDescription>
                 </DescriptionListGroup>
+                {FEATURE_CONDITIONS.map(({ type, label }) => {
+                  const c = status.conditions?.find((x) => x.type === type);
+                  if (!c) return null;
+                  const ok = c.status === 'True';
+                  return (
+                    <DescriptionListGroup key={type}>
+                      <DescriptionListTerm>{t(label)}</DescriptionListTerm>
+                      <DescriptionListDescription>
+                        <Label color={ok ? 'green' : 'orange'}>{ok ? t('Ready') : t('Not ready')}</Label>{' '}
+                        {c.message}
+                      </DescriptionListDescription>
+                    </DescriptionListGroup>
+                  );
+                })}
               </DescriptionList>
               <Split hasGutter className="sos-cluster-actions">
                 <SplitItem>

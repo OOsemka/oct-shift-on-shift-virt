@@ -222,6 +222,33 @@ spec:
                 sshKey:
                   type: string
                   description: Inline SSH public key (stored temporarily, moved to a Secret during CreateSecrets phase).
+                storage:
+                  type: object
+                  description: >-
+                    Expose a host StorageClass inside the nested cluster (KubeVirt CSI driver, split mode).
+                    Volumes are hot-plugged DataVolumes in this cluster's namespace.
+                  properties:
+                    enabled:
+                      type: boolean
+                    infraStorageClassName:
+                      type: string
+                      description: >-
+                        Host StorageClass backing nested volumes. Empty = the host's default
+                        virtualization StorageClass, else its default StorageClass.
+                    allowanceGi:
+                      type: integer
+                      minimum: 0
+                      description: >-
+                        Host storage (GiB) the nested cluster may consume. Enforced with a ResourceQuota
+                        on the cluster namespace, on top of the cluster's own disks.
+                virtualization:
+                  type: object
+                  description: >-
+                    Install OpenShift Virtualization in the nested cluster and configure CDI for the nested
+                    storage. Implies storage.enabled.
+                  properties:
+                    enabled:
+                      type: boolean
                 bastion:
                   type: object
                   description: >-
@@ -294,6 +321,8 @@ spec:
                     - WaitBootstrap
                     - WaitInstall
                     - PostInstall
+                    - ConfigureStorage
+                    - ConfigureVirtualization
                     - Ready
                     - Deleting
                     - Failed

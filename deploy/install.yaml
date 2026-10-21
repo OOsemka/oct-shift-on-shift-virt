@@ -275,6 +275,43 @@ rules:
   - update
   - patch
   - delete
+- apiGroups:
+  - subresources.kubevirt.io
+  resources:
+  - virtualmachines/addvolume
+  - virtualmachines/removevolume
+  - virtualmachineinstances/removevolume
+  verbs:
+  - update
+- apiGroups:
+  - ''
+  resources:
+  - persistentvolumes
+  verbs:
+  - get
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - get
+  - list
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ''
+  resources:
+  - resourcequotas
+  verbs:
+  - get
+  - list
+  - create
+  - update
+  - patch
+  - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -428,9 +465,9 @@ spec:
             - ALL
         env:
         - name: EDGE_PROXY_VLAN_IP
-          value: ""
+          value: ''
         - name: EDGE_PROXY_NAD
-          value: ""
+          value: ''
         - name: DNS_MODE
           value: vm
       volumes:

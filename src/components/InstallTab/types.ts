@@ -40,6 +40,22 @@ export interface BastionConfig {
   password: string;
 }
 
+/**
+ * Nested storage: the kubevirt csi-driver gives the nested cluster a default
+ * StorageClass backed by a host StorageClass. Virtualization installs
+ * OpenShift Virtualization in the nested cluster and implies storage. An
+ * empty infraStorageClassName lets the orchestrator pick the host default.
+ */
+export interface NestedStorageConfig {
+  enabled: boolean;
+  infraStorageClassName: string;
+  allowanceGi: number;
+}
+
+export interface VirtualizationConfig {
+  enabled: boolean;
+}
+
 export interface ClusterConfig {
   clusterName: string;
   baseDomain: string;
@@ -53,6 +69,8 @@ export interface ClusterConfig {
   network: NetworkConfig;
   externalAccess: ExternalAccessConfig;
   storageClassName: string;
+  storage: NestedStorageConfig;
+  virtualization: VirtualizationConfig;
   pullSecret: string;
   sshKey: string;
   bastion: BastionConfig;
@@ -70,6 +88,13 @@ export interface NodeStatus {
   ip: string;
 }
 
+export interface ClusterCondition {
+  type: string;
+  status: 'True' | 'False' | 'Unknown';
+  reason: string;
+  message: string;
+}
+
 export interface NestedClusterStatus {
   phase: string;
   message: string;
@@ -77,6 +102,7 @@ export interface NestedClusterStatus {
   consoleURL: string;
   ingressDomain: string;
   nodes: NodeStatus[];
+  conditions?: ClusterCondition[];
   installConfig?: string;
   agentConfig?: string;
 }
@@ -129,6 +155,8 @@ export const DEFAULT_CLUSTER_CONFIG: ClusterConfig = {
     ingressIP: '',
   },
   storageClassName: '',
+  storage: { enabled: false, infraStorageClassName: '', allowanceGi: 100 },
+  virtualization: { enabled: false },
   pullSecret: '',
   sshKey: '',
   bastion: { graphical: false, username: 'core', password: '' },

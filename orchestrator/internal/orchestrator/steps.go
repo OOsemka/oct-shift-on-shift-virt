@@ -98,6 +98,10 @@ func (s *StepExecutor) Execute(ctx context.Context, nc *crd.NestedCluster, phase
 		return s.waitInstall(ctx, nc)
 	case crd.PhasePostInstall:
 		return s.postInstall(ctx, nc)
+	case crd.PhaseConfigureStorage:
+		return s.configureStorage(ctx, nc)
+	case crd.PhaseConfigureVirtualization:
+		return s.configureVirtualization(ctx, nc)
 	case crd.PhaseReady:
 		// terminal state — never executed as a step. It is listed in
 		// PhaseOrder (so phase lookups resolve), but running it through
@@ -2374,6 +2378,11 @@ func (s *StepExecutor) DeleteCluster(ctx context.Context, nc *crd.NestedCluster)
 	s.client.DeleteVolumeSnapshot(ctx, clusterNs, dstSnapName)
 	s.client.DeleteVolumeSnapshotContent(ctx, dstSnapName+"-content")
 	s.client.Clientset.CoreV1().PersistentVolumeClaims(crNs).Delete(ctx, nc.Spec.ClusterName+"-iso-block", metav1.DeleteOptions{})
+
+	// Cluster-scoped, so the namespace cascade misses it (nested storage).
+	if err := s.client.DeleteClusterRoleBinding(ctx, pvReaderBinding(nc.Spec.ClusterName)); err != nil && !apierrors.IsNotFound(err) {
+		log.Info("could not delete the CSI pv-reader binding (non-fatal)", "error", err.Error())
+	}
 
 	s.client.DeleteCUDN(ctx, nc.Spec.ClusterName)
 	if err := s.client.DeleteNamespaceForce(ctx, clusterNs, 3*time.Minute); err != nil {

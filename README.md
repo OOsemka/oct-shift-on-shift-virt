@@ -21,6 +21,8 @@ Validated on OpenShift **4.22** (PatternFly 6), installing nested OpenShift 4.22
 - **Live-migratable masters** — VMs use the `l2bridge` network binding and RWX Block root disks.
 - **Optional API route** — publish the nested API through the host cluster's router, no extra DNS needed.
 - **Credentials on the cluster page** — download the kubeconfig, reveal the kubeadmin password, copy an `oc login` command.
+- **Nested storage (optional)** — the KubeVirt CSI driver gives the nested cluster a default `kubevirt-csi` StorageClass backed by one host StorageClass, with snapshots when the host has a matching VolumeSnapshotClass. All images come from the nested release payload. A storage quota on the cluster namespace caps host usage.
+- **Nested OpenShift Virtualization (optional)** — installed and configured to use nested storage, so the nested cluster can run VMs. Plan for ~180 GiB of extra host storage for its boot images.
 - **Clean teardown** — deleting a cluster removes its VMs, disks, snapshots and namespace.
 
 ## Routes
@@ -41,7 +43,9 @@ Validated on OpenShift **4.22** (PatternFly 6), installing nested OpenShift 4.22
 
 ### Install phases
 
-`CreateNamespace → CreateNetwork → CreateSecrets → CreateVMs → CollectIPs → MCSRelay → DeployHAProxy → DeployDNS → GenerateISO → MountISO → PowerOn → ConfigureNodes → WaitBootstrap → WaitInstall → PostInstall → Ready`
+`CreateNamespace → CreateNetwork → CreateSecrets → CreateVMs → CollectIPs → MCSRelay → DeployHAProxy → DeployDNS → GenerateISO → MountISO → PowerOn → ConfigureNodes → WaitBootstrap → WaitInstall → PostInstall → ConfigureStorage → ConfigureVirtualization → Ready`
+
+The last two run only when selected in the wizard. They are non-fatal: a failure is reported on the `StorageReady` / `VirtualizationReady` condition and the cluster still reaches Ready.
 
 Each phase is idempotent and the current phase is stored on the resource, so the orchestrator resumes after a restart.
 

@@ -30,9 +30,16 @@ const (
 	PhaseWaitBootstrap   ClusterPhase = "WaitBootstrap"
 	PhaseWaitInstall     ClusterPhase = "WaitInstall"
 	PhasePostInstall     ClusterPhase = "PostInstall"
-	PhaseReady           ClusterPhase = "Ready"
-	PhaseFailed          ClusterPhase = "Failed"
-	PhaseDeleting        ClusterPhase = "Deleting"
+	// ConfigureStorage exposes a host StorageClass inside the nested cluster
+	// (kubevirt csi-driver, split mode). ConfigureVirtualization installs
+	// OpenShift Virtualization in the nested cluster and points CDI at that
+	// storage. Both are optional and non-fatal: a failure leaves the cluster
+	// Ready with a False condition rather than failing the install.
+	PhaseConfigureStorage        ClusterPhase = "ConfigureStorage"
+	PhaseConfigureVirtualization ClusterPhase = "ConfigureVirtualization"
+	PhaseReady                   ClusterPhase = "Ready"
+	PhaseFailed                  ClusterPhase = "Failed"
+	PhaseDeleting                ClusterPhase = "Deleting"
 )
 
 var PhaseOrder = []ClusterPhase{
@@ -55,6 +62,8 @@ var PhaseOrder = []ClusterPhase{
 	PhaseWaitBootstrap,
 	PhaseWaitInstall,
 	PhasePostInstall,
+	PhaseConfigureStorage,
+	PhaseConfigureVirtualization,
 	PhaseReady,
 }
 
@@ -98,10 +107,37 @@ type NestedClusterSpec struct {
 	// With Graphical set it also gets a desktop, so the nested console can be
 	// opened in a browser ON the bastion via the OpenShift VM console — the
 	// bastion already resolves the nested zone, so no Route or DNS is needed.
-	Bastion                BastionConfig `json:"bastion,omitempty"`
-	InstallConfigOverrides string        `json:"installConfigOverrides,omitempty"`
-	AgentConfigOverrides   string        `json:"agentConfigOverrides,omitempty"`
+	Bastion BastionConfig `json:"bastion,omitempty"`
+	// Storage exposes a host StorageClass to the nested cluster. Virtualization
+	// installs OpenShift Virtualization in the nested cluster and requires
+	// Storage (enabling it implies storage).
+	Storage                StorageConfig        `json:"storage,omitempty"`
+	Virtualization         VirtualizationConfig `json:"virtualization,omitempty"`
+	InstallConfigOverrides string               `json:"installConfigOverrides,omitempty"`
+	AgentConfigOverrides   string               `json:"agentConfigOverrides,omitempty"`
 }
+
+// StorageConfig controls nested-cluster storage backed by the host.
+//
+// InfraStorageClassName empty means: the host's default *virtualization*
+// StorageClass, else its default StorageClass — read live, never hardcoded.
+// AllowanceGi is the host storage the nested cluster may consume; it becomes
+// a ResourceQuota on the cluster's namespace together with the cluster's own
+// disks (and the boot images when virtualization is enabled).
+type StorageConfig struct {
+	Enabled               bool   `json:"enabled,omitempty"`
+	InfraStorageClassName string `json:"infraStorageClassName,omitempty"`
+	AllowanceGi           int    `json:"allowanceGi,omitempty"`
+}
+
+// VirtualizationConfig installs OpenShift Virtualization in the nested cluster.
+type VirtualizationConfig struct {
+	Enabled bool `json:"enabled,omitempty"`
+}
+
+// StorageWanted reports whether nested storage should be configured.
+// Virtualization needs storage, so it implies it.
+func (s NestedClusterSpec) StorageWanted() bool { return s.Storage.Enabled || s.Virtualization.Enabled }
 
 // BastionConfig is collected by the wizard. Password is write-only: it is
 // hashed into the VM's cloud-init and never stored back on the CR.

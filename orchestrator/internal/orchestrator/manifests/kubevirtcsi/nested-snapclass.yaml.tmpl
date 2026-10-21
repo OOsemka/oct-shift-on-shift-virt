@@ -1,0 +1,15 @@
+# Only applied when the host offers a VolumeSnapshotClass for the chosen StorageClass's
+# provisioner. Both this parameter and the host driver-config storageSnapshotMapping
+# are required, or snapshots (and CDI smart-clone) fail.
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: kubevirt-csi-snapclass
+  labels:
+    app.kubernetes.io/managed-by: oct-shift-on-shift-virt
+  annotations:
+    snapshot.storage.kubernetes.io/is-default-class: 'true'
+driver: csi.kubevirt.io
+deletionPolicy: Delete
+parameters:
+  infraSnapshotClassName: ${INFRA_VSC}
