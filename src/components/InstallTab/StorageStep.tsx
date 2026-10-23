@@ -27,6 +27,23 @@ const BASTION_DISK_GI = 32;
 const ISO_PER_NODE_GI = 8;
 const ISO_BLOCK_GI = 5;
 
+type StorageProfileKind = K8sResourceCommon & {
+  status?: { claimPropertySets?: Array<{ accessModes?: string[]; volumeMode?: string }> };
+};
+
+/**
+ * Mirrors the orchestrator (finding F25): nested RWX, and so live migration
+ * of nested VMs, needs the host class to support RWX Block. undefined = the
+ * host profile is not visible, so nothing can be said.
+ */
+function supportsRwxBlock(profiles: StorageProfileKind[], sc: string): boolean | undefined {
+  const p = profiles.find((x) => x.metadata?.name === sc);
+  if (!p?.status?.claimPropertySets) return undefined;
+  return p.status.claimPropertySets.some(
+    (c) => c.volumeMode === 'Block' && (c.accessModes || []).includes('ReadWriteMany'),
+  );
+}
+
 type StorageClassKind = K8sResourceCommon & {
   metadata: { name: string; annotations?: Record<string, string> };
 };
@@ -67,6 +84,11 @@ const StorageStep: FC<Props> = ({ config, onChange }) => {
     isList: true,
   });
 
+  const [storageProfiles] = useK8sWatchResource<StorageProfileKind[]>({
+    groupVersionKind: { group: 'cdi.kubevirt.io', version: 'v1beta1', kind: 'StorageProfile' },
+    isList: true,
+  });
+
   const scList = Array.isArray(storageClasses) ? storageClasses : [];
 
   if (!loaded) return <Spinner size="lg" />;
@@ -80,6 +102,9 @@ const StorageStep: FC<Props> = ({ config, onChange }) => {
     const infra = config.storage.infraStorageClassName || preferredInfraClass(scList);
     onChange({ ...patch, storage: { ...config.storage, ...patch.storage, infraStorageClassName: infra } });
   };
+
+  const infraClass = config.storage.infraStorageClassName || preferredInfraClass(scList);
+  const rwxBlock = supportsRwxBlock(Array.isArray(storageProfiles) ? storageProfiles : [], infraClass);
 
   const allowance = config.storage.allowanceGi > 0 ? config.storage.allowanceGi : 100;
   const vmGi = vmDiskGi(config);
@@ -188,6 +213,20 @@ const StorageStep: FC<Props> = ({ config, onChange }) => {
               </FormHelperText>
             </FormGroup>
           </>
+        )}
+
+        {storageOn && rwxBlock === false && (
+          <Alert
+            variant={config.virtualization.enabled ? 'warning' : 'info'}
+            isInline
+            title={t('{{sc}} has no ReadWriteMany Block support', { sc: infraClass })}
+          >
+            {config.virtualization.enabled
+              ? t(
+                  'Nested volumes will be ReadWriteOnce only, so virtual machines inside the nested cluster cannot be live-migrated. Choose a class that supports ReadWriteMany Block if you need that.',
+                )
+              : t('Nested volumes will be ReadWriteOnce only (Block or Filesystem).')}
+          </Alert>
         )}
 
         {config.virtualization.enabled && (

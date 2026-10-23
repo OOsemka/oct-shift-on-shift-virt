@@ -3,7 +3,7 @@
 # namespace: that is the only place that can reach the nested API (the
 # orchestrator pod cannot — the nested cluster lives on an isolated network).
 #
-# Env: CLUSTER HOST_NS DOMAIN VIP INFRA_SC INFRA_VSC(optional) VM_MAP("ip=vm ...")
+# Env: CLUSTER HOST_NS DOMAIN VIP INFRA_SC INFRA_VSC(optional) RWX_BLOCK(true|false) VM_MAP("ip=vm ...")
 # Mounts: /nested/kubeconfig (nested admin), /ps/.dockerconfigjson, /m (templates)
 #
 # Prints "IMAGE VAR=ref" lines for the orchestrator. Never prints the token.
@@ -47,6 +47,13 @@ render() {
   if grep -qE '\$\{[A-Z_]+\}' "$2"; then fatal "unrendered placeholder in $1: $(grep -oE '\$\{[A-Z_]+\}' "$2" | sort -u | tr '\n' ' ')"; fi
 }
 render /m/nested.yaml.tmpl /tmp/nested.yaml
+# StorageClass parameters are immutable: recreate the class when the host
+# class or the RWX Block decision changed. Bound volumes are unaffected.
+cur=$($N get storageclass kubevirt-csi -o jsonpath='{.parameters.infraStorageClassName}/{.parameters.rwxBlock}' 2>/dev/null || true)
+if [ -n "$cur" ] && [ "$cur" != "${INFRA_SC}/${RWX_BLOCK}" ]; then
+  $N delete storageclass kubevirt-csi >/dev/null
+  echo "OK recreating StorageClass kubevirt-csi ($cur -> ${INFRA_SC}/${RWX_BLOCK})"
+fi
 $N apply -f /tmp/nested.yaml >/dev/null
 echo "OK nested driver objects applied"
 if [ -n "${INFRA_VSC:-}" ]; then

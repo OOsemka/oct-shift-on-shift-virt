@@ -69,7 +69,7 @@ Two checkboxes on the wizard's Storage step:
 Requirements on the host:
 
 - KubeVirt **hot-plug volumes** (`HotplugVolumes`) enabled — the default with current OpenShift Virtualization.
-- A StorageClass that binds **Block** volumes; RWX lets nested VMs live-migrate.
+- Any StorageClass works for nested RWO volumes (Block or Filesystem). Nested **RWX Block**, and so live migration of VMs inside the nested cluster, is offered only when the selected host class supports **RWX Block** (its CDI StorageProfile says so). A Filesystem-only class such as CephFS gives RWO only: sharing one file-backed disk between two nested nodes fails and pauses the VM that had it.
 - Optional: a VolumeSnapshotClass for the same provisioner, which enables nested snapshots and smart clones.
 
 What it does on the host, and nothing more:

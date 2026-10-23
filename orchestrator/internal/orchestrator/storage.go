@@ -3,9 +3,11 @@ package orchestrator
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/yaml"
 )
@@ -100,9 +103,11 @@ func (s *StepExecutor) doConfigureStorage(ctx context.Context, nc *crd.NestedClu
 		return "", err
 	}
 
+	_, rwxBlock := s.nestedProfileFor(ctx, nc, sc)
 	logs, err := s.runStorageJob(ctx, nc, cluster+"-configure-storage", "configure-storage.sh", []corev1.EnvVar{
 		{Name: "INFRA_SC", Value: sc},
 		{Name: "INFRA_VSC", Value: vsc},
+		{Name: "RWX_BLOCK", Value: strconv.FormatBool(rwxBlock)},
 		{Name: "VM_MAP", Value: vmMap(nc)},
 	}, 20*time.Minute)
 	if err != nil {
@@ -129,11 +134,15 @@ func (s *StepExecutor) doConfigureStorage(ctx context.Context, nc *crd.NestedClu
 		return "", fmt.Errorf("self-test: %w", err)
 	}
 
+	migration := "RWX Block (nested VMs live-migratable)"
+	if !rwxBlock {
+		migration = "RWO only: host class has no RWX Block, nested VMs are not live-migratable"
+	}
 	snap := "snapshots via " + vsc
 	if vsc == "" {
 		snap = "no snapshots (host has no VolumeSnapshotClass for " + provisioner + ")"
 	}
-	return fmt.Sprintf("StorageClass kubevirt-csi backed by host %s; quota %dGi; %s", sc, quotaGi, snap), nil
+	return fmt.Sprintf("StorageClass kubevirt-csi backed by host %s; %s; quota %dGi; %s", sc, migration, quotaGi, snap), nil
 }
 
 // configureVirtualization installs OpenShift Virtualization in the nested
@@ -159,8 +168,11 @@ func (s *StepExecutor) configureVirtualization(ctx context.Context, nc *crd.Nest
 		err = s.ensureStorageScripts(ctx, nc)
 	}
 	if err == nil {
+		sets, _ := s.nestedProfileFor(ctx, nc, sc)
+		cps, _ := json.Marshal(sets)
 		_, err = s.runStorageJob(ctx, nc, nc.Spec.ClusterName+"-configure-virtualization", "configure-virtualization.sh", []corev1.EnvVar{
 			{Name: "INFRA_VSC", Value: vsc},
+			{Name: "NESTED_CPS", Value: string(cps)},
 		}, 75*time.Minute)
 	}
 	if err != nil {
@@ -296,6 +308,72 @@ func (s *StepExecutor) ensureRole(ctx context.Context, ns, name string, labels m
 		return fmt.Errorf("creating rolebinding %s: %w", name, err)
 	}
 	return nil
+}
+
+// claimPropertySet mirrors CDI's StorageProfile claimPropertySets entry.
+type claimPropertySet struct {
+	AccessModes []string `json:"accessModes"`
+	VolumeMode  string   `json:"volumeMode"`
+}
+
+// nestedClaimPropertySets decides what the nested kubevirt-csi class can offer
+// (finding F25). The driver never sets a volume mode on the infra DataVolume,
+// so tenant RWO Block and RWO Filesystem work on any host class. Tenant RWX
+// Block needs host RWX *Block*: on a Filesystem-only host class (CephFS) two
+// VMs sharing one disk image fail the second hotplug and pause the first VM on
+// I/O errors. RWX Filesystem is rejected by the driver itself.
+func nestedClaimPropertySets(host []claimPropertySet) (sets []claimPropertySet, rwxBlock bool) {
+	for _, c := range host {
+		if c.VolumeMode != "Block" {
+			continue
+		}
+		for _, m := range c.AccessModes {
+			if m == "ReadWriteMany" {
+				rwxBlock = true
+			}
+		}
+	}
+	if rwxBlock {
+		// first, so CDI picks it by default: nested VMs become live-migratable
+		sets = append(sets, claimPropertySet{AccessModes: []string{"ReadWriteMany"}, VolumeMode: "Block"})
+	}
+	sets = append(sets,
+		claimPropertySet{AccessModes: []string{"ReadWriteOnce"}, VolumeMode: "Block"},
+		claimPropertySet{AccessModes: []string{"ReadWriteOnce"}, VolumeMode: "Filesystem"},
+	)
+	return sets, rwxBlock
+}
+
+// hostClaimPropertySets reads the host StorageProfile of the infra class. An
+// error means "unknown", and callers must fall back to the RWO-only sets.
+func (s *StepExecutor) hostClaimPropertySets(ctx context.Context, sc string) ([]claimPropertySet, error) {
+	sp, err := s.client.DynamicClient.Resource(schema.GroupVersionResource{
+		Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "storageprofiles",
+	}).Get(ctx, sc, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	raw, found, err := unstructured.NestedSlice(sp.Object, "status", "claimPropertySets")
+	if err != nil || !found {
+		return nil, fmt.Errorf("host StorageProfile %s has no claimPropertySets", sc)
+	}
+	var out []claimPropertySet
+	b, _ := json.Marshal(raw)
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// nestedProfileFor combines the two above, logging (not failing) when the host
+// profile is unreadable.
+func (s *StepExecutor) nestedProfileFor(ctx context.Context, nc *crd.NestedCluster, sc string) ([]claimPropertySet, bool) {
+	host, err := s.hostClaimPropertySets(ctx, sc)
+	if err != nil {
+		s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("storage").
+			Info("host StorageProfile unreadable; nested volumes limited to RWO (no live migration)", "storageClass", sc, "error", err.Error())
+	}
+	return nestedClaimPropertySets(host)
 }
 
 // enforcementYAML pins the controller to exactly one host class. Upstream

@@ -477,6 +477,9 @@ provisioner: csi.kubevirt.io
 parameters:
   infraStorageClassName: ${INFRA_SC}
   bus: scsi
+  # "true" only when the host class supports RWX Block (finding F25). The
+  # driver ignores it; it tells CDI the class can do RWX Block safely.
+  rwxBlock: "${RWX_BLOCK}"
 allowVolumeExpansion: true
 reclaimPolicy: Delete
 ---

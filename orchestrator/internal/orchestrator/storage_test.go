@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -93,7 +94,7 @@ func TestNestedTemplatePlaceholdersAreProvided(t *testing.T) {
 		for _, p := range placeholderRe.FindAllString(mustReadCSI(f), -1) {
 			v := p[2 : len(p)-1]
 			exported := strings.HasPrefix(v, "IMG_") && regexp.MustCompile(`\b`+v+`=[a-z]`).MatchString(script)
-			if !exported && v != "INFRA_SC" && v != "INFRA_VSC" {
+			if !exported && v != "INFRA_SC" && v != "INFRA_VSC" && v != "RWX_BLOCK" {
 				t.Errorf("%s uses %s but configure-storage.sh never sets it", f, p)
 			}
 		}
@@ -111,5 +112,42 @@ func TestVMMap(t *testing.T) {
 func TestLastFatal(t *testing.T) {
 	if got := lastFatal("OK a\nFATAL: first\nFATAL: second\n"); got != "second" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// F25: host profiles observed on AZ1 and what the nested class may offer.
+func TestNestedClaimPropertySets(t *testing.T) {
+	rwo := []claimPropertySet{
+		{AccessModes: []string{"ReadWriteOnce"}, VolumeMode: "Block"},
+		{AccessModes: []string{"ReadWriteOnce"}, VolumeMode: "Filesystem"},
+	}
+	rwxBlockFirst := append([]claimPropertySet{{AccessModes: []string{"ReadWriteMany"}, VolumeMode: "Block"}}, rwo...)
+	cases := []struct {
+		name string
+		host []claimPropertySet
+		want []claimPropertySet
+		rwx  bool
+	}{
+		{"RBD (RWX Block)", []claimPropertySet{
+			{AccessModes: []string{"ReadWriteMany"}, VolumeMode: "Block"},
+			{AccessModes: []string{"ReadWriteOnce"}, VolumeMode: "Block"},
+			{AccessModes: []string{"ReadWriteOnce"}, VolumeMode: "Filesystem"},
+		}, rwxBlockFirst, true},
+		{"CephFS (Filesystem only)", []claimPropertySet{
+			{AccessModes: []string{"ReadWriteMany"}, VolumeMode: "Filesystem"},
+			{AccessModes: []string{"ReadWriteOnce"}, VolumeMode: "Filesystem"},
+		}, rwo, false},
+		{"local block, RWO only", []claimPropertySet{{AccessModes: []string{"ReadWriteOnce"}, VolumeMode: "Block"}}, rwo, false},
+		{"NFS-style RWX Block among others", []claimPropertySet{
+			{AccessModes: []string{"ReadWriteMany"}, VolumeMode: "Filesystem"},
+			{AccessModes: []string{"ReadWriteOnce", "ReadWriteMany"}, VolumeMode: "Block"},
+		}, rwxBlockFirst, true},
+		{"unknown (profile unreadable)", nil, rwo, false},
+	}
+	for _, c := range cases {
+		got, rwx := nestedClaimPropertySets(c.host)
+		if rwx != c.rwx || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %v rwx=%v, want %v rwx=%v", c.name, got, rwx, c.want, c.rwx)
+		}
 	}
 }

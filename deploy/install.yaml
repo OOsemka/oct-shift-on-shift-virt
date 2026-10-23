@@ -302,6 +302,13 @@ rules:
   - patch
   - delete
 - apiGroups:
+  - cdi.kubevirt.io
+  resources:
+  - storageprofiles
+  verbs:
+  - get
+  - list
+- apiGroups:
   - ''
   resources:
   - resourcequotas

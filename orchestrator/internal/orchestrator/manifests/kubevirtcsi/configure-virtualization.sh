@@ -1,7 +1,7 @@
 #!/bin/bash
 # Installs OpenShift Virtualization inside the nested cluster and makes the
 # kubevirt-csi class usable by CDI (findings F21/F23 in the storage plan).
-# Env: VIP DOMAIN INFRA_VSC(optional). Mounts: /nested/kubeconfig, /m.
+# Env: VIP DOMAIN INFRA_VSC(optional) NESTED_CPS(JSON claimPropertySets). Mounts: /nested/kubeconfig, /m.
 . /m/lib.sh
 
 $N apply -f /m/cnv.yaml >/dev/null
@@ -28,9 +28,13 @@ echo "OK HyperConverged available"
 
 # CDI ships no profile defaults for csi.kubevirt.io (upstream CDI#4323).
 poll 300 $N get storageprofile kubevirt-csi || fatal "StorageProfile kubevirt-csi never appeared"
-patch='{"spec":{"claimPropertySets":[{"accessModes":["ReadWriteMany"],"volumeMode":"Block"},{"accessModes":["ReadWriteOnce"],"volumeMode":"Block"},{"accessModes":["ReadWriteOnce"],"volumeMode":"Filesystem"}]'
-if [ -z "${INFRA_VSC:-}" ]; then patch="$patch"',"cloneStrategy":"copy"'; fi
-$N patch storageprofile kubevirt-csi --type=merge -p "$patch}}" >/dev/null
+# NESTED_CPS comes from the host profile of the infra class (finding F25):
+# RWX Block only when the host class supports it, RWO always.
+patch=$(python3 -c 'import json,os
+spec={"claimPropertySets": json.loads(os.environ["NESTED_CPS"])}
+if not os.environ.get("INFRA_VSC"): spec["cloneStrategy"]="copy"
+print(json.dumps({"spec": spec}))')
+$N patch storageprofile kubevirt-csi --type=merge -p "$patch" >/dev/null
 $N annotate storageclass kubevirt-csi --overwrite storageclass.kubevirt.io/is-default-virt-class=true >/dev/null
-echo "OK StorageProfile kubevirt-csi patched; kubevirt-csi is the default virtualization class"
+echo "OK StorageProfile kubevirt-csi set to $NESTED_CPS; kubevirt-csi is the default virtualization class"
 echo "VIRT_OK"
