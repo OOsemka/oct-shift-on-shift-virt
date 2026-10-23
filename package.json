@@ -1,6 +1,6 @@
 {
   "name": "oct-shift-on-shift-virt",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Community project. Deploy standalone OpenShift clusters on KubeVirt VMs. Not officially supported by Red Hat.",
   "private": true,
   "license": "Apache-2.0",
@@ -42,7 +42,7 @@
   },
   "consolePlugin": {
     "name": "oct-shift-on-shift-virt",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "displayName": "Shift-on-Shift Virt",
     "description": "Deploy standalone OpenShift clusters on KubeVirt VMs",
     "exposedModules": {

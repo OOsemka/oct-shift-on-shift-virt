@@ -5,9 +5,9 @@
 Standalone OpenShift Console plugin that deploys full, standalone OpenShift clusters on KubeVirt virtual machines — OpenShift-on-OpenShift, not HyperShift. A wizard collects the cluster definition; an orchestrator drives an agent-based install end to end and hands back a kubeconfig.
 
 - **Plugin ID:** `oct-shift-on-shift-virt`
-- **Version:** `0.2.0`
-- **Image:** `quay.io/cjanisze/oct-shift-on-shift-virt:0.2.0-ocp4.22` and `:0.2.0-ocp4.21` (`<semver>-ocp<major.minor>`; always publish both minors)
-- **Orchestrator image:** `quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator:0.2.0-ocp4.22` and `:0.2.0-ocp4.21` (companion)
+- **Version:** `0.2.1`
+- **Image:** `quay.io/cjanisze/oct-shift-on-shift-virt:0.2.1-ocp4.22` and `:0.2.1-ocp4.21` (`<semver>-ocp<major.minor>`; always publish both minors)
+- **Orchestrator image:** `quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator:0.2.1-ocp4.22` and `:0.2.1-ocp4.21` (companion)
 - **Git branch:** `main` tracks the newest supported minor (4.22); an `ocp-X.Y` branch is cut only when PatternFly or console APIs diverge
 
 Validated on OpenShift **4.22** (PatternFly 6), installing nested OpenShift 4.22. Open from **Community Tools → Compute** after the storefront ([oct-storefront](https://github.com/OOsemka/oct-storefront)) and this plugin are enabled.
