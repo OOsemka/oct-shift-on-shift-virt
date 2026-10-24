@@ -143,11 +143,23 @@ Do **not** change unless you are deliberately migrating a live cluster:
 - Plugin ID `oct-shift-on-shift-virt`
 - CRD `nestedclusters.octools.io`
 
+## Releases and how they reach clusters
+
+- Release: bump `package.json` (both fields), README/AGENTS versions and `deploy/install.yaml` images; publish plugin **and** orchestrator for both minors; tag `v<semver>`. See `.cursor/rules/oct-release-checklist.mdc`.
+- Clusters install this tool from the **bundle compiled into the storefront** (`oct-storefront/catalog/deploy/oct-shift-on-shift-virt.yaml` = `deploy/crd.yaml` + `---` + `deploy/install.yaml`). Because the bundle has companions (orchestrator, CRD), every release here needs a storefront release with the regenerated bundle, and clusters must update the storefront first. Storefronts since 1.4.7 hold the update back otherwise.
+- Storefront upgrades converge the CRD and RBAC and add new orchestrator env vars, but never change existing env values. A behaviour that must change on existing installs needs a new env var or a migration.
+- Dev loop: the dev cluster runs `sos-orchestrator:latest` (`orchestrator/build-push-rollout.sh`, which restarts the orchestrator on the **current `oc` context** — check it first) and the plugin from a separate `:dev` tag. Never push dev builds to a published `<semver>-ocp<minor>` tag.
+
+## Upstream items to track
+
+- **kubevirt/csi-driver #398** (split-mode controller cannot patch VolumeSnapshotContents) is fixed upstream by #399. Keep our workaround ClusterRoleBinding `kubevirt-csi-controller-snapshotter` (in `manifests/kubevirtcsi/nested.yaml.tmpl`) until a csi-driver release with that fix is in the OpenShift payload we pull images from.
+- **kubevirt/containerized-data-importer #4323** (no StorageProfile defaults for `csi.kubevirt.io`) is open; the proposal there is RWO defaults plus an `rwxBlock` StorageClass opt-in. ConfigureVirtualization writes the nested StorageProfile itself and the nested StorageClass already carries `rwxBlock`, so nothing changes here if it lands.
+
 ## Known limitations
 
 - Nested ingress/apps are not exposed through host Routes (the nested router dispatches on Host); use DNS or the bastion desktop.
 - Masters are not live-migratable until one restart after PostInstall ejects the ISO.
-- Live migration of a master holding a hot-plugged nested volume is not yet validated.
+- Live migration of a master holding a hot-plugged nested volume, and online resize through the automated install, are not yet validated (milestone M2 in the maintainers' plan; expected to work, not tested).
 
 ## Verify
 

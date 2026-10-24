@@ -40,7 +40,22 @@ Extensions with sidecars (discovery-service, benchmark-runner, windows-builder-b
    ```
    `ensureCacheSeeded()` is seed-once — if the `community.yaml` key already exists in the ConfigMap, it returns immediately. Deleting forces re-seed from the new bundled YAML on the next page load.
 3. **Verify pods are Running** — not just that Add / `oc apply` succeeded. Check the plugin Deployment **and** every sidecar Deployment.
-4. **Seed the public API** — POST new version rows to `https://api.octools.net/v1/versions` so the stats API knows about them.
+4. **Seed the public API** — from `octools-stats-worker`, after the storefront PR is merged:
+   ```
+   DRY_RUN=1 TOOL=<id> CATALOG_PATH=<storefront>/catalog/community.yaml node seed.js
+   ADMIN_TOKEN=<admin token> TOOL=<id> CATALOG_PATH=<storefront>/catalog/community.yaml node seed.js
+   curl -s https://api.octools.net/v1/versions/<id>
+   ```
+   The API stores one row per OpenShift minor (`openshift` is a string). The admin token is a Cloudflare Worker secret held by maintainers; never put it in a file in a repo. Installed storefronts pick up new rows on their next catalog sync (hourly, on a Community Tools page load).
+5. **Tag the storefront release** — annotated `v<semver>` on the merge commit, pushed. Catalog rows reference it as `gitRef`.
+
+## Storefront and companion-carrying tools
+
+- **Every storefront version bump adds the storefront's own `oct-storefront` rows (both minors).** Without them installed storefronts are never offered the release. `validate-catalog.sh` enforces it.
+- **The storefront updates itself from `deploy/upgrade.yaml`**, generated from `deploy/install.yaml` by `scripts/gen-upgrade-yaml.py` (no Job, no ConfigMaps). Regenerate it whenever `install.yaml` changes; storefront rows must point `deployURL` at it.
+- **A tool whose bundle has companions** (a CRD or an extra Deployment) is installed from the bundle compiled into the storefront. Regenerate `catalog/deploy/oct-<name>.yaml` from the tool repo and **release the storefront in the same change**. Older storefronts hold such an update back ("update the storefront first"); on clusters, update the storefront before the tool.
+- **Upgrades converge** CRDs, (Cluster)Roles, bindings and the ConsolePlugin to the bundle, update every container image, and **add** env vars a new release needs without changing existing values. A setting that must change on existing installs needs a new env var name or a migration, not a changed default.
+- **Never overwrite a published image tag**, including dev builds: use a separate dev tag (e.g. `:dev`) and pick the next version for a release.
 
 ## OCP minor completeness
 
