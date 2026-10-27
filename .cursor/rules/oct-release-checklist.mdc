@@ -55,6 +55,8 @@ Extensions with sidecars (discovery-service, benchmark-runner, windows-builder-b
 - **The storefront updates itself from `deploy/upgrade.yaml`**, generated from `deploy/install.yaml` by `scripts/gen-upgrade-yaml.py` (no Job, no ConfigMaps). Regenerate it whenever `install.yaml` changes; storefront rows must point `deployURL` at it.
 - **A tool whose bundle has companions** (a CRD or an extra Deployment) is installed from the bundle compiled into the storefront. Regenerate `catalog/deploy/oct-<name>.yaml` from the tool repo and **release the storefront in the same change**. Older storefronts hold such an update back ("update the storefront first"); on clusters, update the storefront before the tool.
 - **Upgrades converge** CRDs, (Cluster)Roles, bindings and the ConsolePlugin to the bundle, update every container image, and **add** env vars a new release needs without changing existing values. A setting that must change on existing installs needs a new env var name or a migration, not a changed default.
+- **Every image must pull anonymously**, including images that phase Jobs or companions use, and never a private `:latest`. A dev cluster with a registry pull secret hides private images; check from outside (`skopeo inspect --no-creds`, or `hack/check-images-public.sh` in oct-shift-on-shift-virt).
+- **No environment-specific names in code**: StorageClass, VolumeSnapshotClass, NAD and similar names differ per cluster (e.g. `odf-...` vs `ocs-...` on ODF). Resolve them from the cluster (by driver/provisioner) instead of hardcoding one lab's name.
 - **Never overwrite a published image tag**, including dev builds: use a separate dev tag (e.g. `:dev`) and pick the next version for a release.
 
 ## OCP minor completeness
