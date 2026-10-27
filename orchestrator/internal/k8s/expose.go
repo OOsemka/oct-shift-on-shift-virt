@@ -16,7 +16,7 @@ var routeGVR = schema.GroupVersionResource{Group: "route.openshift.io", Version:
 var infraGVR = schema.GroupVersionResource{Group: "config.openshift.io", Version: "v1", Resource: "infrastructures"}
 
 // AppsDomain returns the host cluster's default apps (router) domain, e.g.
-// "apps.sos-ocp.chris.lab". Routes whose hosts live under it are accepted by
+// "apps.sos-ocp.example.com". Routes whose hosts live under it are accepted by
 // the default ingress controller without touching host-cluster config.
 func (c *Client) AppsDomain(ctx context.Context) (string, error) {
 	infra, err := c.DynamicClient.Resource(infraGVR).Get(ctx, "cluster", metav1.GetOptions{})

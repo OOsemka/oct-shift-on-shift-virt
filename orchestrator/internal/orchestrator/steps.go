@@ -1543,11 +1543,33 @@ echo "ISO generation complete"
 	return nil
 }
 
+// isoSnapshotClass returns the VolumeSnapshotClass for the VM StorageClass's
+// driver, or an actionable error when that storage cannot snapshot.
+func (s *StepExecutor) isoSnapshotClass(ctx context.Context, storageClass string) (string, error) {
+	sc, provisioner, err := s.resolveInfraStorageClass(ctx, storageClass)
+	if err != nil {
+		return "", err
+	}
+	vsc := s.resolveInfraSnapshotClass(ctx, provisioner)
+	if vsc == "" {
+		return "", fmt.Errorf("StorageClass %s (provisioner %s) has no VolumeSnapshotClass; the install copies the agent ISO "+
+			"into the cluster namespace with a snapshot, so choose a StorageClass whose driver supports snapshots", sc, provisioner)
+	}
+	return vsc, nil
+}
+
 func (s *StepExecutor) mountISO(ctx context.Context, nc *crd.NestedCluster) error {
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("installer")
 	crNs := nc.Namespace
 	clusterNs := nc.Spec.Namespace
-	snapshotClass := "odf-storagecluster-rbdplugin-snapclass"
+	// The ISO reaches the cluster namespace through a VolumeSnapshot, so the
+	// VM StorageClass needs a VolumeSnapshotClass for its driver. Its name
+	// differs per cluster (odf-… vs ocs-… on ODF, others elsewhere): resolve
+	// it, never hardcode it.
+	snapshotClass, err := s.isoSnapshotClass(ctx, nc.Spec.StorageClassName)
+	if err != nil {
+		return err
+	}
 	srcPVC := nc.Spec.ClusterName + "-installer"
 	blockPVC := nc.Spec.ClusterName + "-iso-block"
 	snapName := nc.Spec.ClusterName + "-iso-block-snap"
@@ -1566,7 +1588,7 @@ func (s *StepExecutor) mountISO(ctx context.Context, nc *crd.NestedCluster) erro
 		return fmt.Errorf("creating snapshot: %w", err)
 	}
 
-	log.Info("waiting for snapshot to be ready")
+	log.Info("waiting for snapshot to be ready", "volumeSnapshotClass", snapshotClass)
 	_, driver, handle, err := s.client.WaitForVolumeSnapshot(ctx, crNs, snapName, 5*time.Minute)
 	if err != nil {
 		return fmt.Errorf("waiting for snapshot: %w", err)
