@@ -67,7 +67,7 @@ const ConfigViewer: FC<ConfigViewerProps> = ({ installConfig, agentConfig }) => 
         onSelect={(_e, key) => setActiveTab(key)}
         isFilled
       >
-        {installConfig && (
+        {!!installConfig && (
           <Tab
             eventKey="install-config"
             title={<TabTitleText>{t('install-config.yaml')}</TabTitleText>}
@@ -77,7 +77,7 @@ const ConfigViewer: FC<ConfigViewerProps> = ({ installConfig, agentConfig }) => 
             </div>
           </Tab>
         )}
-        {agentConfig && (
+        {!!agentConfig && (
           <Tab
             eventKey="agent-config"
             title={<TabTitleText>{t('agent-config.yaml')}</TabTitleText>}

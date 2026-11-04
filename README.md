@@ -118,7 +118,9 @@ oc apply -f deploy/install.yaml
 
 Then enable `oct-shift-on-shift-virt` in `consoles.operator.openshift.io/cluster` `spec.plugins`. **Add success is not Ready** — confirm both the plugin and `sos-orchestrator` Deployments are Running.
 
-## Contributing — cluster-portable code
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md): setup, `yarn verify`, testing on your own cluster, the project rules and what maintainers do at release.
 
 Do **not** hardcode environment-specific values: StorageClass names, VLANs, CIDRs, NAD names, lab domains, node names or cluster URLs. The wizard collects them, or the orchestrator reads them from the cluster; optional overrides default to empty. Agents: `.cursor/rules/oct-no-env-hardcoding.mdc`. Do not commit pull secrets, kubeconfigs or tokens.
 
