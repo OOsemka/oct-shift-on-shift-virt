@@ -29,16 +29,33 @@ type Engine struct {
 	logger   *logging.Logger
 	steps    *StepExecutor
 	mu       sync.Mutex
-	running  map[string]context.CancelFunc
+	running  map[string]*reconcileRun
 	deleting map[string]bool
+	// reconcileFn runs one reconcile; tests replace it. nil means e.reconcile.
+	reconcileFn func(context.Context, *crd.NestedCluster)
+}
+
+// reconcileRun is one in-flight reconcile. Each run has its own entry so a
+// cancelled run that exits late never removes the entry of the run that
+// replaced it (a cancelled install used to delete the teardown's entry).
+type reconcileRun struct {
+	cancel   context.CancelFunc
+	teardown bool
+}
+
+// isTeardown reports whether this event asks for the cluster to be deleted:
+// a real deletion (finalizer) or the Deleting phase the API sets first.
+func isTeardown(nc *crd.NestedCluster) bool {
+	return nc.GetDeletionTimestamp() != nil || nc.Status.Phase == crd.PhaseDeleting
 }
 
 func NewEngine(client *k8s.Client, logger *logging.Logger) *Engine {
 	return &Engine{
-		client:  client,
-		logger:  logger,
-		steps:   NewStepExecutor(client, logger),
-		running: make(map[string]context.CancelFunc),
+		client:   client,
+		logger:   logger,
+		steps:    NewStepExecutor(client, logger),
+		running:  make(map[string]*reconcileRun),
+		deleting: make(map[string]bool),
 	}
 }
 
@@ -101,7 +118,7 @@ func (e *Engine) handleWatchEvents(ctx context.Context, watcher watch.Interface)
 			case watch.Added, watch.Modified:
 				e.handleClusterEvent(ctx, nc)
 			case watch.Deleted:
-				e.cancelReconcile(nc.Name)
+				e.cancelReconcile(nc.Namespace + "/" + nc.Name)
 			}
 		}
 	}
@@ -115,7 +132,7 @@ func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) 
 	// in-flight install reconcile exactly once and drive teardown. Repeated
 	// deletion events must NOT cancel the running teardown — status writes
 	// from the teardown itself generate those events.
-	if nc.GetDeletionTimestamp() != nil || phase == crd.PhaseDeleting {
+	if isTeardown(nc) {
 		e.mu.Lock()
 		if e.deleting == nil {
 			e.deleting = map[string]bool{}
@@ -124,8 +141,8 @@ func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) 
 			e.mu.Unlock()
 			return
 		}
-		if cancel, exists := e.running[key]; exists {
-			cancel()
+		if run, exists := e.running[key]; exists {
+			run.cancel()
 			delete(e.running, key)
 		}
 		e.deleting[key] = true
@@ -153,6 +170,16 @@ func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) 
 		return
 	}
 
+	// A live cluster is not being deleted. Drop a deleting mark left by an
+	// earlier cluster with the same namespace/name, unless a teardown is
+	// actually running: otherwise deleting a cluster that was deleted and
+	// re-created with the same name never starts a teardown.
+	e.mu.Lock()
+	if run, busy := e.running[key]; !busy || !run.teardown {
+		delete(e.deleting, key)
+	}
+	e.mu.Unlock()
+
 	if phase == crd.PhaseReady || phase == crd.PhaseFailed {
 		return
 	}
@@ -173,28 +200,43 @@ func (e *Engine) startReconcile(ctx context.Context, nc *crd.NestedCluster) bool
 		return false
 	}
 	reconcileCtx, cancel := context.WithCancel(ctx)
-	e.running[key] = cancel
+	run := &reconcileRun{cancel: cancel, teardown: isTeardown(nc)}
+	e.running[key] = run
 	e.mu.Unlock()
 
+	fn := e.reconcileFn
+	if fn == nil {
+		fn = e.reconcile
+	}
 	go func() {
 		defer func() {
 			e.mu.Lock()
-			delete(e.running, key)
+			if e.running[key] == run {
+				delete(e.running, key)
+			}
+			// Every teardown clears the deleting mark when it ends, whichever
+			// path started it. Only the finalizer path used to, so a teardown
+			// started by the Deleting phase left the mark behind forever.
+			if run.teardown {
+				delete(e.deleting, key)
+			}
 			e.mu.Unlock()
+			cancel()
 		}()
-		e.reconcile(reconcileCtx, nc)
+		fn(reconcileCtx, nc)
 	}()
 	return true
 }
 
-func (e *Engine) cancelReconcile(name string) {
+// cancelReconcile stops the reconcile of exactly this namespace/name. It used
+// to match by name suffix, so deleting "demo" also cancelled "xdemo" (and a
+// name longer than the key panicked).
+func (e *Engine) cancelReconcile(key string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for key, cancel := range e.running {
-		if key == name || key[len(key)-len(name):] == name {
-			cancel()
-			delete(e.running, key)
-		}
+	if run, ok := e.running[key]; ok {
+		run.cancel()
+		delete(e.running, key)
 	}
 }
 
@@ -208,12 +250,6 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 		if !hasFinalizer(nc, cleanupFinalizer) {
 			return
 		}
-		delKey := nc.Namespace + "/" + nc.Name
-		defer func() {
-			e.mu.Lock()
-			delete(e.deleting, delKey)
-			e.mu.Unlock()
-		}()
 		e.updateStatus(ctx, nc, crd.PhaseDeleting, "NestedCluster deletion requested")
 		log.Info("starting cluster deletion")
 		if err := e.steps.DeleteCluster(ctx, nc); err != nil {
@@ -258,6 +294,14 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 
 	currentPhase := nc.Status.Phase
 	if currentPhase == crd.PhaseEmpty {
+		// A new cluster (also one applied with oc, bypassing the API): fail
+		// before anything is created if the network settings cannot work.
+		// Existing clusters are not re-checked so an upgrade never fails them.
+		if err := nc.Spec.ValidateNetwork(); err != nil {
+			log.Error("refusing to install", "error", err.Error())
+			e.updateStatus(ctx, nc, crd.PhaseFailed, err.Error())
+			return
+		}
 		currentPhase = crd.PhaseOrder[0]
 	}
 

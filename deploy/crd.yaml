@@ -206,13 +206,18 @@ spec:
                       description: Name of the NetworkAttachmentDefinition for the HAProxy VLAN-side NIC.
                     apiIP:
                       type: string
-                      description: Static IP on the VLAN network for API traffic (api.<cluster>.<domain>).
+                      description: Free static IP on the external VLAN for API traffic (api.<cluster>.<domain>). Typed in by the user; never assigned automatically, and must not be an internal VIP.
                     ingressIP:
                       type: string
-                      description: Static IP on the VLAN network for Ingress traffic (*.apps.<cluster>.<domain>).
+                      description: Free static IP on the external VLAN for Ingress traffic (*.apps.<cluster>.<domain>). Typed in by the user; never assigned automatically, and must not be an internal VIP.
                     jumpboxIP:
                       type: string
-                      description: Optional static IP on the VLAN network for the diagnostics jumpbox VM's second NIC, making it ssh-reachable from outside the machine network (same /24 convention as apiIP).
+                      description: Optional static IP on the VLAN network for the diagnostics jumpbox VM's second NIC, making it ssh-reachable from outside the machine network (same prefix as apiIP).
+                    prefixLength:
+                      type: integer
+                      minimum: 8
+                      maximum: 30
+                      description: Prefix length of the external VLAN subnet that apiIP, ingressIP and jumpboxIP live in. Omitted means 24.
                 storageClassName:
                   type: string
                   description: StorageClass for VM root disk PVCs.

@@ -77,10 +77,18 @@ One VM per cluster (CentOS Stream 9 DataSource): nested DNS, MCS relay, SSH as `
 - The orchestrator can only grant what it holds (RBAC escalation prevention). `oc auth can-i` false-negatives on `subresources.kubevirt.io`; test a Role with a server-side dry run instead.
 - Credentials written by Jobs go straight into Secrets — never `oc apply` a Secret (the token would land in the last-applied annotation) and never print tokens to logs.
 
+## Network settings guardrails
+
+Two kinds of addresses, easy to mix up: the **internal VIPs** (`spec.network.apiVIP/ingressVIP`, base+10/+11 of the internal cUDN subnet, set automatically by the wizard) and the **external IPs** (`spec.externalAccess.apiIP/ingressIP`, free addresses on a reachable VLAN, always typed in by the user; the HAProxy pods get `<ip>/<prefixLength>` on the selected NAD, prefix default 24).
+
+`crd.(*NestedClusterSpec).ValidateNetwork()` (`orchestrator/internal/crd/validate.go`) refuses settings that can only produce a broken cluster: blank or invalid external IPs (they made the annotation `"ips":["/24"]` and the HAProxy pod never started), external IPs equal to the internal VIPs or inside the internal, pod or service networks, the same address twice, addresses in different VLAN subnets or on the network/broadcast address, no NAD, an internal network smaller than /24 or overlapping the pod/service networks. It runs in the create API (HTTP 400 with the reasons) and at the start of a new cluster's reconcile (so `oc apply` is covered); existing clusters are never re-checked. The wizard runs the same rules (`src/utils/network-check.ts`): Next stays disabled on Network and External Access, and Deploy is blocked while any problem remains. Keep the two in step.
+
 ## Teardown
 
 `DeleteCluster` removes VMs, Jobs, the API Route (operator namespace), ISO snapshots/PVCs, cluster-scoped bindings (anyuid, CSI pv-reader), the cUDN, then force-deletes the namespace. The cleanup finalizer is released on both deletion paths; a 2-minute resync re-drives any stranded deletion.
 
+
+Deletion bookkeeping (`engine.go`): every reconcile has its own `reconcileRun` entry, and every teardown clears the `deleting` mark when it ends, whichever path started it (Deleting phase or finalizer). A live (non-deleting) event clears a stale mark. Before this, a cluster deleted and re-created with the same name could not be deleted again until its install timed out. Covered by `engine_delete_test.go`.
 ## Key code files
 
 | File | What it does |

@@ -10,12 +10,13 @@ import {
   FormSelectOption,
   HelperText,
   HelperTextItem,
+  NumberInput,
   Spinner,
   TextInput,
 } from '@patternfly/react-core';
 import { K8sResourceCommon, useK8sWatchResource } from '@openshift-console/dynamic-plugin-sdk';
 import { ClusterConfig } from './types';
-import { validateIP } from '../../utils/validation';
+import { externalAccessProblems, NetworkField } from '../../utils/network-check';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
@@ -65,12 +66,25 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
   const nadsLoading = !nsLoaded || !defaultLoaded;
   const nadError = nsError || defaultError;
 
-  const apiErr = ea.apiIP ? validateIP(ea.apiIP) : undefined;
-  const ingressErr = ea.ingressIP ? validateIP(ea.ingressIP) : undefined;
+  // Show "required" only after the user has typed something somewhere on this
+  // step; the wizard's Next stays disabled either way.
+  const problems = externalAccessProblems(config);
+  const touched = Boolean(ea.nadName || ea.apiIP || ea.ingressIP);
+  const errorFor = (field: NetworkField) => {
+    const p = problems.find((x) => x.field === field);
+    return p && (touched || field === 'prefixLength') ? t(p.key, p.values) : undefined;
+  };
+  const nadErr = errorFor('nadName');
+  const apiErr = errorFor('apiIP');
+  const ingressErr = errorFor('ingressIP');
+  const prefixErr = errorFor('prefixLength');
 
   return (
     <Form className="sos-form">
-      <FormGroup label={t('NAD Name')} isRequired fieldId="nad-name">
+      <Alert variant="info" isInline title={t('These addresses are not assigned automatically')}>
+        {t('Pick the network (NAD) of a VLAN that people can reach, then type two free addresses on that VLAN: one for the API and one for Ingress. Do not use the internal VIPs from the Network step. Ask your network team for free addresses if you are unsure.')}
+      </Alert>
+      <FormGroup label={t('External network (NAD)')} isRequired fieldId="nad-name">
         {nadsLoading ? <Spinner size="md" /> : (
           <FormSelect
             id="nad-name"
@@ -86,6 +100,13 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
               />
             ))}
           </FormSelect>
+        )}
+        {nadErr && (
+          <FormHelperText>
+            <HelperText>
+              <HelperTextItem variant="error">{nadErr}</HelperTextItem>
+            </HelperText>
+          </FormHelperText>
         )}
         {nadError && (
           <FormHelperText>
@@ -104,7 +125,7 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
         </FormHelperText>
       </FormGroup>
 
-      <FormGroup label={t('API IP')} isRequired fieldId="api-ip">
+      <FormGroup label={t('External API IP')} isRequired fieldId="api-ip">
         <TextInput
           id="api-ip"
           value={ea.apiIP}
@@ -112,16 +133,16 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
           validated={apiErr ? 'error' : 'default'}
           placeholder="192.168.100.10"
         />
-        {apiErr && (
-          <FormHelperText>
-            <HelperText>
-              <HelperTextItem variant="error">{apiErr}</HelperTextItem>
-            </HelperText>
-          </FormHelperText>
-        )}
+        <FormHelperText>
+          <HelperText>
+            <HelperTextItem variant={apiErr ? 'error' : 'default'}>
+              {apiErr || t('Free address on the external VLAN for api.<cluster>.<domain>.')}
+            </HelperTextItem>
+          </HelperText>
+        </FormHelperText>
       </FormGroup>
 
-      <FormGroup label={t('Ingress IP')} isRequired fieldId="ingress-ip">
+      <FormGroup label={t('External Ingress IP')} isRequired fieldId="ingress-ip">
         <TextInput
           id="ingress-ip"
           value={ea.ingressIP}
@@ -129,16 +150,38 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
           validated={ingressErr ? 'error' : 'default'}
           placeholder="192.168.100.11"
         />
-        {ingressErr && (
-          <FormHelperText>
-            <HelperText>
-              <HelperTextItem variant="error">{ingressErr}</HelperTextItem>
-            </HelperText>
-          </FormHelperText>
-        )}
+        <FormHelperText>
+          <HelperText>
+            <HelperTextItem variant={ingressErr ? 'error' : 'default'}>
+              {ingressErr || t('Another free address on the same VLAN, for *.apps.<cluster>.<domain>.')}
+            </HelperTextItem>
+          </HelperText>
+        </FormHelperText>
+      </FormGroup>
+      <FormGroup label={t('VLAN prefix length')} isRequired fieldId="prefix-length">
+        <NumberInput
+          id="prefix-length"
+          value={ea.prefixLength}
+          min={8}
+          max={30}
+          onMinus={() => onChange({ prefixLength: Math.max(8, (ea.prefixLength || 24) - 1) })}
+          onPlus={() => onChange({ prefixLength: Math.min(30, (ea.prefixLength || 24) + 1) })}
+          onChange={(e) => {
+            const n = parseInt((e.target as HTMLInputElement).value, 10);
+            onChange({ prefixLength: isNaN(n) ? 0 : n });
+          }}
+          widthChars={4}
+        />
+        <FormHelperText>
+          <HelperText>
+            <HelperTextItem variant={prefixErr ? 'error' : 'default'}>
+              {prefixErr || t('Size of the external VLAN subnet, for example 24 for a /24 or 22 for a /22.')}
+            </HelperTextItem>
+          </HelperText>
+        </FormHelperText>
       </FormGroup>
 
-      {fqdn && ea.apiIP && ea.ingressIP && (
+      {fqdn && ea.apiIP && ea.ingressIP && !apiErr && !ingressErr && (
         <Alert variant="info" isInline title={t('DNS Records')} className="sos-dns-records">
           <p>{t('Add the following A records to your DNS:')}</p>
           <ClipboardCopy isReadOnly isCode variant="expansion" isExpanded>

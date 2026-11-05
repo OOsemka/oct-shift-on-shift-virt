@@ -20,8 +20,11 @@ export interface NetworkConfig {
 
 export interface ExternalAccessConfig {
   nadName: string;
+  /** Free static addresses on the external VLAN, typed in by the user (never assigned automatically). */
   apiIP: string;
   ingressIP: string;
+  /** Prefix length of the external VLAN subnet (the HAProxy pods get <ip>/<prefix>). */
+  prefixLength: number;
 }
 
 /**
@@ -153,6 +156,7 @@ export const DEFAULT_CLUSTER_CONFIG: ClusterConfig = {
     nadName: '',
     apiIP: '',
     ingressIP: '',
+    prefixLength: 24,
   },
   storageClassName: '',
   storage: { enabled: false, infraStorageClassName: '', allowanceGi: 100 },

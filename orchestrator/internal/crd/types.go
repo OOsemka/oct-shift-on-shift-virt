@@ -173,10 +173,25 @@ type ExternalAccessConfig struct {
 	APIIP     string `json:"apiIP"`
 	IngressIP string `json:"ingressIP"`
 	// JumpboxIP gives the diagnostics jumpbox VM a second interface on the
-	// NAD above with this static address (same /24 convention as the HAProxy
-	// VIPs), making it ssh-reachable from the external network. Optional:
+	// NAD above with this static address (same prefix as the HAProxy
+	// VIPs, PrefixLength), making it ssh-reachable from the external network. Optional:
 	// empty leaves the jumpbox cUDN-only.
 	JumpboxIP string `json:"jumpboxIP,omitempty"`
+	// PrefixLength is the prefix of the external VLAN subnet the static
+	// addresses above live in (the HAProxy pods' interfaces get <ip>/<prefix>).
+	// 0 means 24, the value every earlier version hardcoded.
+	PrefixLength int `json:"prefixLength,omitempty"`
+}
+
+// DefaultExternalPrefixLength is used when ExternalAccessConfig.PrefixLength is 0.
+const DefaultExternalPrefixLength = 24
+
+// Prefix returns the external VLAN prefix length, defaulting to 24.
+func (e ExternalAccessConfig) Prefix() int {
+	if e.PrefixLength == 0 {
+		return DefaultExternalPrefixLength
+	}
+	return e.PrefixLength
 }
 
 type SecretRef struct {

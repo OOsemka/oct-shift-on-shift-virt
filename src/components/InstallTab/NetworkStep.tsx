@@ -9,7 +9,7 @@ import {
   TextInput,
 } from '@patternfly/react-core';
 import { ClusterConfig } from './types';
-import { validateCIDR } from '../../utils/validation';
+import { internalVIPs, NetworkField, networkProblems } from '../../utils/network-check';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
@@ -21,14 +21,19 @@ interface Props {
 const NetworkStep: FC<Props> = ({ config, onChange }) => {
   const { t } = useTranslation(I18N);
   const net = config.network;
-
-  const cudnErr = net.cudnSubnet ? validateCIDR(net.cudnSubnet) : undefined;
-  const clusterErr = net.clusterNetworkCIDR ? validateCIDR(net.clusterNetworkCIDR) : undefined;
-  const serviceErr = net.serviceNetworkCIDR ? validateCIDR(net.serviceNetworkCIDR) : undefined;
+  const problems = networkProblems(net);
+  const errorFor = (field: NetworkField) => {
+    const p = problems.find((x) => x.field === field);
+    return p ? t(p.key, p.values) : undefined;
+  };
+  const cudnErr = errorFor('cudnSubnet');
+  const clusterErr = errorFor('clusterNetworkCIDR');
+  const serviceErr = errorFor('serviceNetworkCIDR');
+  const vips = internalVIPs(net.cudnSubnet);
 
   return (
     <Form className="sos-form">
-      <FormGroup label={t('cUDN Subnet')} isRequired fieldId="cudn-subnet">
+      <FormGroup label={t('Internal network (cUDN subnet)')} isRequired fieldId="cudn-subnet">
         <TextInput
           id="cudn-subnet"
           value={net.cudnSubnet}
@@ -38,8 +43,18 @@ const NetworkStep: FC<Props> = ({ config, onChange }) => {
         />
         <FormHelperText>
           <HelperText>
-            <HelperTextItem variant={cudnErr ? 'error' : 'default'}>
-              {cudnErr || t('Internal VM network subnet. API and Ingress VIPs are auto-assigned within this range.')}
+            {cudnErr ? (
+              <HelperTextItem variant="error">{cudnErr}</HelperTextItem>
+            ) : (
+              <HelperTextItem>
+                {t('Private network for the cluster VMs, only reachable inside this cluster. Its internal API and Ingress VIPs are set automatically: {{api}} and {{ingress}}.', {
+                  api: vips?.apiVIP || '—',
+                  ingress: vips?.ingressVIP || '—',
+                })}
+              </HelperTextItem>
+            )}
+            <HelperTextItem>
+              {t('The external addresses people use to reach the cluster are entered on the next step, External Access.')}
             </HelperTextItem>
           </HelperText>
         </FormHelperText>
@@ -53,13 +68,13 @@ const NetworkStep: FC<Props> = ({ config, onChange }) => {
           validated={clusterErr ? 'error' : 'default'}
           placeholder="10.128.0.0/14"
         />
-        {clusterErr && (
-          <FormHelperText>
-            <HelperText>
-              <HelperTextItem variant="error">{clusterErr}</HelperTextItem>
-            </HelperText>
-          </FormHelperText>
-        )}
+        <FormHelperText>
+          <HelperText>
+            <HelperTextItem variant={clusterErr ? 'error' : 'default'}>
+              {clusterErr || t('Pod network inside the nested cluster.')}
+            </HelperTextItem>
+          </HelperText>
+        </FormHelperText>
       </FormGroup>
 
       <FormGroup label={t('Service Network CIDR')} isRequired fieldId="service-cidr">
@@ -70,13 +85,13 @@ const NetworkStep: FC<Props> = ({ config, onChange }) => {
           validated={serviceErr ? 'error' : 'default'}
           placeholder="172.30.0.0/16"
         />
-        {serviceErr && (
-          <FormHelperText>
-            <HelperText>
-              <HelperTextItem variant="error">{serviceErr}</HelperTextItem>
-            </HelperText>
-          </FormHelperText>
-        )}
+        <FormHelperText>
+          <HelperText>
+            <HelperTextItem variant={serviceErr ? 'error' : 'default'}>
+              {serviceErr || t('Service network inside the nested cluster.')}
+            </HelperTextItem>
+          </HelperText>
+        </FormHelperText>
       </FormGroup>
     </Form>
   );
