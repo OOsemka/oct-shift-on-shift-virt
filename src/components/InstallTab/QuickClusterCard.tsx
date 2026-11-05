@@ -13,7 +13,14 @@ import {
   FormGroup,
   TextInput,
 } from '@patternfly/react-core';
-import { createQuickCluster, fetchErrorText, fetchQuickPlan, QuickPlan } from '../../utils/labdefaults';
+import {
+  createQuickCluster,
+  fetchErrorText,
+  fetchLabDefaults,
+  fetchQuickPlan,
+  LabDefaults,
+  QuickPlan,
+} from '../../utils/labdefaults';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
@@ -32,6 +39,10 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
   const [deploying, setDeploying] = useState(false);
   const [deployError, setDeployError] = useState<string>();
   const timer = useRef<ReturnType<typeof setTimeout>>();
+  const [defaults, setDefaults] = useState<LabDefaults | null>(null);
+  useEffect(() => {
+    fetchLabDefaults().then(setDefaults).catch(() => setDefaults(null));
+  }, []);
 
   // The server decides everything but the name; ask it for the exact plan.
   useEffect(() => {
@@ -86,6 +97,13 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
                   ingress: s.externalAccess?.ingressIP,
                   pool: s.externalAccess?.ipPool,
                 })}
+                <br />
+                {defaults?.sshKeyFingerprint
+                  ? t('SSH: ssh core@{{api}} with the lab default key ({{fp}}), no password.', {
+                      api: s.externalAccess?.apiIP,
+                      fp: defaults.sshKeyFingerprint,
+                    })
+                  : t('No lab default SSH key: you will not be able to SSH to the bastion.')}
               </span>
             )}
           </FlexItem>

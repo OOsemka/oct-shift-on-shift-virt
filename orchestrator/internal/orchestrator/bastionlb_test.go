@@ -71,6 +71,11 @@ func TestBastionUserDataLoadBalancer(t *testing.T) {
 			t.Errorf("load balancer user data lacks %q", want)
 		}
 	}
+	for _, want := range []string{"/etc/ssh/sshd_config.d/00-sos-keys-only.conf", "PasswordAuthentication no", "PermitRootLogin no", "systemctl reload sshd"} {
+		if !strings.Contains(ud, want) {
+			t.Errorf("user data must pin SSH to keys only; missing %q", want)
+		}
+	}
 	if strings.Contains(ud, "mcs-relay.service") {
 		t.Error("load balancer mode must not also start the old relay")
 	}

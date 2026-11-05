@@ -285,5 +285,19 @@
   "Log in as core with the SSH key you gave the wizard; core has passwordless sudo. The image’s default users (cloud-user, centos) have no key.": "Log in as core with the SSH key you gave the wizard; core has passwordless sudo. The image’s default users (cloud-user, centos) have no key.",
   "The bastion also answers on {{ip}}.": "The bastion also answers on {{ip}}.",
   "This is the bastion’s cluster network address: reachable only from the cluster network, for example from a pod in {{namespace}}.": "This is the bastion’s cluster network address: reachable only from the cluster network, for example from a pod in {{namespace}}.",
-  "Desktop: log in as {{user}} in the console of VM {{vm}}.": "Desktop: log in as {{user}} in the console of VM {{vm}}."
+  "Desktop: log in as {{user}} in the console of VM {{vm}}.": "Desktop: log in as {{user}} in the console of VM {{vm}}.",
+  "Bastion access: passwordless SSH": "Bastion access: passwordless SSH",
+  "Log in with ssh core@{{ip}} (the external API address; the Ingress address works too).": "Log in with ssh core@{{ip}} (the external API address; the Ingress address works too).",
+  "Log in with ssh core@<external API address>.": "Log in with ssh core@<external API address>.",
+  "Your key above is authorized.": "Your key above is authorized.",
+  "The lab default key is authorized ({{fp}}).": "The lab default key is authorized ({{fp}}).",
+  "Paste an SSH public key above, or store one in Lab Defaults: without a key there is no SSH access for you.": "Paste an SSH public key above, or store one in Lab Defaults: without a key there is no SSH access for you.",
+  "SSH accepts keys only, never passwords. The cluster page shows the command once the bastion is up.": "SSH accepts keys only, never passwords. The cluster page shows the command once the bastion is up.",
+  "Graphical bastion (optional)": "Graphical bastion (optional)",
+  "Install a desktop on the bastion VM (only needed for a browser on the bastion)": "Install a desktop on the bastion VM (only needed for a browser on the bastion)",
+  "Desktop username": "Desktop username",
+  "Desktop password": "Desktop password",
+  "Only for the desktop login in the VM console (it never works over SSH). Stored in a Secret and cleared from the cluster resource; leave blank to have one generated.": "Only for the desktop login in the VM console (it never works over SSH). Stored in a Secret and cleared from the cluster resource; leave blank to have one generated.",
+  "SSH: ssh core@{{api}} with the lab default key ({{fp}}), no password.": "SSH: ssh core@{{api}} with the lab default key ({{fp}}), no password.",
+  "No lab default SSH key: you will not be able to SSH to the bastion.": "No lab default SSH key: you will not be able to SSH to the bastion."
 }

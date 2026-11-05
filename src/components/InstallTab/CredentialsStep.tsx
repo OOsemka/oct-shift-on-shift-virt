@@ -1,6 +1,7 @@
 import React, { FC } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Alert,
   Form,
   FormGroup,
   FormHelperText,
@@ -89,14 +90,34 @@ const CredentialsStep: FC<Props> = ({ config, onChange, labDefaults }) => {
         </FormHelperText>
       </FormGroup>
 
-      <FormGroup label={t('Graphical bastion')} fieldId="bastion-graphical">
+      <Alert
+        variant="info"
+        isInline
+        isPlain
+        title={t('Bastion access: passwordless SSH')}
+        className="sos-bastion-access"
+      >
+        <p>
+          {config.externalAccess.apiIP
+            ? t('Log in with ssh core@{{ip}} (the external API address; the Ingress address works too).', { ip: config.externalAccess.apiIP })
+            : t('Log in with ssh core@<external API address>.')}{' '}
+          {config.sshKey.trim()
+            ? t('Your key above is authorized.')
+            : labDefaults?.sshKeyFingerprint
+              ? t('The lab default key is authorized ({{fp}}).', { fp: labDefaults.sshKeyFingerprint })
+              : t('Paste an SSH public key above, or store one in Lab Defaults: without a key there is no SSH access for you.')}
+        </p>
+        <p>{t('SSH accepts keys only, never passwords. The cluster page shows the command once the bastion is up.')}</p>
+      </Alert>
+
+      <FormGroup label={t('Graphical bastion (optional)')} fieldId="bastion-graphical">
         <Checkbox
           id="bastion-graphical"
           isChecked={config.bastion.graphical}
           onChange={(_e, checked) =>
             onChange({ bastion: { ...config.bastion, graphical: checked } })
           }
-          label={t('Install a desktop on the bastion VM')}
+          label={t('Install a desktop on the bastion VM (only needed for a browser on the bastion)')}
         />
         <FormHelperText>
           <HelperText>
@@ -111,7 +132,7 @@ const CredentialsStep: FC<Props> = ({ config, onChange, labDefaults }) => {
 
       {config.bastion.graphical && (
         <>
-          <FormGroup label={t('Bastion username')} fieldId="bastion-user">
+          <FormGroup label={t('Desktop username')} fieldId="bastion-user">
             <TextInput
               id="bastion-user"
               value={config.bastion.username}
@@ -121,7 +142,7 @@ const CredentialsStep: FC<Props> = ({ config, onChange, labDefaults }) => {
               placeholder="core"
             />
           </FormGroup>
-          <FormGroup label={t('Bastion password')} fieldId="bastion-password">
+          <FormGroup label={t('Desktop password')} fieldId="bastion-password">
             <TextInput
               id="bastion-password"
               type="password"
@@ -134,7 +155,7 @@ const CredentialsStep: FC<Props> = ({ config, onChange, labDefaults }) => {
               <HelperText>
                 <HelperTextItem>
                   {t(
-                    'Used to log in to the bastion desktop. Stored in a Secret and cleared from the cluster resource; leave blank to have one generated.',
+                    'Only for the desktop login in the VM console (it never works over SSH). Stored in a Secret and cleared from the cluster resource; leave blank to have one generated.',
                   )}
                 </HelperTextItem>
               </HelperText>
