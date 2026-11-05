@@ -86,7 +86,7 @@ Two kinds of addresses, easy to mix up: the **internal VIPs** (`spec.network.api
 
 ## IP pools (`IPPool`, IP Pools tab)
 
-`ippools.octools.io` (`deploy/crd.yaml`, namespaced, lives in `oct-shift-on-shift-virt`): `nadName`, `prefixLength`, `addresses` (single IPv4 or ranges `a-b`, at most 4096), optional `gateway`/`description`. Usage is never stored: an address is in use while a NestedCluster on the same NAD references it (`crd.ExternalAddressUse`), so deleting a cluster frees its addresses.
+`ippools.octools.io` (`deploy/crd.yaml`, namespaced, lives in `oct-shift-on-shift-virt`): `nadName` (always `default/<name>`: pools are shared, so they never reference a NAD in a project namespace; enforced by the CRD pattern, `Validate()` and the form), `prefixLength`, `addresses` (single IPv4 or ranges `a-b`, at most 4096), optional `gateway`/`description`. Usage is never stored: an address is in use while a NestedCluster on the same NAD references it (`crd.ExternalAddressUse`), so deleting a cluster frees its addresses.
 
 - **IP Pools tab** (`src/components/IPPoolsTab/`): lists pools with usage from `GET /api/v1/ippools` (orchestrator), and creates or deletes pools through the Kubernetes API **with the user's own RBAC** (cluster admins by default). The orchestrator only reads pools (`ippools` get/list/watch).
 - **Wizard:** External Access has an "Address source" choice. A pool fills `nadName`/`prefixLength` and offers its free addresses (first two preselected); the CR records `externalAccess.ipPool`.

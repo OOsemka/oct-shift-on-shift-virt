@@ -543,7 +543,8 @@ spec:
               properties:
                 nadName:
                   type: string
-                  description: <namespace>/<name> of the external VLAN's NetworkAttachmentDefinition.
+                  pattern: '^default/[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                  description: default/<name> of the external VLAN's NetworkAttachmentDefinition. Pools are shared, so only NADs in the default namespace are allowed.
                 prefixLength:
                   type: integer
                   minimum: 8

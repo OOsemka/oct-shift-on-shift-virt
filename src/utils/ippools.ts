@@ -8,6 +8,8 @@ import { consoleFetchJSON, K8sModel } from '@openshift-console/dynamic-plugin-sd
 const PROXY_BASE = '/api/proxy/plugin/oct-shift-on-shift-virt/orchestrator';
 export const POOL_NAMESPACE = 'oct-shift-on-shift-virt';
 export const MAX_POOL_ADDRESSES = 4096;
+/** Pools are shared, so their network must be a NAD in this namespace (never a project namespace). */
+export const POOL_NAD_NAMESPACE = 'default';
 
 export const IPPoolModel: K8sModel = {
   apiGroup: 'octools.io',
@@ -97,7 +99,15 @@ export function poolProblems(form: PoolForm, existingNames: string[]): PoolProbl
   } else if (existingNames.includes(name)) {
     out.push({ field: 'name', key: 'A pool named {{name}} already exists.', values: { name } });
   }
-  if (!form.nadName) out.push({ field: 'nadName', key: 'Select the network (NAD) of the external VLAN.' });
+  if (!form.nadName) {
+    out.push({ field: 'nadName', key: 'Select the network (NAD) of the external VLAN.' });
+  } else if (!form.nadName.startsWith(`${POOL_NAD_NAMESPACE}/`)) {
+    out.push({
+      field: 'nadName',
+      key: 'Pools are shared, so their network must be a NAD in the {{ns}} namespace.',
+      values: { ns: POOL_NAD_NAMESPACE },
+    });
+  }
   const prefixOk = Number.isInteger(form.prefixLength) && form.prefixLength >= 8 && form.prefixLength <= 30;
   if (!prefixOk) out.push({ field: 'prefixLength', key: 'Enter a prefix length from 8 to 30.' });
 

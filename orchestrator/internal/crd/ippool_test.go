@@ -33,6 +33,8 @@ func TestPoolValidate(t *testing.T) {
 		want string
 	}{
 		"no NAD":          {IPPoolSpec{PrefixLength: 24, Addresses: []string{"192.0.2.10"}}, "network (NAD) is required"},
+		"project NAD":     {IPPoolSpec{NADName: "team-a/vlan-a", PrefixLength: 24, Addresses: []string{"192.0.2.10"}}, `must be a NAD in the "default" namespace`},
+		"bare NAD name":   {IPPoolSpec{NADName: "vlan-a", PrefixLength: 24, Addresses: []string{"192.0.2.10"}}, "not a valid default/<name> reference"},
 		"no addresses":    {pool(), "at least one address"},
 		"two subnets":     {pool("192.0.2.10", "192.0.3.10"), "not in the same /24 subnet"},
 		"broadcast":       {pool("192.0.2.250-192.0.2.255"), "network or broadcast"},
