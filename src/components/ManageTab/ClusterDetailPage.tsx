@@ -41,7 +41,7 @@ import {
 } from '@patternfly/react-table';
 import CommunityDisclaimer from '../shared/CommunityDisclaimer';
 import ConfigViewer from './ConfigViewer';
-import { deleteCluster, fetchCluster, fetchKubeadmin, fetchKubeconfig } from '../../utils/api';
+import { deleteCluster, fetchCluster, fetchExternalCA, fetchKubeadmin, fetchKubeconfig } from '../../utils/api';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
@@ -95,6 +95,10 @@ interface ClusterDetail {
       message: string;
     }>;
     hostAPIRoute?: string;
+    // Host-route URLs (externalAccess.hostRoutes), certificates signed by
+    // the per-cluster CA served at /external-ca.
+    hostConsoleURL?: string;
+    hostAPIURL?: string;
     conditions?: Array<{ type: string; status: string; reason: string; message: string }>;
     installConfig?: string;
     agentConfig?: string;
@@ -116,6 +120,7 @@ const FEATURE_CONDITIONS: Array<{ type: string; label: string }> = [
   { type: 'NetworkReady', label: 'Network self-test' },
   { type: 'StorageReady', label: 'Nested storage' },
   { type: 'VirtualizationReady', label: 'OpenShift Virtualization' },
+  { type: 'HostRoutesReady', label: 'Host routes' },
 ];
 
 const ClusterDetailPage: FC = () => {
@@ -178,6 +183,23 @@ const ClusterDetailPage: FC = () => {
       setActionError(
         t('Could not download kubeconfig: {{msg}}', { msg: (e as Error)?.message || String(e) }),
       );
+    }
+  };
+
+  const handleDownloadCA = async () => {
+    if (!name) return;
+    try {
+      const data = (await fetchExternalCA(name)) as { caCert: string };
+      const blob = new Blob([data.caCert + '\n'], { type: 'application/x-pem-file' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${name}-ca.crt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setActionError(undefined);
+    } catch (e) {
+      setActionError(t('Could not download the CA: {{msg}}', { msg: (e as Error)?.message || String(e) }));
     }
   };
 
@@ -317,7 +339,47 @@ const ClusterDetailPage: FC = () => {
                     </HelperText>
                   </DescriptionListDescription>
                 </DescriptionListGroup>
-                {status.hostAPIRoute && (
+                {status.hostConsoleURL && status.hostAPIURL && (
+                  <>
+                    <DescriptionListGroup>
+                      <DescriptionListTerm>{t('Console (host route)')}</DescriptionListTerm>
+                      <DescriptionListDescription>
+                        <a href={status.hostConsoleURL} target="_blank" rel="noopener noreferrer">
+                          {status.hostConsoleURL}
+                        </a>
+                        <HelperText>
+                          <HelperTextItem variant="indeterminate">
+                            {t(
+                              'No DNS needed. The certificate is signed by this cluster\u2019s own CA: download it and trust it, or your browser shows a warning.',
+                            )}
+                          </HelperTextItem>
+                        </HelperText>
+                      </DescriptionListDescription>
+                    </DescriptionListGroup>
+                    <DescriptionListGroup>
+                      <DescriptionListTerm>{t('API Endpoint (host route)')}</DescriptionListTerm>
+                      <DescriptionListDescription>
+                        <ClipboardCopy isReadOnly variant="inline-compact">
+                          {status.hostAPIURL}
+                        </ClipboardCopy>
+                        <Button variant="link" isInline onClick={handleDownloadCA}>
+                          {t('Download CA certificate')}
+                        </Button>
+                      </DescriptionListDescription>
+                    </DescriptionListGroup>
+                    <DescriptionListGroup>
+                      <DescriptionListTerm>{t('Login command')}</DescriptionListTerm>
+                      <DescriptionListDescription>
+                        <ClipboardCopy isReadOnly variant="expansion" isCode>
+                          {`oc login ${status.hostAPIURL} -u kubeadmin -p ${
+                            kubeadminPwd || '<click \u201cCopy Kubeadmin Password\u201d>'
+                          } --certificate-authority=${name}-ca.crt`}
+                        </ClipboardCopy>
+                      </DescriptionListDescription>
+                    </DescriptionListGroup>
+                  </>
+                )}
+                {status.hostAPIRoute && !status.hostAPIURL && (
                   <>
                     <DescriptionListGroup>
                       <DescriptionListTerm>{t('API Endpoint (host route)')}</DescriptionListTerm>

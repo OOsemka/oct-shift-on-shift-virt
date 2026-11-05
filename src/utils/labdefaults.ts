@@ -42,6 +42,8 @@ export type LabSettings = {
   nestedStorageAllowanceGi?: number;
   /** Install OpenShift Virtualization in quick clusters (implies nested storage). */
   nestedVirtualization?: boolean;
+  /** Quick clusters publish the API and console through host routes. */
+  publishHostRoutes?: boolean;
 };
 
 /** The only settings a quick-cluster request may override. */

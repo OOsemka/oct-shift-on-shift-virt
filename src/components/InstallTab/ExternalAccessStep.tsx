@@ -2,6 +2,7 @@ import React, { FC, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
+  Checkbox,
   ClipboardCopy,
   Form,
   FormGroup,
@@ -286,8 +287,21 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
         </FormHelperText>
       </FormGroup>
 
+      <FormGroup label={t('Host routes')} fieldId="host-routes">
+        <Checkbox
+          id="host-routes"
+          isChecked={Boolean(ea.hostRoutes)}
+          onChange={(_e, v) => onChange({ hostRoutes: v })}
+          label={t("Publish the API and console through this cluster's routes (no DNS records needed)")}
+          description={t('Console, login and API get names under this cluster\'s *.apps domain, signed by a per-cluster CA you can download. Other nested applications still need DNS. The external VLAN must be reachable from this cluster\'s nodes.')}
+        />
+      </FormGroup>
+
       {fqdn && ea.apiIP && ea.ingressIP && !apiErr && !ingressErr && (
         <Alert variant="info" isInline title={t('DNS Records')} className="sos-dns-records">
+          {ea.hostRoutes && (
+            <p>{t('Optional with host routes; needed for other applications under *.apps of the nested cluster.')}</p>
+          )}
           <p>{t('Add the following A records to your DNS:')}</p>
           <ClipboardCopy isReadOnly isCode variant="expansion" isExpanded>
             {`api.${fqdn}    A    ${ea.apiIP}\n*.apps.${fqdn}  A    ${ea.ingressIP}`}

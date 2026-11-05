@@ -103,6 +103,8 @@ func (s *StepExecutor) Execute(ctx context.Context, nc *crd.NestedCluster, phase
 		return s.waitInstall(ctx, nc)
 	case crd.PhasePostInstall:
 		return s.postInstall(ctx, nc)
+	case crd.PhasePublishRoutes:
+		return s.publishRoutes(ctx, nc)
 	case crd.PhaseConfigureStorage:
 		return s.configureStorage(ctx, nc)
 	case crd.PhaseConfigureVirtualization:
@@ -2498,6 +2500,8 @@ func (s *StepExecutor) DeleteCluster(ctx context.Context, nc *crd.NestedCluster)
 		Delete(ctx, nc.Spec.ClusterName+"-api", metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		log.Info("could not delete the api route (non-fatal)", "error", err.Error())
 	}
+	// Host routes (externalAccess.hostRoutes) also live in the operator namespace.
+	s.deleteHostRoutes(ctx, nc.Spec.ClusterName)
 
 	// Clean up DNS resources (deployed in the target namespace alongside VMs)
 	s.client.DynamicClient.Resource(deployGVR).Namespace(clusterNs).Delete(ctx, nc.Spec.ClusterName+"-dns", metav1.DeleteOptions{})

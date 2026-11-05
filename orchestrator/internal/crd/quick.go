@@ -171,6 +171,7 @@ func BuildQuickSpec(name string, s LabSettings, hasPullSecret bool, pool *IPPool
 			PrefixLength: pool.Spec.PrefixLength,
 			Gateway:      pool.Spec.Gateway,
 			IPPool:       pool.Name,
+			HostRoutes:   s.PublishHostRoutes,
 		}
 		if len(free) >= 2 {
 			spec.ExternalAccess.APIIP, spec.ExternalAccess.IngressIP = free[0], free[1]

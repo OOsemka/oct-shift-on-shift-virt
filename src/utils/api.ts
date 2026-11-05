@@ -24,6 +24,10 @@ export const fetchClusterNodes = (name: string): Promise<unknown> =>
 export const fetchKubeconfig = (name: string): Promise<unknown> =>
   consoleFetchJSON(`${PROXY_BASE}/api/v1/clusters/${encodeURIComponent(name)}/kubeconfig`);
 
+/** Public CA that signs the host-route certificates (externalAccess.hostRoutes). */
+export const fetchExternalCA = (name: string): Promise<unknown> =>
+  consoleFetchJSON(`${PROXY_BASE}/api/v1/clusters/${encodeURIComponent(name)}/external-ca`);
+
 export const fetchKubeadmin = (name: string): Promise<unknown> =>
   consoleFetchJSON(`${PROXY_BASE}/api/v1/clusters/${encodeURIComponent(name)}/kubeadmin`);
 

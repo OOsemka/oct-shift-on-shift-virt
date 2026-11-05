@@ -21,7 +21,7 @@ Validated on OpenShift **4.22** (PatternFly 6), installing nested OpenShift 4.22
 - **Isolated networking** — each nested cluster gets its own namespace on a Layer2 primary user-defined network, with deterministic node addresses reserved up front.
 - **One bastion VM per cluster** — nested DNS, the Machine Config Server relay and SSH access. Optionally an XFCE desktop whose browser opens straight on the nested console.
 - **Live-migratable masters** — VMs use the `l2bridge` network binding and RWX Block root disks.
-- **Optional API route** — publish the nested API through the host cluster's router, no extra DNS needed.
+- **Host routes (optional)** — publish the nested API, console and login through the host cluster's router with a per-cluster CA, no extra DNS needed.
 - **Credentials on the cluster page** — download the kubeconfig, reveal the kubeadmin password, copy an `oc login` command.
 - **Nested storage (optional)** — the KubeVirt CSI driver gives the nested cluster a default `kubevirt-csi` StorageClass backed by one host StorageClass, with snapshots when the host has a matching VolumeSnapshotClass. All images come from the nested release payload. A storage quota on the cluster namespace caps host usage.
 - **Nested OpenShift Virtualization (optional)** — installed and configured to use nested storage, so the nested cluster can run VMs. Plan for ~180 GiB of extra host storage for its boot images.
@@ -45,9 +45,9 @@ Validated on OpenShift **4.22** (PatternFly 6), installing nested OpenShift 4.22
 
 ### Install phases
 
-`CreateNamespace → CreateNetwork → CreateSecrets → CreateVMs → CollectIPs → MCSRelay → DeployHAProxy → DeployDNS → GenerateISO → MountISO → PowerOn → ConfigureNodes → WaitBootstrap → WaitInstall → PostInstall → ConfigureStorage → ConfigureVirtualization → Ready`
+`CreateNamespace → CreateNetwork → CreateSecrets → CreateVMs → CollectIPs → MCSRelay → DeployHAProxy → DeployDNS → GenerateISO → MountISO → PowerOn → ConfigureNodes → WaitBootstrap → WaitInstall → PostInstall → PublishRoutes → ConfigureStorage → ConfigureVirtualization → Ready`
 
-The last two run only when selected in the wizard. They are non-fatal: a failure is reported on the `StorageReady` / `VirtualizationReady` condition and the cluster still reaches Ready.
+PublishRoutes and the last two run only when selected in the wizard. They are non-fatal: a failure is reported on the `HostRoutesReady` / `StorageReady` / `VirtualizationReady` condition and the cluster still reaches Ready.
 
 Each phase is idempotent and the current phase is stored on the resource, so the orchestrator resumes after a restart.
 
@@ -84,11 +84,12 @@ Results appear on the cluster page (`StorageReady`, `VirtualizationReady`). A fa
 
 ## Accessing a nested cluster
 
-The cluster page shows all three options once the cluster is Ready.
+The cluster page shows the options that apply once the cluster is Ready.
 
 1. **DNS** — create `api.<cluster>.<baseDomain>` and `*.apps.<cluster>.<baseDomain>` A records pointing at the external API and ingress IPs. Everything works natively: `oc`, console, OAuth, valid certificates.
-2. **Host route (API only, optional)** — set `EDGE_PROXY_VLAN_IP` and `EDGE_PROXY_NAD` on the orchestrator. Each cluster then gets a passthrough Route to its API. Use `--insecure-skip-tls-verify`: the nested certificate does not carry the route hostname.
-3. **Bastion desktop** — enable *Graphical bastion* in the wizard, then open **Virtualization → VirtualMachines → `<cluster>-bastion` → Console**. The bastion resolves the nested zone, so its browser reaches the nested console directly. The login is stored in the `<cluster>-bastion-password` Secret.
+2. **Host routes (API, console and login; recommended)** — tick *Publish the API and console through this cluster's routes* on the External Access step (or *Host routes on quick clusters* in Lab Defaults). The PublishRoutes phase creates passthrough Routes `<cluster>-api`, `<cluster>-console` and `<cluster>-oauth` in the plugin namespace, pointing at the bastion's external addresses, and configures the nested cluster to answer on those names (`componentRoutes` for console and OAuth, a named certificate on the API server). Certificates come from a per-cluster CA; download it from the cluster page and log in with `oc login <API URL> --certificate-authority=<cluster>-ca.crt`. Trust the CA in your browser to avoid the warning. Needs clusters with the bastion load balancer (0.3.0+) and an external VLAN that the host nodes can reach. Other `*.apps` applications of the nested cluster still need DNS.
+3. **Edge proxy (API only, legacy, optional)** — set `EDGE_PROXY_VLAN_IP` and `EDGE_PROXY_NAD` on the orchestrator. Each cluster then gets a passthrough Route to its API. Use `--insecure-skip-tls-verify`: the nested certificate does not carry the route hostname.
+4. **Bastion desktop** — enable *Graphical bastion* in the wizard, then open **Virtualization → VirtualMachines → `<cluster>-bastion` → Console**. The bastion resolves the nested zone, so its browser reaches the nested console directly. The login is stored in the `<cluster>-bastion-password` Secret.
 
 ## Configuration
 
@@ -104,10 +105,10 @@ Orchestrator environment variables (all optional unless noted):
 
 ## Known limitations
 
-- **Nested ingress/apps are not exposed through host Routes.** The nested router dispatches on the Host header, so use DNS or the bastion desktop for the console and apps.
+- **Host routes cover the console, login and API only.** Other nested applications need DNS or the bastion desktop.
 - **Masters are not live-migratable while the install ISO is attached.** PostInstall ejects it from the VM template, so masters show *Restart required*; after one restart they are migratable.
 - A bastion with a second (external) NIC has not been tested for live migration.
-- The API route hostname is generated by the router (`<cluster>-api-<namespace>.<appsDomain>`).
+- Route hostnames are generated by the router (`<cluster>-api-<namespace>.<appsDomain>`); long cluster names can exceed the 63-character DNS label limit, in which case HostRoutesReady reports it.
 
 ## Install
 

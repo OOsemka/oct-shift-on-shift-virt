@@ -212,6 +212,16 @@ rules:
   - create
   - delete
 - apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - get
+  - list
+  - create
+  - update
+  - delete
+- apiGroups:
   - route.openshift.io
   resources:
   - routes
