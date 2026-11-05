@@ -437,17 +437,31 @@ func (c *Client) GetVMIIP(ctx context.Context, namespace, name string) (string, 
 		return "", fmt.Errorf("VMI %s has no interfaces in status", name)
 	}
 
+	// Prefer the "default" (cluster network) interface: helper VMs may also
+	// have an external VLAN NIC whose address must never be mistaken for
+	// the VM's cluster address.
+	fallback := ""
 	for _, iface := range interfaces {
 		ifaceMap, ok := iface.(map[string]interface{})
 		if !ok {
 			continue
 		}
 		ip, _, _ := unstructured.NestedString(ifaceMap, "ipAddress")
-		if ip != "" && !strings.HasPrefix(ip, "fe80") {
+		if ip == "" || strings.HasPrefix(ip, "fe80") {
+			continue
+		}
+		ifName, _, _ := unstructured.NestedString(ifaceMap, "name")
+		if ifName == "default" {
 			return ip, nil
 		}
+		if ifName == "" && fallback == "" {
+			fallback = ip
+		}
 	}
-	return "", fmt.Errorf("VMI %s has no usable IP address", name)
+	if fallback != "" {
+		return fallback, nil
+	}
+	return "", fmt.Errorf("VMI %s has no usable IP address on its cluster network interface", name)
 }
 
 // WaitForVMIReady polls until the VMI exists and has an IP address.
@@ -592,6 +606,9 @@ type InfraVMParams struct {
 type InfraNetwork struct {
 	Name        string
 	NetworkName string
+	// MACAddress pins the interface MAC so cloud-init can find the NIC
+	// inside the guest. Empty lets KubeVirt pick one.
+	MACAddress string
 }
 
 func (c *Client) CreateInfraVM(ctx context.Context, p InfraVMParams) error {
@@ -721,10 +738,14 @@ func (c *Client) CreateInfraVM(ctx context.Context, p InfraVMParams) error {
 				"name":   n.Name,
 				"multus": map[string]interface{}{"networkName": n.NetworkName},
 			})
-			ifaces = append(ifaces, map[string]interface{}{
+			iface := map[string]interface{}{
 				"name":   n.Name,
 				"bridge": map[string]interface{}{},
-			})
+			}
+			if n.MACAddress != "" {
+				iface["macAddress"] = n.MACAddress
+			}
+			ifaces = append(ifaces, iface)
 		}
 		unstructured.SetNestedSlice(vm.Object, nets, "spec", "template", "spec", "networks")
 		unstructured.SetNestedSlice(vm.Object, ifaces, "spec", "template", "spec", "domain", "devices", "interfaces")

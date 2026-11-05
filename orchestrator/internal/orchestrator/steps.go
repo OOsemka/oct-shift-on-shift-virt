@@ -70,6 +70,9 @@ func (s *StepExecutor) Execute(ctx context.Context, nc *crd.NestedCluster, phase
 	case crd.PhaseCollectIPs:
 		return s.collectIPs(ctx, nc)
 	case crd.PhaseDeployHAProxy:
+		if useBastionLB(nc) {
+			return s.useBastionAsLoadBalancer(ctx, nc)
+		}
 		return s.deployHAProxy(ctx, nc)
 	case crd.PhaseDeployDNS:
 		// One bastion VM now carries nested DNS, the MCS relay and the
@@ -332,6 +335,43 @@ func (s *StepExecutor) collectIPs(ctx context.Context, nc *crd.NestedCluster) er
 	return nil
 }
 
+// externalNADInClusterNs makes the selected external network available in the
+// cluster namespace (copying it there when it lives elsewhere) and returns
+// its name in that namespace.
+func (s *StepExecutor) externalNADInClusterNs(ctx context.Context, nc *crd.NestedCluster) (string, error) {
+	clusterNs := nc.Spec.Namespace
+	nadName := nc.Spec.ExternalAccess.NADName
+	nadSrcNs := clusterNs
+	if parts := strings.SplitN(nadName, "/", 2); len(parts) == 2 {
+		nadSrcNs = parts[0]
+		nadName = parts[1]
+	}
+	if nadSrcNs != clusterNs {
+		if err := s.client.CopyNAD(ctx, nadSrcNs, nadName, clusterNs); err != nil {
+			return "", fmt.Errorf("copying NAD to cluster namespace: %w", err)
+		}
+	}
+	return nadName, nil
+}
+
+// useBastionAsLoadBalancer is the DeployHAProxy phase for bastion-LB clusters:
+// the bastion (created in the MCSRelay phase) already serves API, MCS and
+// Ingress on its cluster address, so that address becomes the target of the
+// nested DNS records (api, api-int, *.apps). No HAProxy pods are created.
+func (s *StepExecutor) useBastionAsLoadBalancer(ctx context.Context, nc *crd.NestedCluster) error {
+	ip := nc.Status.MCSRelayIP
+	if ip == "" {
+		return fmt.Errorf("bastion address missing from status (the MCSRelay phase creates the bastion)")
+	}
+	nc.Status.APIVIPCUDN = ip
+	nc.Status.IngressVIPCUDN = ip
+	s.updateCRStatus(ctx, nc)
+	s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("bastion").Info(
+		"load balancer runs on the bastion; no HAProxy pods",
+		"internal", ip, "external_api", nc.Spec.ExternalAccess.APIIP, "external_ingress", nc.Spec.ExternalAccess.IngressIP)
+	return nil
+}
+
 func (s *StepExecutor) deployHAProxy(ctx context.Context, nc *crd.NestedCluster) error {
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("haproxy")
 	clusterNs := nc.Spec.Namespace
@@ -363,16 +403,9 @@ func (s *StepExecutor) deployHAProxy(ctx context.Context, nc *crd.NestedCluster)
 		return fmt.Errorf("granting anyuid SCC to haproxy: %w", err)
 	}
 
-	nadName := nc.Spec.ExternalAccess.NADName
-	nadSrcNs := clusterNs
-	if parts := strings.SplitN(nadName, "/", 2); len(parts) == 2 {
-		nadSrcNs = parts[0]
-		nadName = parts[1]
-	}
-	if nadSrcNs != clusterNs {
-		if err := s.client.CopyNAD(ctx, nadSrcNs, nadName, clusterNs); err != nil {
-			return fmt.Errorf("copying NAD to cluster namespace: %w", err)
-		}
+	nadName, err := s.externalNADInClusterNs(ctx, nc)
+	if err != nil {
+		return err
 	}
 
 	deployGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
@@ -391,7 +424,7 @@ func (s *StepExecutor) deployHAProxy(ctx context.Context, nc *crd.NestedCluster)
 			map[string]interface{}{"containerPort": int64(22623), "name": "mcs"},
 			map[string]interface{}{"containerPort": int64(22624), "name": "mcs-auth"},
 		}, sha16(apiConfig))
-	err := s.applyHAProxyDeployment(ctx, clusterNs, deployGVR, apiDeploy)
+	err = s.applyHAProxyDeployment(ctx, clusterNs, deployGVR, apiDeploy)
 	if err != nil {
 		return fmt.Errorf("applying haproxy-api deployment: %w", err)
 	}

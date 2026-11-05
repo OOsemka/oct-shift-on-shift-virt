@@ -181,6 +181,11 @@ type ExternalAccessConfig struct {
 	// addresses above live in (the HAProxy pods' interfaces get <ip>/<prefix>).
 	// 0 means 24, the value every earlier version hardcoded.
 	PrefixLength int `json:"prefixLength,omitempty"`
+	// Gateway of the external VLAN. The HAProxy pods send replies to clients
+	// outside the VLAN through it; without it they answer only the VLAN
+	// itself (replies left through the cluster network and never returned).
+	// Required for new clusters.
+	Gateway string `json:"gateway,omitempty"`
 	// IPPool is the IPPool (same namespace as the NestedCluster) the addresses
 	// above were picked from. Optional; when set, the API checks that NADName,
 	// PrefixLength and the addresses match the pool.
@@ -202,8 +207,16 @@ type SecretRef struct {
 	Name string `json:"name"`
 }
 
+// LoadBalancerBastion marks clusters whose API/Ingress load balancer runs on
+// the bastion VM (with the external VLAN addresses on its own NIC) instead
+// of the per-cluster HAProxy pods used before.
+const LoadBalancerBastion = "bastion"
+
 type NestedClusterStatus struct {
-	Phase         ClusterPhase       `json:"phase,omitempty"`
+	Phase ClusterPhase `json:"phase,omitempty"`
+	// LoadBalancer is "bastion" for clusters created since the bastion
+	// load balancer; empty means the older HAProxy pods.
+	LoadBalancer  string             `json:"loadBalancer,omitempty"`
 	Message       string             `json:"message,omitempty"`
 	StartedAt     *metav1.Time       `json:"startedAt,omitempty"`
 	CompletedAt   *metav1.Time       `json:"completedAt,omitempty"`

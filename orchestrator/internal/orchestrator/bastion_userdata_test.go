@@ -10,7 +10,7 @@ import (
 // The desktop install must be a retrying unit that waits for DNS, not a
 // one-shot background command racing dns.py's arrival.
 func TestBastionUserDataDesktopUnit(t *testing.T) {
-	ud := bastionUserData("b", "ssh-ed25519 AAAA k", []string{"10.0.0.100"}, true, "core", "https://console.example")
+	ud := bastionUserData("b", "ssh-ed25519 AAAA k", []string{"10.0.0.100"}, true, "core", "https://console.example", nil)
 	var doc map[string]interface{}
 	if err := yaml.Unmarshal([]byte(strings.TrimPrefix(ud, "#cloud-config\n")), &doc); err != nil {
 		t.Fatalf("user-data is not valid YAML: %v", err)
@@ -30,7 +30,7 @@ func TestBastionUserDataDesktopUnit(t *testing.T) {
 	if strings.Contains(ud, "nohup") {
 		t.Fatal("one-shot nohup install is back")
 	}
-	if plain := bastionUserData("b", "", nil, false, "", ""); strings.Contains(plain, "sos-desktop") {
+	if plain := bastionUserData("b", "", nil, false, "", "", nil); strings.Contains(plain, "sos-desktop") {
 		t.Fatal("non-graphical bastion must not get the desktop unit")
 	}
 }

@@ -20,16 +20,23 @@ const IPPoolResource = "ippools"
 // MaxPoolAddresses caps how many addresses one pool may expand to.
 const MaxPoolAddresses = 4096
 
+// PoolNADNamespace is the only namespace a pool's network may live in. Pools
+// are shared by everyone creating clusters, so they reference cluster-wide
+// networks in "default", never a NAD inside one user's project namespace.
+const PoolNADNamespace = "default"
+
 type IPPoolSpec struct {
-	// NADName is the <namespace>/<name> of the external VLAN's
-	// NetworkAttachmentDefinition (same form as externalAccess.nadName).
+	// NADName is "default/<name>": the external VLAN's
+	// NetworkAttachmentDefinition, always in the default namespace
+	// (same form as externalAccess.nadName).
 	NADName string `json:"nadName"`
 	// PrefixLength of the VLAN subnet (8-30).
 	PrefixLength int `json:"prefixLength"`
 	// Addresses: single IPv4 addresses or inclusive ranges "a.b.c.d-a.b.c.e".
 	Addresses []string `json:"addresses"`
-	// Gateway of the VLAN, shown to users; optional.
-	Gateway     string `json:"gateway,omitempty"`
+	// Gateway of the VLAN (required): the HAProxy pods route replies to
+	// clients outside the VLAN through it.
+	Gateway     string `json:"gateway"`
 	Description string `json:"description,omitempty"`
 }
 
@@ -100,11 +107,12 @@ func (p IPPoolSpec) Validate() error {
 	if nad == "" {
 		add("network (NAD) is required")
 	} else {
-		for _, part := range strings.SplitN(nad, "/", 2) {
-			if !dns1123.MatchString(part) {
-				add("network %q is not a valid <namespace>/<name> reference", nad)
-				break
-			}
+		parts := strings.SplitN(nad, "/", 2)
+		switch {
+		case len(parts) != 2 || !dns1123.MatchString(parts[0]) || !dns1123.MatchString(parts[1]):
+			add("network %q is not a valid %s/<name> reference", nad, PoolNADNamespace)
+		case parts[0] != PoolNADNamespace:
+			add("network %q is in namespace %q: pools are shared, so their network must be a NAD in the %q namespace", nad, parts[0], PoolNADNamespace)
 		}
 	}
 	prefixOK := p.PrefixLength >= 8 && p.PrefixLength <= 30
@@ -131,7 +139,9 @@ func (p IPPoolSpec) Validate() error {
 				add("%s is the network or broadcast address of %s", a, subnet)
 			}
 		}
-		if gw := strings.TrimSpace(p.Gateway); gw != "" {
+		if gw := strings.TrimSpace(p.Gateway); gw == "" {
+			add("gateway is required: clusters answer clients outside the VLAN through it")
+		} else {
 			g := parseIPv4(gw)
 			switch {
 			case g == nil:
@@ -222,6 +232,9 @@ func (s *NestedClusterSpec) CheckPool(pool *IPPool) error {
 	}
 	if ea.Prefix() != pool.Spec.PrefixLength {
 		problems = append(problems, fmt.Sprintf("prefix length %d is not the pool's /%d", ea.Prefix(), pool.Spec.PrefixLength))
+	}
+	if strings.TrimSpace(ea.Gateway) != strings.TrimSpace(pool.Spec.Gateway) {
+		problems = append(problems, fmt.Sprintf("gateway %q is not the pool's gateway %q", ea.Gateway, pool.Spec.Gateway))
 	}
 	addrs, err := pool.Spec.Expand()
 	if err != nil {

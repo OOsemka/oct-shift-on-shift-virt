@@ -223,5 +223,16 @@
   "Enter an IPv4 address or leave it empty.": "Enter an IPv4 address or leave it empty.",
   "The gateway is outside {{subnet}}.": "The gateway is outside {{subnet}}.",
   "The gateway must not be one of the pool addresses.": "The gateway must not be one of the pool addresses.",
-  "One address or range per line. Only list addresses nothing else uses on that VLAN. Addresses: {{n}}.": "One address or range per line. Only list addresses nothing else uses on that VLAN. Addresses: {{n}}."
+  "One address or range per line. Only list addresses nothing else uses on that VLAN. Addresses: {{n}}.": "One address or range per line. Only list addresses nothing else uses on that VLAN. Addresses: {{n}}.",
+  "No network attachments in the {{ns}} namespace. Create the VLAN network there first (for example with Network VLAN).": "No network attachments in the {{ns}} namespace. Create the VLAN network there first (for example with Network VLAN).",
+  "Shared VLAN networks from the {{ns}} namespace. Pools never use a network inside a project namespace.": "Shared VLAN networks from the {{ns}} namespace. Pools never use a network inside a project namespace.",
+  "Pools are shared, so their network must be a NAD in the {{ns}} namespace.": "Pools are shared, so their network must be a NAD in the {{ns}} namespace.",
+  "Pick an IP pool, or pick the network (NAD) of a VLAN that people can reach and type two free addresses on that VLAN (one for the API, one for Ingress) and its gateway. The cluster's bastion VM takes these addresses and load-balances to the cluster. Do not use the internal VIPs from the Network step. Ask your network team for free addresses if you are unsure.": "Pick an IP pool, or pick the network (NAD) of a VLAN that people can reach and type two free addresses on that VLAN (one for the API, one for Ingress) and its gateway. The cluster's bastion VM takes these addresses and load-balances to the cluster. Do not use the internal VIPs from the Network step. Ask your network team for free addresses if you are unsure.",
+  "VLAN gateway": "VLAN gateway",
+  "Router of the external VLAN. The cluster answers clients outside the VLAN through it.": "Router of the external VLAN. The cluster answers clients outside the VLAN through it.",
+  "Required: clusters answer clients outside the VLAN through the gateway.": "Required: clusters answer clients outside the VLAN through the gateway.",
+  "Required. Without the VLAN gateway the cluster answers only clients on the VLAN itself.": "Required. Without the VLAN gateway the cluster answers only clients on the VLAN itself.",
+  "Enter an IPv4 address such as 198.51.100.1.": "Enter an IPv4 address such as 198.51.100.1.",
+  "The gateway must not be the API or Ingress IP.": "The gateway must not be the API or Ingress IP.",
+  "The gateway is outside the VLAN subnet {{cidr}}.": "The gateway is outside the VLAN subnet {{cidr}}."
 }

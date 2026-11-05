@@ -44,6 +44,7 @@ import {
   IPPoolItem,
   IPPoolModel,
   PoolForm,
+  POOL_NAD_NAMESPACE,
   POOL_NAMESPACE,
   poolProblems,
 } from '../../utils/ippools';
@@ -76,6 +77,7 @@ const IPPoolsTab: FC = () => {
 
   const [nads, nadsLoaded, nadsError] = useK8sWatchResource<NAD[]>({
     groupVersionKind: { group: 'k8s.cni.cncf.io', version: 'v1', kind: 'NetworkAttachmentDefinition' },
+    namespace: POOL_NAD_NAMESPACE,
     isList: true,
   });
   const nadOptions = useMemo(
@@ -300,7 +302,7 @@ const IPPoolsTab: FC = () => {
                 <TextInput
                   id="pool-nad"
                   value={form.nadName}
-                  placeholder="namespace/name"
+                  placeholder={`${POOL_NAD_NAMESPACE}/name`}
                   onChange={(_e, v) => update({ nadName: v.trim() })}
                 />
               ) : (
@@ -314,7 +316,10 @@ const IPPoolsTab: FC = () => {
               <FormHelperText>
                 <HelperText>
                   <HelperTextItem variant={problemFor('nadName') ? 'error' : 'default'}>
-                    {problemFor('nadName') || t('The VLAN network the addresses belong to, the same one picked on the External Access step.')}
+                    {problemFor('nadName') ||
+                      (nadOptions.length === 0 && nadsLoaded && !nadsError
+                        ? t('No network attachments in the {{ns}} namespace. Create the VLAN network there first (for example with Network VLAN).', { ns: POOL_NAD_NAMESPACE })
+                        : t('Shared VLAN networks from the {{ns}} namespace. Pools never use a network inside a project namespace.', { ns: POOL_NAD_NAMESPACE }))}
                   </HelperTextItem>
                 </HelperText>
               </FormHelperText>
@@ -361,7 +366,7 @@ const IPPoolsTab: FC = () => {
                 </HelperText>
               </FormHelperText>
             </FormGroup>
-            <FormGroup label={t('Gateway (optional)')} fieldId="pool-gateway">
+            <FormGroup label={t('Gateway')} isRequired fieldId="pool-gateway">
               <TextInput id="pool-gateway" value={form.gateway} onChange={(_e, v) => update({ gateway: v })} validated={problemFor('gateway') ? 'error' : 'default'} />
               {problemFor('gateway') && (
                 <FormHelperText>

@@ -218,6 +218,9 @@ spec:
                       minimum: 8
                       maximum: 30
                       description: Prefix length of the external VLAN subnet that apiIP, ingressIP and jumpboxIP live in. Omitted means 24.
+                    gateway:
+                      type: string
+                      description: Gateway of the external VLAN. The bastion answers clients outside the VLAN through it (replies from the API/Ingress addresses use it). Required for new clusters.
                     ipPool:
                       type: string
                       description: Optional IPPool (same namespace) the external addresses were picked from; the API checks they match it.
@@ -307,6 +310,9 @@ spec:
             status:
               type: object
               properties:
+                loadBalancer:
+                  type: string
+                  description: '"bastion" when the API/Ingress load balancer runs on the bastion VM; empty for clusters that use HAProxy pods.'
                 phase:
                   type: string
                   description: Current orchestration phase.
@@ -540,10 +546,12 @@ spec:
                 - nadName
                 - prefixLength
                 - addresses
+                - gateway
               properties:
                 nadName:
                   type: string
-                  description: <namespace>/<name> of the external VLAN's NetworkAttachmentDefinition.
+                  pattern: '^default/[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                  description: default/<name> of the external VLAN's NetworkAttachmentDefinition. Pools are shared, so only NADs in the default namespace are allowed.
                 prefixLength:
                   type: integer
                   minimum: 8
@@ -557,6 +565,6 @@ spec:
                     type: string
                 gateway:
                   type: string
-                  description: Gateway of the VLAN, shown to users. Must not be one of the addresses.
+                  description: Gateway of the VLAN (required). Clusters answer clients outside the VLAN through it. Must not be one of the addresses.
                 description:
                   type: string

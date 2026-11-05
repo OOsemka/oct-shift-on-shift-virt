@@ -29,7 +29,7 @@ Display name is **Shift-on-Shift Virt**.
 | Orchestrator (`orchestrator/`) | Go service behind the console proxy. REST API for the UI; watches `NestedCluster` CRs and drives the phases. |
 | `NestedCluster` CRD (`deploy/crd.yaml`) | `octools.io/v1alpha1`. Spec, phase, phase history, per-node status, conditions, credential references. |
 | `IPPool` CRD (`deploy/crd.yaml`) | `octools.io/v1alpha1`. Free external VLAN addresses offered in the wizard (see IP pools). |
-| Per-cluster namespace (`spec.namespace`, wizard default `<cluster>-ns`) | Master VMs, the bastion VM, the primary Layer2 cUDN, two HAProxy pods, ISO disks, phase Jobs, and (optional) the CSI controller. |
+| Per-cluster namespace (`spec.namespace`, wizard default `<cluster>-ns`) | Master VMs, the bastion VM (also the API/Ingress load balancer for new clusters), the primary Layer2 cUDN, two HAProxy pods (clusters created before the bastion load balancer only), ISO disks, phase Jobs, and (optional) the CSI controller. |
 | Edge proxy (optional) | One shared HAProxy in the operator namespace, SNI-routing nested API traffic behind passthrough Routes. Off unless `EDGE_PROXY_VLAN_IP` + `EDGE_PROXY_NAD` are set. |
 
 ## Orchestration phases
@@ -44,7 +44,7 @@ Each phase is idempotent; `.status.phase` is the resume point after an orchestra
 | **CreateSecrets** | Pull secret, SSH key Secret. The GUI only supplies a public key, so the orchestrator generates an automation key pair; the user's key stays authorised. |
 | **CreateVMs / CollectIPs** | Master VMs with the `l2bridge` binding and RWX **Block** root disks (explicit `volumeMode`), so they are live-migratable. Deterministic IPs via preseeded IPAMClaims (masters at base+100..). |
 | **MCSRelay** | Creates the single **bastion** VM early, so it occupies base+12 before any pod can take it (an IPAMClaim does not remove an address from OVN's dynamic pool). |
-| **DeployHAProxy** | Two HAProxy pods (api, ingress) on the cUDN, dual-homed onto the external NAD with the wizard's static IPs. |
+| **DeployHAProxy** | Bastion load balancer (`status.loadBalancer: bastion`, all new clusters): records the bastion's cluster address as the API/Ingress target; no pods. Older clusters: two HAProxy pods (api, ingress) on the cUDN, dual-homed onto the external NAD with the wizard's static IPs. |
 | **DeployDNS** | Pushes `dns.py` to the bastion: authoritative for the nested zone, forwards the rest. MCS (22623/22624) is relayed through the bastion on 12262/12264. |
 | **GenerateISO / MountISO** | Agent ISO built in a Job in the operator namespace, converted to Block, distributed to the cluster namespace by snapshot handle, attached as a cdrom (RWO by design). |
 | **PowerOn / ConfigureNodes** | Boot; an in-namespace Job pins node DNS to the bastion, finds the real rendezvous node and keeps a node-guard loop running. Skipped when the kubeconfig Secret exists (cluster already installed). |
@@ -80,13 +80,24 @@ One VM per cluster (CentOS Stream 9 DataSource): nested DNS, MCS relay, SSH as `
 
 ## Network settings guardrails
 
-Two kinds of addresses, easy to mix up: the **internal VIPs** (`spec.network.apiVIP/ingressVIP`, base+10/+11 of the internal cUDN subnet, set automatically by the wizard) and the **external IPs** (`spec.externalAccess.apiIP/ingressIP`, free addresses on a reachable VLAN, always typed in by the user; the HAProxy pods get `<ip>/<prefixLength>` on the selected NAD, prefix default 24).
+Two kinds of addresses, easy to mix up: the **internal VIPs** (`spec.network.apiVIP/ingressVIP`, base+10/+11 of the internal cUDN subnet, set automatically by the wizard) and the **external IPs** (`spec.externalAccess.apiIP/ingressIP`, free addresses on a reachable VLAN, always typed in by the user, plus the VLAN `gateway` and `prefixLength`; the bastion takes them, see below).
 
 `crd.(*NestedClusterSpec).ValidateNetwork()` (`orchestrator/internal/crd/validate.go`) refuses settings that can only produce a broken cluster: blank or invalid external IPs (they made the annotation `"ips":["/24"]` and the HAProxy pod never started), external IPs equal to the internal VIPs or inside the internal, pod or service networks, the same address twice, addresses in different VLAN subnets or on the network/broadcast address, no NAD, an internal network smaller than /24 or overlapping the pod/service networks. It runs in the create API (HTTP 400 with the reasons) and at the start of a new cluster's reconcile (so `oc apply` is covered); existing clusters are never re-checked. The wizard runs the same rules (`src/utils/network-check.ts`): Next stays disabled on Network and External Access, and Deploy is blocked while any problem remains. Keep the two in step.
 
+## Bastion load balancer (`status.loadBalancer: bastion`)
+
+New clusters get no HAProxy pods. The bastion VM (`bastion.go`, `bastionlb.go`) has a second NIC (`external`, bridge binding, MAC pinned by `externalMAC(cluster)`) on the selected external network, copied into the cluster namespace (`externalNADInClusterNs`). It works the same on Linux-bridge and OVN localnet networks: the guest sets its own addresses, so the NAD needs no IPAM.
+
+- **cloud-init:** `sos-external.sh` finds the NIC by MAC and uses NetworkManager to set `apiIP/prefix` and `ingressIP/prefix`, `ipv4.never-default`, a table-100 default route via `externalAccess.gateway`, and rules `from <apiIP>/<ingressIP> lookup 100` (rp_filter 2). Replies to any client outside the VLAN leave through the VLAN gateway; everything else keeps the cluster network's default route. Nothing lab-specific: no address ranges are hardcoded.
+- **Balancer:** `lb.py` (Python, ships in the cloud image; no package install, works disconnected) is the old MCS relay generalised: 6443/22623/22624 to the masters, 443/80 to every node, 12262/12264 kept. Round-robin, next backend on a refused or timed-out connect (2 s), connect timeout cleared afterwards so watches survive. VM to VM traffic is allowed, so MCS needs no relay hop.
+- **DNS:** `api`, `api-int` and `*.apps` resolve to the bastion's cluster address (`useBastionAsLoadBalancer` sets `APIVIPCUDN`/`IngressVIPCUDN` to it). With `platform: none` that is the standard single-LB setup.
+- **DeployDNS job** also checks that both external addresses are on the bastion and that 6443/22623/22624/443/80 listen (`LB_EXTERNAL_IPS`), and fails with the bastion's journal otherwise.
+- **Why not pods:** the pods' default route pointed at the cluster network, so clients outside the VLAN never got replies, and on Linux-bridge NADs (no IPAM) they got no static address at all. Fixing that in pods needs NET_ADMIN; a VM has its own routing table.
+- `GetVMIIP` prefers the `default` interface so the external address is never taken for the bastion's cluster address. Clusters without the marker (created earlier) keep the HAProxy-pod path unchanged.
+
 ## IP pools (`IPPool`, IP Pools tab)
 
-`ippools.octools.io` (`deploy/crd.yaml`, namespaced, lives in `oct-shift-on-shift-virt`): `nadName`, `prefixLength`, `addresses` (single IPv4 or ranges `a-b`, at most 4096), optional `gateway`/`description`. Usage is never stored: an address is in use while a NestedCluster on the same NAD references it (`crd.ExternalAddressUse`), so deleting a cluster frees its addresses.
+`ippools.octools.io` (`deploy/crd.yaml`, namespaced, lives in `oct-shift-on-shift-virt`): `nadName` (always `default/<name>`: pools are shared, so they never reference a NAD in a project namespace; enforced by the CRD pattern, `Validate()` and the form), `prefixLength`, `addresses` (single IPv4 or ranges `a-b`, at most 4096), optional `gateway`/`description`. Usage is never stored: an address is in use while a NestedCluster on the same NAD references it (`crd.ExternalAddressUse`), so deleting a cluster frees its addresses.
 
 - **IP Pools tab** (`src/components/IPPoolsTab/`): lists pools with usage from `GET /api/v1/ippools` (orchestrator), and creates or deletes pools through the Kubernetes API **with the user's own RBAC** (cluster admins by default). The orchestrator only reads pools (`ippools` get/list/watch).
 - **Wizard:** External Access has an "Address source" choice. A pool fills `nadName`/`prefixLength` and offers its free addresses (first two preselected); the CR records `externalAccess.ipPool`.
