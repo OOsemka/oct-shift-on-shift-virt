@@ -29,7 +29,10 @@ spec:
       terminationGracePeriodSeconds: 60
       hostNetwork: true
       # This must be set when hostNetwork is true or else the cluster services won't resolve
-      dnsPolicy: ClusterFirstWithHostNet
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - __SOS_DNS_IP__
       containers:
         - name: tigera-operator
           image: quay.io/tigera/operator:v1.42.7

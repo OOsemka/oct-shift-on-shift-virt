@@ -1,6 +1,9 @@
 # Rendered per cluster by the Shift-on-Shift Virt orchestrator; replaces the
 # upstream template. The eBPF dataplane (no kube-proxy) reaches the API
-# server directly; api-int resolves to the cluster's load balancer.
+# server directly through api-int (the cluster's load balancer). A name, not
+# an IP: the API certificate covers api-int, not the load balancer address.
+# The operator and calico-node resolve it through the nested DNS on the
+# bastion (dnsConfig pinned in 02-tigera-operator.yaml).
 kind: ConfigMap
 apiVersion: v1
 metadata:

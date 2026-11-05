@@ -36,6 +36,18 @@ for v in "${CALICO_VERSIONS[@]}"; do
   # Rendered per cluster by the orchestrator (installation.yaml.tmpl,
   # services-endpoint.yaml.tmpl).
   rm -f "$dir/03-cr-installation.yaml" "$dir/01-configmap-kubernetes-services-endpoint.yaml"
+  # The operator runs host-network with dnsPolicy ClusterFirstWithHostNet,
+  # i.e. it resolves through cluster DNS, which cannot run before Calico does,
+  # so api-int never resolves (seen: "lookup api-int... on 172.30.0.10:53: no
+  # such host", Init:Error). Pin it to the nested DNS on the bastion instead.
+  # The operator copies its own dnsPolicy/dnsConfig to calico-node
+  # (pkg/controller/installation/core_controller.go), so this covers both.
+  op=$dir/02-tigera-operator.yaml
+  grep -q '^      dnsPolicy: ClusterFirstWithHostNet$' "$op" || { echo "calico $v: dnsPolicy line not found in $op" >&2; exit 1; }
+  sed -i.bak 's|^      dnsPolicy: ClusterFirstWithHostNet$|      dnsPolicy: None\
+      dnsConfig:\
+        nameservers:\
+          - __SOS_DNS_IP__|' "$op" && rm -f "$op.bak"
   echo "calico $v: $(ls "$dir" | wc -l | tr -d ' ') files"
 done
 

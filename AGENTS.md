@@ -76,6 +76,7 @@ OVNKubernetes (default, empty) or the open-source **Calico** / **Cilium**, chose
 - **GenerateISO** adds them to the `<cluster>-install-config` Secret as `cni-*.yaml` keys (~50 KB) and the Job copies them into `openshift/` (custom manifests) before every `agent create image` attempt.
 - **Encapsulation is required**: nested nodes are on an OVN Layer2 network with port security, so packets with pod source addresses are dropped. Calico: our Installation CR sets VXLAN with BGP off (eBPF dataplane as upstream). Cilium: `routingMode=tunnel`, VXLAN.
 - **No kube-proxy**: Calico eBPF and Cilium kube-proxy replacement reach the API through `api-int` (the bastion load balancer); both ship `Network.operator.openshift.io` with `deployKubeProxy: false`.
+- **Calico DNS**: the tigera-operator runs host-network with `ClusterFirstWithHostNet`, i.e. cluster DNS, which cannot exist before Calico, so `api-int` never resolved (operator stuck in Init:Error). The update script pins its `dnsConfig` to `__SOS_DNS_IP__` = `status.dnsIPcUDN` (nested DNS on the bastion); the operator copies its DNS settings to calico-node. Do not use the load balancer IP instead: the API certificate covers `api-int` and 172.30.0.1, not that address. Cilium resolves through the node resolver and needs nothing.
 - **Third-party images** (quay.io/tigera, quay.io/calico, quay.io/cilium) are pulled by the nested cluster only; disconnected installs need OVN-Kubernetes. Nothing changes on the host cluster.
 
 ## Bastion

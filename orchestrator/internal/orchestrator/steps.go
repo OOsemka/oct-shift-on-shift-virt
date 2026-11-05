@@ -1323,6 +1323,7 @@ func (s *StepExecutor) generateISO(ctx context.Context, nc *crd.NestedCluster) e
 		ClusterName:        nc.Spec.ClusterName,
 		BaseDomain:         nc.Spec.BaseDomain,
 		ClusterNetworkCIDR: nc.Spec.Network.PodCIDR(),
+		DNSServerIP:        nc.Status.DNSIPCUDN,
 	})
 	if err != nil {
 		return fmt.Errorf("rendering network plugin manifests: %w", err)

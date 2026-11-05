@@ -70,7 +70,7 @@ func TestManifestsOVNIsEmpty(t *testing.T) {
 func TestManifestsRenderEveryVersion(t *testing.T) {
 	for _, nt := range []string{Calico, Cilium} {
 		for _, v := range Versions(nt) {
-			p := Params{NetworkType: nt, Version: v, ClusterName: "potaytoes", BaseDomain: "lab.example", ClusterNetworkCIDR: "10.132.0.0/14"}
+			p := Params{NetworkType: nt, Version: v, ClusterName: "potaytoes", BaseDomain: "lab.example", ClusterNetworkCIDR: "10.132.0.0/14", DNSServerIP: "10.100.0.12"}
 			m, err := Manifests(p)
 			if err != nil {
 				t.Fatalf("%s %s: %v", nt, v, err)
@@ -103,7 +103,7 @@ func TestManifestsRenderEveryVersion(t *testing.T) {
 }
 
 func TestCalicoInstallationEncapsulates(t *testing.T) {
-	m, err := Manifests(Params{NetworkType: Calico, ClusterName: "c", BaseDomain: "d", ClusterNetworkCIDR: "10.128.0.0/14"})
+	m, err := Manifests(Params{NetworkType: Calico, ClusterName: "c", BaseDomain: "d", ClusterNetworkCIDR: "10.128.0.0/14", DNSServerIP: "10.100.0.12"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +112,31 @@ func TestCalicoInstallationEncapsulates(t *testing.T) {
 		if !strings.Contains(inst, want) {
 			t.Errorf("Installation missing %q:\n%s", want, inst)
 		}
+	}
+}
+
+func TestCalicoPinsOperatorDNS(t *testing.T) {
+	p := Params{NetworkType: Calico, ClusterName: "c", BaseDomain: "d", ClusterNetworkCIDR: "10.128.0.0/14"}
+	if _, err := Manifests(p); err == nil {
+		t.Fatal("Calico without a DNS server address must be refused")
+	}
+	p.DNSServerIP = "10.100.0.12"
+	m, err := Manifests(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := string(m["cni-calico-02-tigera-operator.yaml"])
+	for _, want := range []string{"dnsPolicy: None", "nameservers:\n          - 10.100.0.12"} {
+		if !strings.Contains(op, want) {
+			t.Errorf("tigera-operator missing %q", want)
+		}
+	}
+	if strings.Contains(op, "ClusterFirstWithHostNet") {
+		t.Error("tigera-operator still resolves through cluster DNS")
+	}
+	cm := string(m["cni-calico-01-configmap-kubernetes-services-endpoint.yaml"])
+	if !strings.Contains(cm, `KUBERNETES_SERVICE_HOST: "api-int.c.d"`) {
+		t.Errorf("API endpoint must be the api-int name (the certificate covers it):\n%s", cm)
 	}
 }
 

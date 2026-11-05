@@ -135,6 +135,10 @@ type Params struct {
 	ClusterName        string
 	BaseDomain         string
 	ClusterNetworkCIDR string
+	// DNSServerIP is the nested cluster's DNS server (status.dnsIPcUDN, on
+	// the bastion). Calico's operator and calico-node use it to resolve
+	// api-int before cluster DNS exists. Required for Calico.
+	DNSServerIP string
 }
 
 func (p Params) apiIntHost() string { return "api-int." + p.ClusterName + "." + p.BaseDomain }
@@ -151,6 +155,9 @@ func Manifests(p Params) (map[string][]byte, error) {
 	if !contains(Versions(nt), version) {
 		return nil, fmt.Errorf("%s version %q is not embedded", nt, version)
 	}
+	if nt == Calico && p.DNSServerIP == "" {
+		return nil, fmt.Errorf("calico needs the nested DNS server address (status.dnsIPcUDN is empty)")
+	}
 	out := map[string][]byte{}
 
 	// Upstream files, verbatim apart from the __SOS_*__ placeholders.
@@ -162,6 +169,7 @@ func Manifests(p Params) (map[string][]byte, error) {
 	repl := strings.NewReplacer(
 		"__SOS_CLUSTER_NETWORK_CIDR__", p.ClusterNetworkCIDR,
 		"__SOS_API_INT_HOST__", p.apiIntHost(),
+		"__SOS_DNS_IP__", p.DNSServerIP,
 	)
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
