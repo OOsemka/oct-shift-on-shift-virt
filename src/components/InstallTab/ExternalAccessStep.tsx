@@ -1,4 +1,4 @@
-import React, { FC, useMemo } from 'react';
+import React, { FC, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
@@ -17,6 +17,7 @@ import {
 import { K8sResourceCommon, useK8sWatchResource } from '@openshift-console/dynamic-plugin-sdk';
 import { ClusterConfig } from './types';
 import { externalAccessProblems, NetworkField } from '../../utils/network-check';
+import { fetchIPPools, freeAddresses, IPPoolItem } from '../../utils/ippools';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
@@ -64,6 +65,35 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
   }, [nsNads, defaultNads]);
 
   const nadsLoading = !nsLoaded || !defaultLoaded;
+
+  // IP pools: pick the network and free addresses from a list.
+  const [pools, setPools] = useState<IPPoolItem[] | null>(null);
+  useEffect(() => {
+    fetchIPPools()
+      .then(setPools)
+      .catch(() => setPools([]));
+  }, []);
+  const pool = pools?.find((p) => p.name === ea.ipPool);
+  const poolFree = pool ? freeAddresses(pool) : [];
+  const choosePool = (name: string) => {
+    if (!name) {
+      onChange({ ipPool: '' });
+      return;
+    }
+    const p = pools?.find((x) => x.name === name);
+    if (!p) return;
+    const free = freeAddresses(p);
+    onChange({
+      ipPool: p.name,
+      nadName: p.nadName,
+      prefixLength: p.prefixLength,
+      apiIP: free[0] || '',
+      ingressIP: free[1] || '',
+    });
+  };
+  // Free addresses plus whatever is selected now, for the dropdowns.
+  const poolChoices = (current: string) =>
+    Array.from(new Set([...(current ? [current] : []), ...poolFree]));
   const nadError = nsError || defaultError;
 
   // Show "required" only after the user has typed something somewhere on this
@@ -82,10 +112,44 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
   return (
     <Form className="sos-form">
       <Alert variant="info" isInline title={t('These addresses are not assigned automatically')}>
-        {t('Pick the network (NAD) of a VLAN that people can reach, then type two free addresses on that VLAN: one for the API and one for Ingress. Do not use the internal VIPs from the Network step. Ask your network team for free addresses if you are unsure.')}
+        {t('Pick an IP pool, or pick the network (NAD) of a VLAN that people can reach and type two free addresses on that VLAN: one for the API and one for Ingress. Do not use the internal VIPs from the Network step. Ask your network team for free addresses if you are unsure.')}
       </Alert>
+      <FormGroup label={t('Address source')} fieldId="ip-pool">
+        {pools === null ? <Spinner size="md" /> : (
+          <FormSelect id="ip-pool" value={ea.ipPool} onChange={(_e, val) => choosePool(val)}>
+            <FormSelectOption value="" label={t('Enter addresses manually')} />
+            {pools.map((p) => {
+              const free = freeAddresses(p).length;
+              return (
+                <FormSelectOption
+                  key={p.name}
+                  value={p.name}
+                  isDisabled={free < 2}
+                  label={
+                    p.problem
+                      ? t('{{name}}: invalid pool', { name: p.name })
+                      : t('{{name}}: {{nad}}, {{free}} free', { name: p.name, nad: p.nadName, free: String(free) })
+                  }
+                />
+              );
+            })}
+          </FormSelect>
+        )}
+        <FormHelperText>
+          <HelperText>
+            <HelperTextItem>
+              {pools && pools.length === 0
+                ? t('No IP pools yet. Cluster administrators can prepare free addresses in the IP Pools tab.')
+                : t('Pick an IP pool to choose the network and free addresses from a list. Pools with fewer than two free addresses cannot be picked.')}
+            </HelperTextItem>
+          </HelperText>
+        </FormHelperText>
+      </FormGroup>
+
       <FormGroup label={t('External network (NAD)')} isRequired fieldId="nad-name">
-        {nadsLoading ? <Spinner size="md" /> : (
+        {pool ? (
+          <TextInput id="nad-name" value={pool.nadName} isDisabled aria-label={t('External network (NAD)')} />
+        ) : nadsLoading ? <Spinner size="md" /> : (
           <FormSelect
             id="nad-name"
             value={ea.nadName}
@@ -126,13 +190,22 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
       </FormGroup>
 
       <FormGroup label={t('External API IP')} isRequired fieldId="api-ip">
-        <TextInput
-          id="api-ip"
-          value={ea.apiIP}
-          onChange={(_e, val) => onChange({ apiIP: val })}
-          validated={apiErr ? 'error' : 'default'}
-          placeholder="192.168.100.10"
-        />
+        {pool ? (
+          <FormSelect id="api-ip" value={ea.apiIP} onChange={(_e, val) => onChange({ apiIP: val })} validated={apiErr ? 'error' : 'default'}>
+            <FormSelectOption value="" label={t('Select a free address')} isDisabled />
+            {poolChoices(ea.apiIP).map((ip) => (
+              <FormSelectOption key={ip} value={ip} label={ip} isDisabled={ip === ea.ingressIP} />
+            ))}
+          </FormSelect>
+        ) : (
+          <TextInput
+            id="api-ip"
+            value={ea.apiIP}
+            onChange={(_e, val) => onChange({ apiIP: val })}
+            validated={apiErr ? 'error' : 'default'}
+            placeholder="192.168.100.10"
+          />
+        )}
         <FormHelperText>
           <HelperText>
             <HelperTextItem variant={apiErr ? 'error' : 'default'}>
@@ -143,13 +216,22 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
       </FormGroup>
 
       <FormGroup label={t('External Ingress IP')} isRequired fieldId="ingress-ip">
-        <TextInput
-          id="ingress-ip"
-          value={ea.ingressIP}
-          onChange={(_e, val) => onChange({ ingressIP: val })}
-          validated={ingressErr ? 'error' : 'default'}
-          placeholder="192.168.100.11"
-        />
+        {pool ? (
+          <FormSelect id="ingress-ip" value={ea.ingressIP} onChange={(_e, val) => onChange({ ingressIP: val })} validated={ingressErr ? 'error' : 'default'}>
+            <FormSelectOption value="" label={t('Select a free address')} isDisabled />
+            {poolChoices(ea.ingressIP).map((ip) => (
+              <FormSelectOption key={ip} value={ip} label={ip} isDisabled={ip === ea.apiIP} />
+            ))}
+          </FormSelect>
+        ) : (
+          <TextInput
+            id="ingress-ip"
+            value={ea.ingressIP}
+            onChange={(_e, val) => onChange({ ingressIP: val })}
+            validated={ingressErr ? 'error' : 'default'}
+            placeholder="192.168.100.11"
+          />
+        )}
         <FormHelperText>
           <HelperText>
             <HelperTextItem variant={ingressErr ? 'error' : 'default'}>
@@ -161,6 +243,7 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
       <FormGroup label={t('VLAN prefix length')} isRequired fieldId="prefix-length">
         <NumberInput
           id="prefix-length"
+          isDisabled={Boolean(pool)}
           value={ea.prefixLength}
           min={8}
           max={30}
