@@ -280,5 +280,10 @@
   "Leave empty to use the lab default key ({{fp}}).": "Leave empty to use the lab default key ({{fp}}).",
   "Delete cluster {{name}}?": "Delete cluster {{name}}?",
   "This permanently deletes the nested cluster {{name}}: its VMs and disks, its bastion, its namespace and networks. Its external addresses go back to the IP pool. This cannot be undone.": "This permanently deletes the nested cluster {{name}}: its VMs and disks, its bastion, its namespace and networks. Its external addresses go back to the IP pool. This cannot be undone.",
-  "Type the cluster name to confirm:": "Type the cluster name to confirm:"
+  "Type the cluster name to confirm:": "Type the cluster name to confirm:",
+  "Bastion SSH": "Bastion SSH",
+  "Log in as core with the SSH key you gave the wizard; core has passwordless sudo. The image’s default users (cloud-user, centos) have no key.": "Log in as core with the SSH key you gave the wizard; core has passwordless sudo. The image’s default users (cloud-user, centos) have no key.",
+  "The bastion also answers on {{ip}}.": "The bastion also answers on {{ip}}.",
+  "This is the bastion’s cluster network address: reachable only from the cluster network, for example from a pod in {{namespace}}.": "This is the bastion’s cluster network address: reachable only from the cluster network, for example from a pod in {{namespace}}.",
+  "Desktop: log in as {{user}} in the console of VM {{vm}}.": "Desktop: log in as {{user}} in the console of VM {{vm}}."
 }
