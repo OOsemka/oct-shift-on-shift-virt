@@ -221,6 +221,13 @@ spec:
                     ipPool:
                       type: string
                       description: Optional IPPool (same namespace) the external addresses were picked from; the API checks they match it.
+                    gateway:
+                      type: string
+                      description: >-
+                        Optional router of the external VLAN (same subnet as apiIP/ingressIP). When set, the HAProxy pods
+                        reply to connections received on the VLAN through this gateway (source-based policy routing), so
+                        clients on other routed subnets can reach the API and Ingress. Empty keeps replies on the pod's
+                        default route (primary UDN), which only works for clients on the VLAN subnet itself.
                 storageClassName:
                   type: string
                   description: StorageClass for VM root disk PVCs.

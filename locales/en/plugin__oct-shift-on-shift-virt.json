@@ -223,5 +223,12 @@
   "Enter an IPv4 address or leave it empty.": "Enter an IPv4 address or leave it empty.",
   "The gateway is outside {{subnet}}.": "The gateway is outside {{subnet}}.",
   "The gateway must not be one of the pool addresses.": "The gateway must not be one of the pool addresses.",
-  "One address or range per line. Only list addresses nothing else uses on that VLAN. Addresses: {{n}}.": "One address or range per line. Only list addresses nothing else uses on that VLAN. Addresses: {{n}}."
+  "One address or range per line. Only list addresses nothing else uses on that VLAN. Addresses: {{n}}.": "One address or range per line. Only list addresses nothing else uses on that VLAN. Addresses: {{n}}.",
+  "VLAN gateway": "VLAN gateway",
+  "Optional. The router of the external VLAN. Set it when clients on other subnets (for example your workstation network) must reach the API and Ingress: the HAProxy pods then send their replies back through this router. Leave it empty if every client is on the VLAN subnet itself. Setting it gives the HAProxy pods the NET_ADMIN capability inside their own network namespace.": "Optional. The router of the external VLAN. Set it when clients on other subnets (for example your workstation network) must reach the API and Ingress: the HAProxy pods then send their replies back through this router. Leave it empty if every client is on the VLAN subnet itself. Setting it gives the HAProxy pods the NET_ADMIN capability inside their own network namespace.",
+  "{{gw}} (replies to clients on other subnets are routed through it)": "{{gw}} (replies to clients on other subnets are routed through it)",
+  "Not set: the API and Ingress are reachable from the VLAN subnet only": "Not set: the API and Ingress are reachable from the VLAN subnet only",
+  "Enter an IPv4 address such as 198.51.100.1.": "Enter an IPv4 address such as 198.51.100.1.",
+  "The gateway is the VLAN router, not one of the API or Ingress addresses.": "The gateway is the VLAN router, not one of the API or Ingress addresses.",
+  "Not in the VLAN subnet {{cidr}} of the API and Ingress IPs.": "Not in the VLAN subnet {{cidr}} of the API and Ingress IPs."
 }

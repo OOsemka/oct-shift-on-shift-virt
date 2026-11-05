@@ -60,6 +60,7 @@ const CreateClusterWizard: FC = () => {
           nadName: config.externalAccess.nadName.trim(),
           apiIP: config.externalAccess.apiIP.trim(),
           ingressIP: config.externalAccess.ingressIP.trim(),
+          gateway: config.externalAccess.gateway.trim(),
         },
       };
       await createCluster(deployConfig);

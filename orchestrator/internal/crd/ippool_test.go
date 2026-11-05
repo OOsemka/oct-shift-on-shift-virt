@@ -78,3 +78,20 @@ func TestAddressConflictsAndPool(t *testing.T) {
 		t.Fatal("missing pool must fail")
 	}
 }
+
+func TestCheckPoolGateway(t *testing.T) {
+	p := &IPPool{Name: "lab", Spec: pool("192.0.2.10-192.0.2.20")}
+	p.Spec.Gateway = "192.0.2.1"
+	s := spec("192.0.2.12", "192.0.2.13", "default/vlan-a")
+	s.ExternalAccess.IPPool = "lab"
+	for _, gw := range []string{"", "192.0.2.1"} {
+		s.ExternalAccess.Gateway = gw
+		if err := s.CheckPool(p); err != nil {
+			t.Fatalf("gateway %q: %v", gw, err)
+		}
+	}
+	s.ExternalAccess.Gateway = "192.0.2.254"
+	if err := s.CheckPool(p); err == nil || !strings.Contains(err.Error(), "not the pool's gateway 192.0.2.1") {
+		t.Fatalf("want gateway mismatch, got %v", err)
+	}
+}

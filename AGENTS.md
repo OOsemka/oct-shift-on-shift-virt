@@ -74,7 +74,8 @@ One VM per cluster (CentOS Stream 9 DataSource): nested DNS, MCS relay, SSH as `
 ## Security constraints (do not regress)
 
 - Never change the host cluster's nodes, MachineConfigs or shared operators' configuration.
-- Nothing privileged on the host; no new SCC grants beyond the per-cluster `anyuid` bindings, which teardown removes (a leftover binding grants anyuid to whoever recreates that namespace + SA).
+- Nothing privileged on the host; no new SCC grants beyond the per-cluster `anyuid` bindings and the opt-in HAProxy `oct-sos-haproxy-netadmin` binding (below), which teardown removes (a leftover binding grants the SCC to whoever recreates that namespace + SA).
+- `oct-sos-haproxy-netadmin` (`deploy/install.yaml`) is anyuid + `NET_ADMIN` only, for the HAProxy VLAN return route. It is bound (`sos-haproxy-netadmin-<cluster>`) only while `spec.externalAccess.gateway` is set. Do not widen it.
 - The orchestrator can only grant what it holds (RBAC escalation prevention). `oc auth can-i` false-negatives on `subresources.kubevirt.io`; test a Role with a server-side dry run instead.
 - Credentials written by Jobs go straight into Secrets — never `oc apply` a Secret (the token would land in the last-applied annotation) and never print tokens to logs.
 
@@ -83,6 +84,10 @@ One VM per cluster (CentOS Stream 9 DataSource): nested DNS, MCS relay, SSH as `
 Two kinds of addresses, easy to mix up: the **internal VIPs** (`spec.network.apiVIP/ingressVIP`, base+10/+11 of the internal cUDN subnet, set automatically by the wizard) and the **external IPs** (`spec.externalAccess.apiIP/ingressIP`, free addresses on a reachable VLAN, always typed in by the user; the HAProxy pods get `<ip>/<prefixLength>` on the selected NAD, prefix default 24).
 
 `crd.(*NestedClusterSpec).ValidateNetwork()` (`orchestrator/internal/crd/validate.go`) refuses settings that can only produce a broken cluster: blank or invalid external IPs (they made the annotation `"ips":["/24"]` and the HAProxy pod never started), external IPs equal to the internal VIPs or inside the internal, pod or service networks, the same address twice, addresses in different VLAN subnets or on the network/broadcast address, no NAD, an internal network smaller than /24 or overlapping the pod/service networks. It runs in the create API (HTTP 400 with the reasons) and at the start of a new cluster's reconcile (so `oc apply` is covered); existing clusters are never re-checked. The wizard runs the same rules (`src/utils/network-check.ts`): Next stays disabled on Network and External Access, and Deploy is blocked while any problem remains. Keep the two in step.
+
+## VLAN return route (`spec.externalAccess.gateway`)
+
+The HAProxy pods' default route is the primary UDN, so replies to clients on **routed** subnets left via `ovn-udn1` and were dropped: the external IPs only worked from the VLAN subnet itself. When the optional gateway is set, an init container (`orchestrator/internal/orchestrator/vlanroute.go`) adds `ip rule from <vlanIP> lookup 100` + `default via <gateway> dev <vlan iface> table 100` in the pod's own netns. Backend traffic (sourced from the UDN address) and the UDN default route are untouched. Measured dead ends: `"default-route"` in the network-selection annotation fails pod creation (`failed to add gateway route to link 'net1': file exists`, the primary UDN owns the default route), and localnet cUDNs with IPAM disabled carry no routes. Ready clusters are synced on every CR event (`SyncHAProxyVLANRoute`, rolls only the two HAProxy Deployments; a no-op when they match). Validation (gateway in the VLAN subnet, not an external address, matches the pool's gateway) is in `ValidateNetwork`/`CheckPool` and `network-check.ts`.
 
 ## IP pools (`IPPool`, IP Pools tab)
 

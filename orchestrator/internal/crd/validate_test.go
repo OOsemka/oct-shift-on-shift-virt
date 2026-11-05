@@ -91,3 +91,34 @@ func TestValidateNetworkInternalVIPOutsideSubnet(t *testing.T) {
 		t.Fatalf("want internal VIP outside subnet error, got %v", err)
 	}
 }
+
+func TestValidateNetworkGateway(t *testing.T) {
+	cases := []struct {
+		name, gw string
+		want     string // substring of the error; empty means valid
+	}{
+		{"none", "", ""},
+		{"router on the VLAN", "192.0.2.1", ""},
+		{"not an IP", "router.example.com", `gateway "router.example.com" is not an IPv4 address`},
+		{"outside the VLAN subnet", "192.0.3.1", "not in the VLAN subnet 192.0.2.0/24"},
+		{"same as the API IP", "192.0.2.10", "also the external API IP"},
+		{"network address", "192.0.2.0", "network or broadcast address"},
+		{"broadcast address", "192.0.2.255", "network or broadcast address"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := spec("192.0.2.10", "192.0.2.11", "default/x")
+			s.ExternalAccess.Gateway = tc.gw
+			err := s.ValidateNetwork()
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("want valid, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}

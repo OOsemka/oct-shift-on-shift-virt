@@ -362,6 +362,11 @@ func (s *StepExecutor) deployHAProxy(ctx context.Context, nc *crd.NestedCluster)
 	if err := s.client.CreateClusterRoleBinding(ctx, crbName, "system:openshift:scc:anyuid", saName, clusterNs, ownerLabels); err != nil {
 		return fmt.Errorf("granting anyuid SCC to haproxy: %w", err)
 	}
+	// NET_ADMIN for the VLAN return-route init container, only with a gateway.
+	if err := s.ensureHAProxyNetAdmin(ctx, nc); err != nil {
+		return err
+	}
+	gateway := strings.TrimSpace(nc.Spec.ExternalAccess.Gateway)
 
 	nadName := nc.Spec.ExternalAccess.NADName
 	nadSrcNs := clusterNs
@@ -390,7 +395,7 @@ func (s *StepExecutor) deployHAProxy(ctx context.Context, nc *crd.NestedCluster)
 			map[string]interface{}{"containerPort": int64(6443), "name": "api"},
 			map[string]interface{}{"containerPort": int64(22623), "name": "mcs"},
 			map[string]interface{}{"containerPort": int64(22624), "name": "mcs-auth"},
-		}, sha16(apiConfig))
+		}, sha16(apiConfig), strings.TrimSpace(nc.Spec.ExternalAccess.APIIP), gateway)
 	err := s.applyHAProxyDeployment(ctx, clusterNs, deployGVR, apiDeploy)
 	if err != nil {
 		return fmt.Errorf("applying haproxy-api deployment: %w", err)
@@ -407,7 +412,7 @@ func (s *StepExecutor) deployHAProxy(ctx context.Context, nc *crd.NestedCluster)
 		[]interface{}{
 			map[string]interface{}{"containerPort": int64(443), "name": "https"},
 			map[string]interface{}{"containerPort": int64(80), "name": "http"},
-		}, sha16(ingressConfig))
+		}, sha16(ingressConfig), strings.TrimSpace(nc.Spec.ExternalAccess.IngressIP), gateway)
 	if err := s.applyHAProxyDeployment(ctx, clusterNs, deployGVR, ingressDeploy); err != nil {
 		return fmt.Errorf("applying haproxy-ingress deployment: %w", err)
 	}
@@ -494,18 +499,34 @@ func (s *StepExecutor) applyHAProxyDeployment(ctx context.Context, namespace str
 	}
 	want, _, _ := unstructured.NestedString(dep.Object, "spec", "template", "metadata", "annotations", "sos.octools.io/config-sha")
 	have, _, _ := unstructured.NestedString(existing.Object, "spec", "template", "metadata", "annotations", "sos.octools.io/config-sha")
+	changed := false
 	if want != "" && want != have {
 		unstructured.SetNestedField(existing.Object, want, "spec", "template", "metadata", "annotations", "sos.octools.io/config-sha")
+		s.logger.WithComponent("haproxy").Info("haproxy deployment config-sha changed; rolling pods", "deployment", name, "from", have, "to", want)
+		changed = true
+	}
+	// The VLAN return route (init container + annotation) follows the wanted
+	// Deployment, so a gateway added or removed before Ready also rolls.
+	if setHAProxyVLANRoute(existing, haproxyImage, haproxyInitEnv(dep, "VLAN_IP"), haproxyInitEnv(dep, "VLAN_GATEWAY")) {
+		s.logger.WithComponent("haproxy").Info("haproxy VLAN return route changed; rolling pods", "deployment", name)
+		changed = true
+	}
+	if changed {
 		if _, uerr := resource.Update(ctx, existing, metav1.UpdateOptions{}); uerr != nil {
 			return uerr
 		}
-		s.logger.WithComponent("haproxy").Info("haproxy deployment config-sha changed; rolling pods", "deployment", name, "from", have, "to", want)
 	}
 	return nil
 }
 
-func (s *StepExecutor) buildHAProxyDeployment(name, namespace, saName, configSecret, nadAnnotation string, labels map[string]interface{}, ports []interface{}, configSha string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{
+// haproxyImage runs the HAProxy pods and their VLAN return-route init container.
+const haproxyImage = "docker.io/library/haproxy:2.9-alpine"
+
+// buildHAProxyDeployment builds a HAProxy Deployment. vlanIP is the pod's
+// static address on the external VLAN; with a gateway the pod also gets the
+// VLAN return route (see vlanroute.go).
+func (s *StepExecutor) buildHAProxyDeployment(name, namespace, saName, configSecret, nadAnnotation string, labels map[string]interface{}, ports []interface{}, configSha, vlanIP, gateway string) *unstructured.Unstructured {
+	dep := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
@@ -536,7 +557,7 @@ func (s *StepExecutor) buildHAProxyDeployment(name, namespace, saName, configSec
 						"containers": []interface{}{
 							map[string]interface{}{
 								"name":  "haproxy",
-								"image": "docker.io/library/haproxy:2.9-alpine",
+								"image": haproxyImage,
 								"ports": ports,
 								"volumeMounts": []interface{}{
 									map[string]interface{}{
@@ -560,6 +581,8 @@ func (s *StepExecutor) buildHAProxyDeployment(name, namespace, saName, configSec
 			},
 		},
 	}
+	setHAProxyVLANRoute(dep, haproxyImage, vlanIP, gateway)
+	return dep
 }
 
 func (s *StepExecutor) generateHAProxyConfigAPI(nc *crd.NestedCluster) string {
@@ -2356,11 +2379,12 @@ func (s *StepExecutor) DeleteCluster(ctx context.Context, nc *crd.NestedCluster)
 
 	s.client.DynamicClient.Resource(deployGVR).Namespace(clusterNs).Delete(ctx, nc.Spec.ClusterName+"-haproxy", metav1.DeleteOptions{})
 	s.client.Clientset.CoreV1().ServiceAccounts(clusterNs).Delete(ctx, nc.Spec.ClusterName+"-haproxy", metav1.DeleteOptions{})
-	// anyuid grants are cluster-scoped and name the SA by namespace/name; left
-	// behind, they would hand anyuid to whoever next creates that namespace.
-	for _, crb := range []string{"sos-haproxy-anyuid-", "sos-ops-anyuid-", "sos-dns-anyuid-"} {
+	// SCC grants (anyuid, and the HAProxy NET_ADMIN SCC) are cluster-scoped
+	// and name the SA by namespace/name; left behind, they would hand the SCC
+	// to whoever next creates that namespace.
+	for _, crb := range []string{"sos-haproxy-anyuid-", "sos-ops-anyuid-", "sos-dns-anyuid-", haproxyNetAdminBindingPrefix} {
 		if err := s.client.DeleteClusterRoleBinding(ctx, crb+nc.Spec.ClusterName); err != nil {
-			log.Info("could not delete anyuid binding (non-fatal)", "binding", crb+nc.Spec.ClusterName, "error", err.Error())
+			log.Info("could not delete SCC binding (non-fatal)", "binding", crb+nc.Spec.ClusterName, "error", err.Error())
 		}
 	}
 

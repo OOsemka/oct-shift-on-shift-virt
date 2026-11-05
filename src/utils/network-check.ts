@@ -17,6 +17,7 @@ export type NetworkField =
   | 'nadName'
   | 'apiIP'
   | 'ingressIP'
+  | 'gateway'
   | 'prefixLength';
 
 export type NetworkProblem = { field: NetworkField; key: string; values?: Record<string, string> };
@@ -168,6 +169,33 @@ export function externalAccessProblems(config: ClusterConfig): NetworkProblem[] 
           values: { cidr: vlan.text },
         });
       }
+    }
+  }
+
+  // Optional VLAN gateway: next hop of the HAProxy pods' reply route, so it
+  // must be a host on the VLAN subnet (a wrong value blackholes every reply).
+  const gw = (ea.gateway || '').trim();
+  if (gw) {
+    const n = ipToNum(gw);
+    if (n === undefined) {
+      out.push({ field: 'gateway', key: 'Enter an IPv4 address such as 198.51.100.1.' });
+    } else if (seen.has(n)) {
+      out.push({
+        field: 'gateway',
+        key: 'The gateway is the VLAN router, not one of the API or Ingress addresses.',
+      });
+    } else if (vlan && !contains(vlan, n)) {
+      out.push({
+        field: 'gateway',
+        key: 'Not in the VLAN subnet {{cidr}} of the API and Ingress IPs.',
+        values: { cidr: vlan.text },
+      });
+    } else if (vlan && (n === vlan.base || n === vlan.base + vlan.size - 1)) {
+      out.push({
+        field: 'gateway',
+        key: '{{ip}} is the network or broadcast address of {{cidr}}.',
+        values: { ip: gw, cidr: vlan.text },
+      });
     }
   }
   return out;

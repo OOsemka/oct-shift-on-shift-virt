@@ -180,7 +180,19 @@ func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) 
 	}
 	e.mu.Unlock()
 
-	if phase == crd.PhaseReady || phase == crd.PhaseFailed {
+	if phase == crd.PhaseReady {
+		// Phases do not run on Ready clusters; the VLAN return route is the
+		// one setting that is applied to them (a no-op when it already matches).
+		if e.steps != nil {
+			sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if err := e.steps.SyncHAProxyVLANRoute(sctx, nc); err != nil {
+				e.logger.WithCluster(nc.Spec.ClusterName).Error("could not sync the haproxy VLAN return route", "error", err.Error())
+			}
+			cancel()
+		}
+		return
+	}
+	if phase == crd.PhaseFailed {
 		return
 	}
 

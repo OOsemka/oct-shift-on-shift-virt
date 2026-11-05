@@ -127,6 +127,9 @@ rules:
   - securitycontextconstraints
   resourceNames:
   - anyuid
+  # Held only so the orchestrator may bind oct-sos-haproxy-netadmin-scc
+  # (RBAC escalation prevention); used by the HAProxy pods' VLAN return route.
+  - oct-sos-haproxy-netadmin
   verbs:
   - use
 - apiGroups:
@@ -342,6 +345,74 @@ subjects:
 - kind: ServiceAccount
   name: sos-orchestrator
   namespace: oct-shift-on-shift-virt
+---
+# HAProxy VLAN return route (spec.externalAccess.gateway, opt-in).
+# anyuid plus NET_ADMIN and nothing else: the HAProxy pods' init container
+# adds a source-based policy route in the POD's own network namespace so
+# replies to clients on routed subnets leave through the external VLAN instead
+# of the primary UDN. No host access, no privileged containers. Bound per
+# cluster (sos-haproxy-netadmin-<cluster>) only while a gateway is set, and
+# removed at teardown. Without a gateway, pods are admitted under anyuid as
+# before (anyuid has the higher priority).
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: oct-sos-haproxy-netadmin
+  labels:
+    app.kubernetes.io/part-of: oct-shift-on-shift-virt
+  annotations:
+    kubernetes.io/description: >-
+      Shift-on-Shift Virt HAProxy pods: anyuid plus NET_ADMIN, for the VLAN
+      return route installed in the pod network namespace.
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegeEscalation: true
+allowPrivilegedContainer: false
+allowedCapabilities:
+- NET_ADMIN
+defaultAddCapabilities: null
+fsGroup:
+  type: RunAsAny
+groups: []
+priority: null
+readOnlyRootFilesystem: false
+requiredDropCapabilities:
+- MKNOD
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: MustRunAs
+supplementalGroups:
+  type: RunAsAny
+users: []
+volumes:
+- configMap
+- csi
+- downwardAPI
+- emptyDir
+- ephemeral
+- persistentVolumeClaim
+- projected
+- secret
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: oct-sos-haproxy-netadmin-scc
+  labels:
+    app.kubernetes.io/part-of: oct-shift-on-shift-virt
+rules:
+- apiGroups:
+  - security.openshift.io
+  resources:
+  - securitycontextconstraints
+  resourceNames:
+  - oct-sos-haproxy-netadmin
+  verbs:
+  - use
 ---
 apiVersion: apps/v1
 kind: Deployment

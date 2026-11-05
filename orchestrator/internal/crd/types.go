@@ -185,6 +185,13 @@ type ExternalAccessConfig struct {
 	// above were picked from. Optional; when set, the API checks that NADName,
 	// PrefixLength and the addresses match the pool.
 	IPPool string `json:"ipPool,omitempty"`
+	// Gateway is the router of the external VLAN. Optional. When set, the
+	// HAProxy pods answer connections that arrive on the VLAN interface back
+	// through this gateway (source-based policy routing), so clients on other
+	// routed subnets get replies. Without it a reply follows the pod's default
+	// route out of the primary UDN and is dropped, which leaves the external
+	// IPs reachable only from hosts on the same VLAN subnet.
+	Gateway string `json:"gateway,omitempty"`
 }
 
 // DefaultExternalPrefixLength is used when ExternalAccessConfig.PrefixLength is 0.

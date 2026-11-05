@@ -223,6 +223,9 @@ func (s *NestedClusterSpec) CheckPool(pool *IPPool) error {
 	if ea.Prefix() != pool.Spec.PrefixLength {
 		problems = append(problems, fmt.Sprintf("prefix length %d is not the pool's /%d", ea.Prefix(), pool.Spec.PrefixLength))
 	}
+	if gw, pgw := strings.TrimSpace(ea.Gateway), strings.TrimSpace(pool.Spec.Gateway); gw != "" && pgw != "" && gw != pgw {
+		problems = append(problems, fmt.Sprintf("gateway %s is not the pool's gateway %s", gw, pgw))
+	}
 	addrs, err := pool.Spec.Expand()
 	if err != nil {
 		return fmt.Errorf("IP pool %q is invalid: %w", pool.Name, err)

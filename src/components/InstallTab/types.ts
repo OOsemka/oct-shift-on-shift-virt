@@ -27,6 +27,12 @@ export interface ExternalAccessConfig {
   prefixLength: number;
   /** IP pool the addresses were picked from; empty when entered by hand. */
   ipPool: string;
+  /**
+   * Router of the external VLAN; optional. When set, the HAProxy pods send
+   * replies to VLAN clients back through it, so clients on other routed
+   * subnets can reach the API and Ingress.
+   */
+  gateway: string;
 }
 
 /**
@@ -160,6 +166,7 @@ export const DEFAULT_CLUSTER_CONFIG: ClusterConfig = {
     ingressIP: '',
     prefixLength: 24,
     ipPool: '',
+    gateway: '',
   },
   storageClassName: '',
   storage: { enabled: false, infraStorageClassName: '', allowanceGi: 100 },

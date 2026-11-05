@@ -56,6 +56,7 @@ interface ClusterDetail {
     externalAccess: {
       apiIP: string;
       ingressIP: string;
+      gateway?: string;
     };
   };
   status: {
@@ -374,6 +375,14 @@ const ClusterDetailPage: FC = () => {
                   <code>api.{fqdn}</code> → <code>{spec.externalAccess.apiIP}</code>
                   <br />
                   <code>*.apps.{fqdn}</code> → <code>{spec.externalAccess.ingressIP}</code>
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+              <DescriptionListGroup>
+                <DescriptionListTerm>{t('VLAN gateway')}</DescriptionListTerm>
+                <DescriptionListDescription>
+                  {spec.externalAccess.gateway
+                    ? t('{{gw}} (replies to clients on other subnets are routed through it)', { gw: spec.externalAccess.gateway })
+                    : t('Not set: the API and Ingress are reachable from the VLAN subnet only')}
                 </DescriptionListDescription>
               </DescriptionListGroup>
             </DescriptionList>

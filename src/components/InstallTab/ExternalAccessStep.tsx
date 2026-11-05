@@ -89,6 +89,7 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
       prefixLength: p.prefixLength,
       apiIP: free[0] || '',
       ingressIP: free[1] || '',
+      gateway: p.gateway || '',
     });
   };
   // Free addresses plus whatever is selected now, for the dropdowns.
@@ -108,6 +109,7 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
   const apiErr = errorFor('apiIP');
   const ingressErr = errorFor('ingressIP');
   const prefixErr = errorFor('prefixLength');
+  const gatewayErr = errorFor('gateway');
 
   return (
     <Form className="sos-form">
@@ -259,6 +261,25 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
           <HelperText>
             <HelperTextItem variant={prefixErr ? 'error' : 'default'}>
               {prefixErr || t('Size of the external VLAN subnet, for example 24 for a /24 or 22 for a /22.')}
+            </HelperTextItem>
+          </HelperText>
+        </FormHelperText>
+      </FormGroup>
+
+      <FormGroup label={t('VLAN gateway')} fieldId="vlan-gateway">
+        <TextInput
+          id="vlan-gateway"
+          value={ea.gateway}
+          isDisabled={Boolean(pool?.gateway)}
+          onChange={(_e, val) => onChange({ gateway: val })}
+          validated={gatewayErr ? 'error' : 'default'}
+          placeholder="192.168.100.1"
+        />
+        <FormHelperText>
+          <HelperText>
+            <HelperTextItem variant={gatewayErr ? 'error' : 'default'}>
+              {gatewayErr ||
+                t('Optional. The router of the external VLAN. Set it when clients on other subnets (for example your workstation network) must reach the API and Ingress: the HAProxy pods then send their replies back through this router. Leave it empty if every client is on the VLAN subnet itself. Setting it gives the HAProxy pods the NET_ADMIN capability inside their own network namespace.')}
             </HelperTextItem>
           </HelperText>
         </FormHelperText>
