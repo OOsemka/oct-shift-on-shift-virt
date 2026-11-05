@@ -50,6 +50,56 @@ func TestBastionLBConfig(t *testing.T) {
 	}
 }
 
+func TestBastionLBHealthChecks(t *testing.T) {
+	lb, err := newBastionLB(lbCluster())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg lbConfig
+	if err := json.Unmarshal([]byte(lb.configJSON()), &cfg); err != nil {
+		t.Fatalf("config is not JSON: %v", err)
+	}
+	want := map[string]lbCheck{
+		"api":      {Scheme: "https", Port: 6443, Path: "/readyz", Interval: 5, Timeout: 5, Rise: 2, Fall: 3},
+		"mcs":      {Scheme: "https", Port: 22623, Path: "/healthz", Interval: 5, Timeout: 5, Rise: 2, Fall: 3},
+		"mcs-http": {Scheme: "http", Port: 22624, Path: "/healthz", Interval: 5, Timeout: 5, Rise: 2, Fall: 3},
+		"ingress":  {Scheme: "http", Port: 1936, Path: "/healthz/ready", Interval: 10, Timeout: 5, Rise: 2, Fall: 2},
+	}
+	if len(cfg.Checks) != len(want) {
+		t.Errorf("checks = %v, want %v", cfg.Checks, want)
+	}
+	for name, w := range want {
+		if got := cfg.Checks[name]; got != w {
+			t.Errorf("check %s = %+v, want %+v", name, got, w)
+		}
+	}
+	// A master must leave the API pool within 30 s of becoming unready.
+	for _, name := range []string{"api", "mcs", "mcs-http"} {
+		c := cfg.Checks[name]
+		if worst := c.Fall*c.Interval + c.Timeout; worst > 30 {
+			t.Errorf("%s: removal can take %d s (> 30 s)", name, worst)
+		}
+	}
+	mapping := map[string]string{
+		"6443": "api", "22623": "mcs", "22624": "mcs-http", "12262": "mcs", "12264": "mcs-http", "443": "ingress", "80": "ingress",
+	}
+	for port, check := range mapping {
+		if got := cfg.FrontendChecks[port]; got != check {
+			t.Errorf("frontend %s check = %q, want %q", port, got, check)
+		}
+		if len(cfg.Frontends[port]) == 0 {
+			t.Errorf("frontend %s has no backends", port)
+		}
+	}
+	if len(cfg.FrontendChecks) != len(mapping) {
+		t.Errorf("unexpected frontend checks: %v", cfg.FrontendChecks)
+	}
+	// Legacy relay ports still forward to the MCS ports.
+	if b := cfg.Frontends["12264"]; b[0][1].(float64) != 22624 {
+		t.Errorf("12264 must forward to 22624, got %v", b)
+	}
+}
+
 func TestBastionLBRequiresGateway(t *testing.T) {
 	nc := lbCluster()
 	nc.Spec.ExternalAccess.Gateway = ""
