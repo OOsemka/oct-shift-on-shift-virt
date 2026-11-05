@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	_ "embed"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -115,6 +116,12 @@ func (s *StepExecutor) doPublishRoutes(ctx context.Context, nc *crd.NestedCluste
 	if net.ParseIP(ea.APIIP) == nil || net.ParseIP(ea.IngressIP) == nil {
 		return "", "", fmt.Errorf("external API/Ingress addresses are not set")
 	}
+	// A host Route makes its backend reachable under the host's *.apps
+	// domain, so the backend must be an address an admin set aside for
+	// nested clusters (an IP pool), never an arbitrary one from the spec.
+	if err := s.checkHostRoutePool(ctx, nc); err != nil {
+		return "", "", err
+	}
 	if nc.Status.KubeconfigRef == "" {
 		return "", "", fmt.Errorf("no nested kubeconfig yet (PostInstall did not store one)")
 	}
@@ -162,6 +169,26 @@ func (s *StepExecutor) doPublishRoutes(ctx context.Context, nc *crd.NestedCluste
 		return "", "", fmt.Errorf("nested configuration job ended without HOSTROUTES_OK")
 	}
 	return "https://" + consoleHost, "https://" + apiHost, nil
+}
+
+func (s *StepExecutor) checkHostRoutePool(ctx context.Context, nc *crd.NestedCluster) error {
+	name := nc.Spec.ExternalAccess.IPPool
+	if name == "" {
+		return fmt.Errorf("host routes need the external addresses to come from an IP pool")
+	}
+	gvr := schema.GroupVersionResource{Group: crd.Group, Version: crd.Version, Resource: crd.IPPoolResource}
+	var pool *crd.IPPool
+	if obj, err := s.client.DynamicClient.Resource(gvr).Namespace(operatorNamespace()).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		p := crd.IPPool{Name: obj.GetName(), Namespace: obj.GetNamespace()}
+		if raw, ok := obj.Object["spec"]; ok {
+			b, _ := json.Marshal(raw)
+			_ = json.Unmarshal(b, &p.Spec)
+		}
+		pool = &p
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("reading IP pool %q: %w", name, err)
+	}
+	return nc.Spec.CheckPool(pool)
 }
 
 // ensureExternalService creates a selector-less Service and its EndpointSlice

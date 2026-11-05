@@ -72,6 +72,8 @@ const CreateClusterWizard: FC = () => {
           nadName: config.externalAccess.nadName.trim(),
           apiIP: config.externalAccess.apiIP.trim(),
           ingressIP: config.externalAccess.ingressIP.trim(),
+          // Host routes need pool addresses (the orchestrator refuses otherwise).
+          hostRoutes: Boolean(config.externalAccess.hostRoutes && config.externalAccess.ipPool),
         },
       };
       await createCluster(deployConfig);
