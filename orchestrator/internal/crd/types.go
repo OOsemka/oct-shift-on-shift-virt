@@ -181,6 +181,10 @@ type ExternalAccessConfig struct {
 	// addresses above live in (the HAProxy pods' interfaces get <ip>/<prefix>).
 	// 0 means 24, the value every earlier version hardcoded.
 	PrefixLength int `json:"prefixLength,omitempty"`
+	// IPPool is the IPPool (same namespace as the NestedCluster) the addresses
+	// above were picked from. Optional; when set, the API checks that NADName,
+	// PrefixLength and the addresses match the pool.
+	IPPool string `json:"ipPool,omitempty"`
 }
 
 // DefaultExternalPrefixLength is used when ExternalAccessConfig.PrefixLength is 0.

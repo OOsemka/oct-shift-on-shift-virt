@@ -276,6 +276,14 @@ rules:
   - patch
   - delete
 - apiGroups:
+  - octools.io
+  resources:
+  - ippools
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - subresources.kubevirt.io
   resources:
   - virtualmachines/addvolume
