@@ -14,6 +14,7 @@ import {
 import CommunityDisclaimer from './shared/CommunityDisclaimer';
 import CreateClusterWizard from './InstallTab/CreateClusterWizard';
 import ClusterTable from './ManageTab/ClusterTable';
+import IPPoolsTab from './IPPoolsTab/IPPoolsTab';
 import './ShiftOnShiftPage.css';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
@@ -68,6 +69,14 @@ const ShiftOnShiftPage: FC = () => {
               >
                 <div className="sos-tab-content">
                   <ClusterTable />
+                </div>
+              </Tab>
+              <Tab
+                eventKey="ippools"
+                title={<TabTitleText>{t('IP Pools')}</TabTitleText>}
+              >
+                <div className="sos-tab-content">
+                  <IPPoolsTab />
                 </div>
               </Tab>
             </Tabs>

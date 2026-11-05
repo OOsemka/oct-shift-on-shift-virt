@@ -218,6 +218,9 @@ spec:
                       minimum: 8
                       maximum: 30
                       description: Prefix length of the external VLAN subnet that apiIP, ingressIP and jumpboxIP live in. Omitted means 24.
+                    ipPool:
+                      type: string
+                      description: Optional IPPool (same namespace) the external addresses were picked from; the API checks they match it.
                 storageClassName:
                   type: string
                   description: StorageClass for VM root disk PVCs.
@@ -494,3 +497,66 @@ spec:
                         type: string
                         format: date-time
                         description: Last time the condition transitioned.
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ippools.octools.io
+  labels:
+    app.kubernetes.io/part-of: oct-shift-on-shift-virt
+spec:
+  group: octools.io
+  names:
+    kind: IPPool
+    listKind: IPPoolList
+    plural: ippools
+    singular: ippool
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Network
+          type: string
+          jsonPath: .spec.nadName
+        - name: Prefix
+          type: integer
+          jsonPath: .spec.prefixLength
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: >-
+            Free addresses on one external VLAN that people creating nested
+            clusters pick from. Usage is not stored: an address is in use while
+            a NestedCluster on the same network references it.
+          properties:
+            spec:
+              type: object
+              required:
+                - nadName
+                - prefixLength
+                - addresses
+              properties:
+                nadName:
+                  type: string
+                  description: <namespace>/<name> of the external VLAN's NetworkAttachmentDefinition.
+                prefixLength:
+                  type: integer
+                  minimum: 8
+                  maximum: 30
+                  description: Prefix length of the VLAN subnet.
+                addresses:
+                  type: array
+                  minItems: 1
+                  description: Single IPv4 addresses or inclusive ranges a.b.c.d-a.b.c.e (at most 4096 addresses in total).
+                  items:
+                    type: string
+                gateway:
+                  type: string
+                  description: Gateway of the VLAN, shown to users. Must not be one of the addresses.
+                description:
+                  type: string

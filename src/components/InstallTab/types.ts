@@ -25,6 +25,8 @@ export interface ExternalAccessConfig {
   ingressIP: string;
   /** Prefix length of the external VLAN subnet (the HAProxy pods get <ip>/<prefix>). */
   prefixLength: number;
+  /** IP pool the addresses were picked from; empty when entered by hand. */
+  ipPool: string;
 }
 
 /**
@@ -157,6 +159,7 @@ export const DEFAULT_CLUSTER_CONFIG: ClusterConfig = {
     apiIP: '',
     ingressIP: '',
     prefixLength: 24,
+    ipPool: '',
   },
   storageClassName: '',
   storage: { enabled: false, infraStorageClassName: '', allowanceGi: 100 },

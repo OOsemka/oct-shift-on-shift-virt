@@ -64,6 +64,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/v1/clusters/preview-config", s.previewConfig)
 	s.mux.HandleFunc("GET /api/v1/storageclasses", s.listStorageClasses)
 	s.mux.HandleFunc("GET /api/v1/nads", s.listNADs)
+	s.mux.HandleFunc("GET /api/v1/ippools", s.listIPPools)
 	s.mux.HandleFunc("GET /api/v1/ocp-versions", s.listOCPVersions)
 	s.mux.HandleFunc("GET /healthz", s.healthz)
 }
@@ -157,8 +158,12 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if code, err := s.checkAddressAvailability(r.Context(), &spec); err != nil {
+		s.writeError(w, code, err.Error())
+		return
+	}
 
-	ncNamespace := "oct-shift-on-shift-virt"
+	ncNamespace := clusterNamespace
 
 	nc := &unstructured.Unstructured{
 		Object: map[string]interface{}{

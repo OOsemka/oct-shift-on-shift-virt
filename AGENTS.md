@@ -28,6 +28,7 @@ Display name is **Shift-on-Shift Virt**.
 | Plugin nginx container (`Containerfile`, `deploy/`) | Serves webpack `dist/`. ConsolePlugin **oct-shift-on-shift-virt**. |
 | Orchestrator (`orchestrator/`) | Go service behind the console proxy. REST API for the UI; watches `NestedCluster` CRs and drives the phases. |
 | `NestedCluster` CRD (`deploy/crd.yaml`) | `octools.io/v1alpha1`. Spec, phase, phase history, per-node status, conditions, credential references. |
+| `IPPool` CRD (`deploy/crd.yaml`) | `octools.io/v1alpha1`. Free external VLAN addresses offered in the wizard (see IP pools). |
 | Per-cluster namespace (`spec.namespace`, wizard default `<cluster>-ns`) | Master VMs, the bastion VM, the primary Layer2 cUDN, two HAProxy pods, ISO disks, phase Jobs, and (optional) the CSI controller. |
 | Edge proxy (optional) | One shared HAProxy in the operator namespace, SNI-routing nested API traffic behind passthrough Routes. Off unless `EDGE_PROXY_VLAN_IP` + `EDGE_PROXY_NAD` are set. |
 
@@ -82,6 +83,14 @@ One VM per cluster (CentOS Stream 9 DataSource): nested DNS, MCS relay, SSH as `
 Two kinds of addresses, easy to mix up: the **internal VIPs** (`spec.network.apiVIP/ingressVIP`, base+10/+11 of the internal cUDN subnet, set automatically by the wizard) and the **external IPs** (`spec.externalAccess.apiIP/ingressIP`, free addresses on a reachable VLAN, always typed in by the user; the HAProxy pods get `<ip>/<prefixLength>` on the selected NAD, prefix default 24).
 
 `crd.(*NestedClusterSpec).ValidateNetwork()` (`orchestrator/internal/crd/validate.go`) refuses settings that can only produce a broken cluster: blank or invalid external IPs (they made the annotation `"ips":["/24"]` and the HAProxy pod never started), external IPs equal to the internal VIPs or inside the internal, pod or service networks, the same address twice, addresses in different VLAN subnets or on the network/broadcast address, no NAD, an internal network smaller than /24 or overlapping the pod/service networks. It runs in the create API (HTTP 400 with the reasons) and at the start of a new cluster's reconcile (so `oc apply` is covered); existing clusters are never re-checked. The wizard runs the same rules (`src/utils/network-check.ts`): Next stays disabled on Network and External Access, and Deploy is blocked while any problem remains. Keep the two in step.
+
+## IP pools (`IPPool`, IP Pools tab)
+
+`ippools.octools.io` (`deploy/crd.yaml`, namespaced, lives in `oct-shift-on-shift-virt`): `nadName`, `prefixLength`, `addresses` (single IPv4 or ranges `a-b`, at most 4096), optional `gateway`/`description`. Usage is never stored: an address is in use while a NestedCluster on the same NAD references it (`crd.ExternalAddressUse`), so deleting a cluster frees its addresses.
+
+- **IP Pools tab** (`src/components/IPPoolsTab/`): lists pools with usage from `GET /api/v1/ippools` (orchestrator), and creates or deletes pools through the Kubernetes API **with the user's own RBAC** (cluster admins by default). The orchestrator only reads pools (`ippools` get/list/watch).
+- **Wizard:** External Access has an "Address source" choice. A pool fills `nadName`/`prefixLength` and offers its free addresses (first two preselected); the CR records `externalAccess.ipPool`.
+- **Create API:** refuses (409) external addresses another cluster already uses on the same NAD (`CheckAddressesFree`, also for manual entries), and when `ipPool` is set, network/prefix/addresses that do not match the pool (`CheckPool`).
 
 ## Teardown
 
