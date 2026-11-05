@@ -31,6 +31,18 @@ type LabSettings struct {
 	MasterCores    int    `json:"masterCores,omitempty"`
 	MasterMemoryGi int    `json:"masterMemoryGi,omitempty"`
 	MasterDiskGi   int    `json:"masterDiskGi,omitempty"`
+	// BastionGraphical: quick clusters get a desktop on the bastion unless
+	// the request says otherwise.
+	BastionGraphical bool `json:"bastionGraphical,omitempty"`
+	// NestedStorage exposes a host StorageClass to quick clusters through the
+	// KubeVirt CSI driver; NestedVirtualization installs OpenShift
+	// Virtualization in them (and implies NestedStorage).
+	NestedStorage bool `json:"nestedStorage,omitempty"`
+	// NestedStorageClass: host class to expose; empty = the host's default
+	// virtualization class. NestedStorageAllowanceGi: 0 = 100.
+	NestedStorageClass       string `json:"nestedStorageClass,omitempty"`
+	NestedStorageAllowanceGi int    `json:"nestedStorageAllowanceGi,omitempty"`
+	NestedVirtualization     bool   `json:"nestedVirtualization,omitempty"`
 }
 
 // WithDefaults fills unset compact-node sizes with the wizard's defaults.

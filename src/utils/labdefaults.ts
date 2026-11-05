@@ -32,6 +32,24 @@ export type LabSettings = {
   masterCores?: number;
   masterMemoryGi?: number;
   masterDiskGi?: number;
+  /** Quick clusters get a bastion desktop unless the card says otherwise. */
+  bastionGraphical?: boolean;
+  /** Expose a host StorageClass to quick clusters through KubeVirt CSI. */
+  nestedStorage?: boolean;
+  /** Host class to expose; empty = the host's default virtualization class. */
+  nestedStorageClass?: string;
+  /** GiB the nested cluster may use; 0/empty = 100. */
+  nestedStorageAllowanceGi?: number;
+  /** Install OpenShift Virtualization in quick clusters (implies nested storage). */
+  nestedVirtualization?: boolean;
+};
+
+/** The only settings a quick-cluster request may override. */
+export type QuickOverrides = {
+  sshPublicKey?: string;
+  graphical?: boolean;
+  desktopUsername?: string;
+  desktopPassword?: string;
 };
 
 export type LabDefaults = {
@@ -52,8 +70,8 @@ export const fetchLabDefaults = (): Promise<LabDefaults> =>
 export const fetchQuickPlan = (name: string): Promise<QuickPlan> =>
   consoleFetchJSON(`${PROXY_BASE}/api/v1/quick-clusters/preview?name=${encodeURIComponent(name)}`) as Promise<QuickPlan>;
 
-export const createQuickCluster = (clusterName: string): Promise<unknown> =>
-  consoleFetchJSON.post(`${PROXY_BASE}/api/v1/quick-clusters`, { clusterName });
+export const createQuickCluster = (clusterName: string, overrides: QuickOverrides = {}): Promise<unknown> =>
+  consoleFetchJSON.post(`${PROXY_BASE}/api/v1/quick-clusters`, { clusterName, ...overrides });
 
 /** Same checks as the orchestrator (crd.ValidatePullSecret / ValidateSSHPublicKey). */
 export function pullSecretProblem(raw: string): string | undefined {

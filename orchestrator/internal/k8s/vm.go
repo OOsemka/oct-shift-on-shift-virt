@@ -507,10 +507,31 @@ func (c *Client) StartVM(ctx context.Context, namespace, name string) error {
 	if err != nil {
 		return fmt.Errorf("getting VM %s: %w", name, err)
 	}
-	if status, _, _ := unstructured.NestedString(vm.Object, "status", "printableStatus"); status == "Running" {
+	status, _, _ := unstructured.NestedString(vm.Object, "status", "printableStatus")
+	if vmAlreadyStarted(status) {
 		return nil
 	}
-	return c.SetVMPower(ctx, namespace, name, true, 3*time.Minute)
+	if err := c.SetVMPower(ctx, namespace, name, true, 3*time.Minute); err != nil && !isAlreadyRunning(err) {
+		return err
+	}
+	return nil
+}
+
+// vmAlreadyStarted: a VM on its way up counts as started. PowerOn must be
+// safe to repeat: an orchestrator restart mid-phase resumes it, and VMs the
+// first run started are then Starting or Running (a resumed PowerOn failed a
+// whole install on "VM is already running").
+func vmAlreadyStarted(printableStatus string) bool {
+	switch printableStatus {
+	case "Running", "Starting", "Provisioning", "WaitingForVolumeBinding", "Migrating":
+		return true
+	}
+	return false
+}
+
+// isAlreadyRunning recognises KubeVirt refusing to start a running VM.
+func isAlreadyRunning(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "VM is already running")
 }
 
 func extractMACAddress(vm *unstructured.Unstructured) string {

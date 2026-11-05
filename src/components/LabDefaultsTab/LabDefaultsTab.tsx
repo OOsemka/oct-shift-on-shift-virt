@@ -11,6 +11,7 @@ import {
   ActionGroup,
   Alert,
   Button,
+  Checkbox,
   Form,
   FormGroup,
   FormHelperText,
@@ -264,6 +265,56 @@ const LabDefaultsTab: FC = () => {
               onPlus={() => update({ masterDiskGi: Math.min(2048, (settings.masterDiskGi || 120) + 20) })}
               onChange={(e) => update({ masterDiskGi: parseInt((e.target as HTMLInputElement).value, 10) || 120 })} widthChars={4} />
           </div>
+        </FormGroup>
+        <FormGroup label={t('Bastion desktop on quick clusters')} fieldId="lab-graphical">
+          <Checkbox
+            id="lab-graphical"
+            isChecked={Boolean(settings.bastionGraphical)}
+            onChange={(_e, v) => update({ bastionGraphical: v })}
+            label={t('Install a desktop on the bastion by default (adds 2 vCPU / 4 GiB; can be changed per cluster)')}
+          />
+        </FormGroup>
+        <FormGroup label={t('Nested storage and virtualization on quick clusters')} fieldId="lab-nested">
+          <Checkbox
+            id="lab-nested-storage"
+            isChecked={Boolean(settings.nestedStorage || settings.nestedVirtualization)}
+            isDisabled={Boolean(settings.nestedVirtualization)}
+            onChange={(_e, v) => update({ nestedStorage: v })}
+            label={t('Nested storage: expose a host storage class inside the cluster (KubeVirt CSI)')}
+          />
+          <Checkbox
+            id="lab-nested-virt"
+            isChecked={Boolean(settings.nestedVirtualization)}
+            onChange={(_e, v) => update({ nestedVirtualization: v, ...(v ? { nestedStorage: true } : {}) })}
+            label={t('Install OpenShift Virtualization in the cluster (needs nested storage)')}
+          />
+          {(settings.nestedStorage || settings.nestedVirtualization) && (
+            <div className="sos-lab-size">
+              <span>{t('Host storage class')}</span>
+              <FormSelect
+                id="lab-nested-sc"
+                value={settings.nestedStorageClass || ''}
+                onChange={(_e, v) => update({ nestedStorageClass: v })}
+                aria-label={t('Host storage class')}
+              >
+                <FormSelectOption value="" label={t('Host default virtualization class')} />
+                {scNames.map((n) => (
+                  <FormSelectOption key={n} value={n} label={n} />
+                ))}
+              </FormSelect>
+              <span>{t('Allowance GiB')}</span>
+              <NumberInput
+                id="lab-nested-gi"
+                value={settings.nestedStorageAllowanceGi || 100}
+                min={10}
+                max={10000}
+                onMinus={() => update({ nestedStorageAllowanceGi: Math.max(10, (settings.nestedStorageAllowanceGi || 100) - 10) })}
+                onPlus={() => update({ nestedStorageAllowanceGi: Math.min(10000, (settings.nestedStorageAllowanceGi || 100) + 10) })}
+                onChange={(e) => update({ nestedStorageAllowanceGi: parseInt((e.target as HTMLInputElement).value, 10) || 100 })}
+                widthChars={5}
+              />
+            </div>
+          )}
         </FormGroup>
         {saveError && (
           <Alert variant="danger" isInline title={t('Could not save the lab defaults')}>

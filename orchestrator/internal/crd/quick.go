@@ -34,6 +34,54 @@ func SuggestQuickName(existing []string) string {
 	}
 }
 
+// QuickOverrides are the only settings a quick-cluster request may change.
+type QuickOverrides struct {
+	// SSHPublicKey replaces the lab default key for this cluster.
+	SSHPublicKey string `json:"sshPublicKey,omitempty"`
+	// Graphical overrides the lab default desktop setting when set.
+	Graphical *bool `json:"graphical,omitempty"`
+	// DesktopUsername / DesktopPassword apply only with a desktop. The
+	// password is copied into a Secret and cleared from the cluster object;
+	// empty means one is generated.
+	DesktopUsername string `json:"desktopUsername,omitempty"`
+	DesktopPassword string `json:"desktopPassword,omitempty"`
+}
+
+var linuxUserRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
+// ApplyQuickOverrides applies the request's overrides to a quick spec and
+// returns problems with them.
+func ApplyQuickOverrides(spec *NestedClusterSpec, o QuickOverrides) []string {
+	var problems []string
+	if key := strings.TrimSpace(o.SSHPublicKey); key != "" {
+		if err := ValidateSSHPublicKey(key); err != nil {
+			problems = append(problems, "SSH public key: "+err.Error())
+		} else {
+			spec.SSHKey = key
+		}
+	}
+	if o.Graphical != nil {
+		spec.Bastion.Graphical = *o.Graphical
+	}
+	if spec.Bastion.Graphical {
+		if u := strings.TrimSpace(o.DesktopUsername); u != "" {
+			if !linuxUserRe.MatchString(u) || u == "root" {
+				problems = append(problems, "desktop username must be a Linux user name (lowercase letters, digits, - and _), not root")
+			} else {
+				spec.Bastion.Username = u
+			}
+		}
+		if o.DesktopPassword != "" {
+			if len(o.DesktopPassword) < 8 {
+				problems = append(problems, "desktop password must be at least 8 characters (or leave it empty to have one generated)")
+			} else {
+				spec.Bastion.Password = o.DesktopPassword
+			}
+		}
+	}
+	return problems
+}
+
 // BuildQuickSpec builds a compact 3-node cluster from the lab defaults and the
 // default IP pool's free addresses. Credentials are left empty on purpose:
 // the orchestrator takes them from the lab defaults Secret, so the pull secret
@@ -89,8 +137,18 @@ func BuildQuickSpec(name string, s LabSettings, hasPullSecret bool, pool *IPPool
 			ClusterNetworkCIDR: "10.128.0.0/14", ServiceNetworkCIDR: "172.30.0.0/16",
 		},
 		StorageClassName: strings.TrimSpace(s.StorageClassName),
-		Bastion:          BastionConfig{Username: "core"},
+		Bastion:          BastionConfig{Username: "core", Graphical: s.BastionGraphical},
 	}
+	// Nested storage (KubeVirt CSI) and virtualization from the profile;
+	// virtualization needs storage, as in the wizard.
+	if s.NestedStorage || s.NestedVirtualization {
+		spec.Storage = StorageConfig{
+			Enabled:               true,
+			InfraStorageClassName: strings.TrimSpace(s.NestedStorageClass),
+			AllowanceGi:           s.NestedStorageAllowanceGi,
+		}
+	}
+	spec.Virtualization = VirtualizationConfig{Enabled: s.NestedVirtualization}
 	if pool != nil {
 		spec.ExternalAccess = ExternalAccessConfig{
 			NADName:      pool.Spec.NADName,

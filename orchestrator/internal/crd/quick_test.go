@@ -61,3 +61,56 @@ func TestBuildQuickSpecProblems(t *testing.T) {
 		t.Error("SuggestQuickName must take the lowest free number")
 	}
 }
+
+func TestQuickOverrides(t *testing.T) {
+	pool := &IPPool{Name: "lab", Spec: IPPoolSpec{NADName: "default/vlan-a", PrefixLength: 24, Gateway: "192.0.2.1",
+		Addresses: []string{"192.0.2.10-192.0.2.13"}}}
+	s, _ := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab", BastionGraphical: true}, true, pool, []string{"192.0.2.10", "192.0.2.11"})
+	if !s.Bastion.Graphical {
+		t.Fatal("lab default desktop setting must apply")
+	}
+	no := false
+	if p := ApplyQuickOverrides(&s, QuickOverrides{SSHPublicKey: testKey, Graphical: &no}); len(p) != 0 {
+		t.Fatalf("valid overrides: %v", p)
+	}
+	if s.Bastion.Graphical || s.SSHKey != testKey {
+		t.Fatalf("overrides not applied: graphical=%v key=%q", s.Bastion.Graphical, s.SSHKey)
+	}
+	if p := ApplyQuickOverrides(&s, QuickOverrides{SSHPublicKey: "not a key"}); len(p) != 1 {
+		t.Fatalf("bad key must be a problem: %v", p)
+	}
+	yes := true
+	s2, _ := BuildQuickSpec("quick-2", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab"}, true, pool, []string{"192.0.2.12", "192.0.2.13"})
+	if p := ApplyQuickOverrides(&s2, QuickOverrides{Graphical: &yes, DesktopUsername: "chris", DesktopPassword: "correct-horse"}); len(p) != 0 {
+		t.Fatalf("valid desktop overrides: %v", p)
+	}
+	if !s2.Bastion.Graphical || s2.Bastion.Username != "chris" || s2.Bastion.Password != "correct-horse" {
+		t.Fatalf("desktop overrides not applied: %+v", s2.Bastion)
+	}
+	if p := ApplyQuickOverrides(&s2, QuickOverrides{DesktopUsername: "root", DesktopPassword: "short"}); len(p) != 2 {
+		t.Fatalf("root user and short password must both be problems: %v", p)
+	}
+	s3, _ := BuildQuickSpec("quick-3", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab"}, true, pool, []string{"192.0.2.12", "192.0.2.13"})
+	ApplyQuickOverrides(&s3, QuickOverrides{DesktopUsername: "chris", DesktopPassword: "correct-horse"})
+	if s3.Bastion.Password != "" || s3.Bastion.Username != "core" {
+		t.Fatal("desktop credentials must be ignored without a desktop")
+	}
+}
+
+func TestQuickNestedStorageAndVirt(t *testing.T) {
+	pool := &IPPool{Name: "lab", Spec: IPPoolSpec{NADName: "default/vlan-a", PrefixLength: 24, Gateway: "192.0.2.1",
+		Addresses: []string{"192.0.2.10-192.0.2.13"}}}
+	base := LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab"}
+	s, _ := BuildQuickSpec("q", base, true, pool, []string{"192.0.2.10", "192.0.2.11"})
+	if s.Storage.Enabled || s.Virtualization.Enabled {
+		t.Fatal("nested storage/virtualization must be off unless the profile turns them on")
+	}
+	v := base
+	v.NestedVirtualization = true
+	v.NestedStorageClass = "fast-rbd"
+	v.NestedStorageAllowanceGi = 250
+	s, _ = BuildQuickSpec("q", v, true, pool, []string{"192.0.2.10", "192.0.2.11"})
+	if !s.Virtualization.Enabled || !s.Storage.Enabled || s.Storage.InfraStorageClassName != "fast-rbd" || s.Storage.AllowanceGi != 250 {
+		t.Fatalf("virtualization must imply storage with the profile class/allowance: %+v %+v", s.Storage, s.Virtualization)
+	}
+}
