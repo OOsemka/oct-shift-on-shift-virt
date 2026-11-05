@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/crd"
@@ -60,6 +61,15 @@ func edgeProxyVLANIP() string { return strings.TrimSpace(os.Getenv("EDGE_PROXY_V
 // default: it is environment-specific, and guessing would attach the proxy to
 // a network that does not exist (or worse, to the wrong one).
 func edgeProxyNAD() string { return strings.TrimSpace(os.Getenv("EDGE_PROXY_NAD")) }
+
+// edgeProxyVLANPrefix is the prefix length of the external VLAN subnet
+// (EDGE_PROXY_VLAN_PREFIX, default 24).
+func edgeProxyVLANPrefix() int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("EDGE_PROXY_VLAN_PREFIX"))); err == nil && n >= 8 && n <= 30 {
+		return n
+	}
+	return 24
+}
 
 func edgeProxyImage() string {
 	if v := strings.TrimSpace(os.Getenv("EDGE_PROXY_IMAGE")); v != "" {
@@ -236,8 +246,8 @@ func (s *StepExecutor) ensureEdgeProxy(ctx context.Context, ns, vlanIP, cfg, cfg
 					Labels: labels,
 					Annotations: map[string]string{
 						// Static address: the VLAN NAD is localnet with no IPAM.
-						"k8s.v1.cni.cncf.io/networks": fmt.Sprintf(`[{"name":%q,"namespace":%q,"ips":["%s/24"]}]`,
-							nadName(edgeProxyNAD()), nadNamespace(edgeProxyNAD()), vlanIP),
+						"k8s.v1.cni.cncf.io/networks": fmt.Sprintf(`[{"name":%q,"namespace":%q,"ips":["%s/%d"]}]`,
+							nadName(edgeProxyNAD()), nadNamespace(edgeProxyNAD()), vlanIP, edgeProxyVLANPrefix()),
 						// Roll the pod when the backend set changes; haproxy
 						// reads its config only at start.
 						"sos.octools.io/config-sha": cfgSHA,

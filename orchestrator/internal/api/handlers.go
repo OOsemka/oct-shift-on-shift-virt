@@ -151,6 +151,12 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Refuse settings that can only produce a broken cluster, before anything
+	// is created (the wizard checks the same things; this covers every client).
+	if err := spec.ValidateNetwork(); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	ncNamespace := "oct-shift-on-shift-virt"
 

@@ -17,6 +17,7 @@ import StorageStep from './StorageStep';
 import CredentialsStep from './CredentialsStep';
 import ReviewConfigStep from './ReviewConfigStep';
 import { createCluster } from '../../utils/api';
+import { externalAccessProblems, internalVIPs, networkProblems } from '../../utils/network-check';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
@@ -39,23 +40,34 @@ const CreateClusterWizard: FC = () => {
     setConfig((prev) => ({ ...prev, externalAccess: { ...prev.externalAccess, ...patch } }));
   };
 
+  const netProblems = networkProblems(config.network);
+  const eaProblems = externalAccessProblems(config);
+  const blocking = [...netProblems, ...eaProblems];
+
   const handleDeploy = async () => {
+    if (blocking.length > 0) return;
     setSubmitting(true);
     setError(undefined);
     try {
-      const subnetMatch = config.network.cudnSubnet.match(/^(\d+\.\d+\.\d+)\.\d+\/\d+$/);
-      const deployConfig = { ...config };
-      if (subnetMatch) {
-        deployConfig.network = {
-          ...config.network,
-          apiVIP: `${subnetMatch[1]}.10`,
-          ingressVIP: `${subnetMatch[1]}.11`,
-        };
-      }
+      // The internal VIPs always follow the internal network (they used to be
+      // set only when the subnet matched a pattern, keeping stale defaults otherwise).
+      const vips = internalVIPs(config.network.cudnSubnet);
+      const deployConfig = {
+        ...config,
+        network: { ...config.network, ...(vips || {}) },
+        externalAccess: {
+          ...config.externalAccess,
+          nadName: config.externalAccess.nadName.trim(),
+          apiIP: config.externalAccess.apiIP.trim(),
+          ingressIP: config.externalAccess.ingressIP.trim(),
+        },
+      };
       await createCluster(deployConfig);
       navigate(`/community-tools/compute/shift-on-shift-virt/cluster/${encodeURIComponent(config.clusterName)}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // The orchestrator explains refusals in {"error": "..."}; show that text.
+      const body = (e as { json?: { error?: string; message?: string } })?.json;
+      setError(body?.error || body?.message || (e instanceof Error ? e.message : String(e)));
     } finally {
       setSubmitting(false);
     }
@@ -83,10 +95,14 @@ const CreateClusterWizard: FC = () => {
         <WizardStep name={t('Node Naming')} id="node-naming">
           <NodeNamingStep config={config} onChange={onChange} />
         </WizardStep>
-        <WizardStep name={t('Network')} id="network">
+        <WizardStep name={t('Network')} id="network" footer={{ isNextDisabled: netProblems.length > 0 }}>
           <NetworkStep config={config} onChange={onNetworkChange} />
         </WizardStep>
-        <WizardStep name={t('External Access')} id="external-access">
+        <WizardStep
+          name={t('External Access')}
+          id="external-access"
+          footer={{ isNextDisabled: eaProblems.length > 0 }}
+        >
           <ExternalAccessStep config={config} onChange={onExternalAccessChange} />
         </WizardStep>
         <WizardStep name={t('Storage')} id="storage">
@@ -101,9 +117,23 @@ const CreateClusterWizard: FC = () => {
           footer={{
             nextButtonText: t('Deploy Cluster'),
             onNext: handleDeploy,
-            isNextDisabled: submitting,
+            isNextDisabled: submitting || blocking.length > 0,
           }}
         >
+          {blocking.length > 0 && (
+            <Alert
+              variant="danger"
+              isInline
+              title={t('Fix the network settings before deploying')}
+              className="sos-wizard-error"
+            >
+              <ul>
+                {blocking.map((p) => (
+                  <li key={`${p.field}-${p.key}`}>{t(p.key, p.values)}</li>
+                ))}
+              </ul>
+            </Alert>
+          )}
           <ReviewConfigStep config={config} onChange={onChange} />
         </WizardStep>
       </Wizard>

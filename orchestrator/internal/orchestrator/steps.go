@@ -379,7 +379,8 @@ func (s *StepExecutor) deployHAProxy(ctx context.Context, nc *crd.NestedCluster)
 
 	// --- API HAProxy (6443 + MCS 22623/22624 via relay, see generateHAProxyConfigAPI) ---
 	apiDeployName := nc.Spec.ClusterName + "-haproxy-api"
-	apiNADAnnotation := fmt.Sprintf(`[{"name":"%s","ips":["%s/24"]}]`, nadName, nc.Spec.ExternalAccess.APIIP)
+	prefix := nc.Spec.ExternalAccess.Prefix()
+	apiNADAnnotation := fmt.Sprintf(`[{"name":"%s","ips":["%s/%d"]}]`, nadName, nc.Spec.ExternalAccess.APIIP, prefix)
 	apiLabels := map[string]interface{}{
 		"oct-shift-on-shift-virt/cluster":   nc.Spec.ClusterName,
 		"oct-shift-on-shift-virt/component": "haproxy-api",
@@ -397,7 +398,7 @@ func (s *StepExecutor) deployHAProxy(ctx context.Context, nc *crd.NestedCluster)
 
 	// --- Ingress HAProxy (ports 443 + 80) ---
 	ingressDeployName := nc.Spec.ClusterName + "-haproxy-ingress"
-	ingressNADAnnotation := fmt.Sprintf(`[{"name":"%s","ips":["%s/24"]}]`, nadName, nc.Spec.ExternalAccess.IngressIP)
+	ingressNADAnnotation := fmt.Sprintf(`[{"name":"%s","ips":["%s/%d"]}]`, nadName, nc.Spec.ExternalAccess.IngressIP, prefix)
 	ingressLabels := map[string]interface{}{
 		"oct-shift-on-shift-virt/cluster":   nc.Spec.ClusterName,
 		"oct-shift-on-shift-virt/component": "haproxy-ingress",
