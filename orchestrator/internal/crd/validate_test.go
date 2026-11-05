@@ -115,3 +115,22 @@ func TestValidateNetworkInternalVIPOutsideSubnet(t *testing.T) {
 		t.Fatalf("want internal VIP outside subnet error, got %v", err)
 	}
 }
+
+func TestValidateNetworkPlugin(t *testing.T) {
+	s := spec("192.0.2.10", "192.0.2.11", "default/x")
+	s.OCPVersion = "4.22"
+	s.Network.NetworkType = "Calico"
+	if err := s.ValidateNetwork(); err != nil {
+		t.Fatalf("Calico on 4.22 must be accepted, got %v", err)
+	}
+	s.OCPVersion = "4.21"
+	if err := s.ValidateNetwork(); err == nil || !strings.Contains(err.Error(), "needs OpenShift 4.22") {
+		t.Fatalf("want OpenShift version error, got %v", err)
+	}
+	s.OCPVersion = "4.22"
+	s.Network.NetworkType = "Cilium"
+	s.Network.CNIVersion = "v0.0.1"
+	if err := s.ValidateNetwork(); err == nil || !strings.Contains(err.Error(), "not offered") {
+		t.Fatalf("want unknown version error, got %v", err)
+	}
+}

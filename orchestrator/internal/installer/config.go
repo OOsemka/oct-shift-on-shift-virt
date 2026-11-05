@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/cni"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/crd"
 )
 
@@ -16,10 +17,7 @@ type HostConfig struct {
 }
 
 func GenerateInstallConfig(spec crd.NestedClusterSpec, hosts []HostConfig, pullSecret, sshKey string) string {
-	clusterNetworkCIDR := spec.Network.ClusterNetworkCIDR
-	if clusterNetworkCIDR == "" {
-		clusterNetworkCIDR = "10.128.0.0/14"
-	}
+	clusterNetworkCIDR := spec.Network.PodCIDR()
 	serviceNetworkCIDR := spec.Network.ServiceNetworkCIDR
 	if serviceNetworkCIDR == "" {
 		serviceNetworkCIDR = "172.30.0.0/16"
@@ -57,7 +55,7 @@ networking:
   - cidr: %s
   serviceNetwork:
   - %s
-  networkType: OVNKubernetes
+  networkType: %s
 platform:
   none: {}
 pullSecret: '%s'
@@ -69,6 +67,7 @@ pullSecret: '%s'
 		clusterNetworkCIDR,
 		spec.Network.CUDNSubnet,
 		serviceNetworkCIDR,
+		cni.Normalize(spec.Network.NetworkType),
 		escapeSingleQuotes(pullSecret),
 		SSHKeyYAML(sshKey),
 	)

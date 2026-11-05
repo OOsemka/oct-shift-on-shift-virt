@@ -16,6 +16,22 @@ export interface NetworkConfig {
   ingressVIP: string;
   clusterNetworkCIDR: string;
   serviceNetworkCIDR: string;
+  /** Network plugin of the nested cluster; Calico and Cilium need OpenShift 4.22+. */
+  networkType: NetworkType;
+  /** Calico/Cilium release; empty means the newest offered (always empty for OVN-Kubernetes). */
+  cniVersion: string;
+}
+
+export type NetworkType = 'OVNKubernetes' | 'Calico' | 'Cilium';
+
+/** One choice from GET /api/v1/network-plugins (orchestrator internal/cni). */
+export interface NetworkPlugin {
+  networkType: NetworkType;
+  displayName: string;
+  /** Newest first; absent for OVN-Kubernetes (it ships with OpenShift). */
+  versions?: string[];
+  /** First OpenShift version whose agent installer accepts it, e.g. "4.22". */
+  minOCPVersion?: string;
 }
 
 export interface ExternalAccessConfig {
@@ -155,6 +171,8 @@ export const DEFAULT_CLUSTER_CONFIG: ClusterConfig = {
     ingressVIP: '10.100.0.11',
     clusterNetworkCIDR: '10.128.0.0/14',
     serviceNetworkCIDR: '172.30.0.0/16',
+    networkType: 'OVNKubernetes',
+    cniVersion: '',
   },
   externalAccess: {
     nadName: '',

@@ -193,6 +193,21 @@ spec:
                     dnsIP:
                       type: string
                       description: IP address of the in-cluster CoreDNS pod on the cUDN (optional, auto-collected if DeployDNS phase runs).
+                    networkType:
+                      type: string
+                      description: >-
+                        Network plugin of the nested cluster. OVNKubernetes (default) or the
+                        open-source Calico or Cilium (OpenShift 4.22 or later). Fixed at install time.
+                      enum:
+                        - OVNKubernetes
+                        - Calico
+                        - Cilium
+                    cniVersion:
+                      type: string
+                      description: >-
+                        Calico or Cilium release (for example v3.33.0, v1.20.4); empty means the
+                        newest one the orchestrator offers. Must be empty for OVNKubernetes.
+                      pattern: '^(v[0-9]+\.[0-9]+\.[0-9]+)?$'
                 externalAccess:
                   type: object
                   required:

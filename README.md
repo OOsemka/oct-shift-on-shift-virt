@@ -17,6 +17,7 @@ Validated on OpenShift **4.22** (PatternFly 6), installing nested OpenShift 4.22
 - **IP Pools** — admins list the free addresses of an external VLAN once; the wizard then offers them, shows which are free, and the orchestrator refuses an address another cluster already uses.
 - **Install wizard** — Cluster Basics, Topology, VM Sizing, Node Naming, Network, External Access, Storage, Credentials (including the optional graphical bastion), then Review & Edit Configs for the generated `install-config` / `agent-config`.
 - **Fully automated agent-based install** — no manual steps on the nested nodes; progress, a deployment log and per-node lifecycle are shown on the cluster page.
+- **Network plugin choice** — OVN-Kubernetes (default), or open-source **Calico** or **Cilium** (latest or previous release) for nested OpenShift 4.22 and later. Their images come from the public upstream registries, so this needs internet access; Red Hat does not support these combinations.
 - **Isolated networking** — each nested cluster gets its own namespace on a Layer2 primary user-defined network, with deterministic node addresses reserved up front.
 - **One bastion VM per cluster** — nested DNS, the Machine Config Server relay and SSH access. Optionally an XFCE desktop whose browser opens straight on the nested console.
 - **Live-migratable masters** — VMs use the `l2bridge` network binding and RWX Block root disks.

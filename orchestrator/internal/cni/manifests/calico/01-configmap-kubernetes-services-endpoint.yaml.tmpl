@@ -1,0 +1,11 @@
+# Rendered per cluster by the Shift-on-Shift Virt orchestrator; replaces the
+# upstream template. The eBPF dataplane (no kube-proxy) reaches the API
+# server directly; api-int resolves to the cluster's load balancer.
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: kubernetes-services-endpoint
+  namespace: tigera-operator
+data:
+  KUBERNETES_SERVICE_HOST: "{{.APIIntHost}}"
+  KUBERNETES_SERVICE_PORT: "6443"

@@ -18,7 +18,8 @@ export type NetworkField =
   | 'apiIP'
   | 'ingressIP'
   | 'gateway'
-  | 'prefixLength';
+  | 'prefixLength'
+  | 'networkType';
 
 export type NetworkProblem = { field: NetworkField; key: string; values?: Record<string, string> };
 
@@ -92,6 +93,35 @@ export function networkProblems(net: ClusterConfig['network']): NetworkProblem[]
     out.push({ field: 'serviceNetworkCIDR', key: 'Overlaps the cluster network {{cidr}}.', values: { cidr: pod.text } });
   }
   return out;
+}
+
+/**
+ * First OpenShift 4.x minor whose agent installer accepts Calico/Cilium
+ * (orchestrator cni.MinOCPMinor).
+ */
+export const MIN_THIRD_PARTY_CNI_MINOR = 22;
+
+/** OpenShift minor of "4.22" / "4.22.3", or undefined. */
+export function ocpMinor(version: string): number | undefined {
+  const m = /^4\.(\d+)(\.|$)/.exec(version.trim());
+  return m ? Number(m[1]) : undefined;
+}
+
+/** Problems with the network plugin choice (Network step; it depends on the OpenShift version). */
+export function networkPluginProblems(config: ClusterConfig): NetworkProblem[] {
+  const nt = config.network.networkType || 'OVNKubernetes';
+  if (nt === 'OVNKubernetes') return [];
+  const minor = ocpMinor(config.ocpVersion);
+  if (minor !== undefined && minor < MIN_THIRD_PARTY_CNI_MINOR) {
+    return [
+      {
+        field: 'networkType',
+        key: '{{plugin}} needs OpenShift 4.{{min}} or later. Pick OVN-Kubernetes or change the OpenShift version.',
+        values: { plugin: nt, min: String(MIN_THIRD_PARTY_CNI_MINOR) },
+      },
+    ];
+  }
+  return [];
 }
 
 /** Problems on the External Access step. */

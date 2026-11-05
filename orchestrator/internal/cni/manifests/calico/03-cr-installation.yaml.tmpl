@@ -1,0 +1,21 @@
+# Rendered per cluster by the Shift-on-Shift Virt orchestrator; replaces the
+# upstream ocp/03-cr-installation.yaml. Same eBPF dataplane as upstream, plus:
+# VXLAN with BGP off, because the nested nodes sit on an OVN Layer2 network
+# with port security (packets with pod source addresses are dropped unless
+# encapsulated), and the pool taken from the install-config clusterNetwork.
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  variant: Calico
+  calicoNetwork:
+    linuxDataplane: BPF
+    bgp: Disabled
+    ipPools:
+    - name: default-ipv4-ippool
+      cidr: {{.ClusterNetworkCIDR}}
+      blockSize: 26
+      encapsulation: VXLAN
+      natOutgoing: Enabled
+      nodeSelector: all()

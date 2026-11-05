@@ -41,5 +41,8 @@ export const fetchNADs = (namespaces?: string[]): Promise<unknown> => {
 export const fetchOCPVersions = (): Promise<unknown> =>
   consoleFetchJSON(`${PROXY_BASE}/api/v1/ocp-versions`);
 
+export const fetchNetworkPlugins = (): Promise<unknown> =>
+  consoleFetchJSON(`${PROXY_BASE}/api/v1/network-plugins`);
+
 export const previewConfig = (config: ClusterConfig): Promise<unknown> =>
   consoleFetchJSON.post(`${PROXY_BASE}/api/v1/clusters/preview-config`, config);

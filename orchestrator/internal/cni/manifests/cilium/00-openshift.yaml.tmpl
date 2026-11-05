@@ -1,0 +1,41 @@
+# Rendered by the Shift-on-Shift Virt orchestrator next to the upstream Cilium
+# chart output (cilium.yaml): what the chart leaves to the platform on
+# OpenShift. Applies to the nested cluster only.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cilium
+  annotations:
+    openshift.io/node-selector: ""
+  labels:
+    name: cilium
+    openshift.io/run-level: "0"
+    security.openshift.io/scc.podSecurityLabelSync: "false"
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+# The agent and operator run host-network and privileged (SELinux).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cilium-scc-privileged
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+- kind: ServiceAccount
+  name: cilium
+  namespace: cilium
+- kind: ServiceAccount
+  name: cilium-operator
+  namespace: cilium
+---
+# Cilium replaces kube-proxy (kubeProxyReplacement=true in cilium.yaml).
+apiVersion: operator.openshift.io/v1
+kind: Network
+metadata:
+  name: cluster
+spec:
+  deployKubeProxy: false

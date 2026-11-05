@@ -321,5 +321,14 @@
   "Install OpenShift Virtualization in the cluster (needs nested storage)": "Install OpenShift Virtualization in the cluster (needs nested storage)",
   "Host storage class": "Host storage class",
   "Host default virtualization class": "Host default virtualization class",
-  "Allowance GiB": "Allowance GiB"
+  "Allowance GiB": "Allowance GiB",
+  "Network plugin": "Network plugin",
+  "{{name}} (default)": "{{name}} (default)",
+  "Calico and Cilium need OpenShift 4.{{min}} or later.": "Calico and Cilium need OpenShift 4.{{min}} or later.",
+  "The OpenShift default network plugin.": "The OpenShift default network plugin.",
+  "Open-source {{name}} replaces OVN-Kubernetes in the nested cluster. Its images come from public upstream registries, so the cluster needs internet access, and the combination is not supported by Red Hat.": "Open-source {{name}} replaces OVN-Kubernetes in the nested cluster. Its images come from public upstream registries, so the cluster needs internet access, and the combination is not supported by Red Hat.",
+  "{{name}} version": "{{name}} version",
+  "{{version}} (latest)": "{{version}} (latest)",
+  "{{version}} (previous)": "{{version}} (previous)",
+  "{{plugin}} needs OpenShift 4.{{min}} or later. Pick OVN-Kubernetes or change the OpenShift version.": "{{plugin}} needs OpenShift 4.{{min}} or later. Pick OVN-Kubernetes or change the OpenShift version."
 }
