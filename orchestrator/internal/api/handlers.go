@@ -13,6 +13,7 @@ import (
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/k8s"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/logging"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -174,6 +175,18 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 // createNestedCluster is the single create path (wizard and quick cluster):
 // network checks, address availability and pool membership, then the CR.
 func (s *Server) createNestedCluster(ctx context.Context, spec crd.NestedClusterSpec) (*unstructured.Unstructured, int, error) {
+	if err := crd.ValidateClusterNamespace(spec.Namespace); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	// The cluster gets its own namespace: refuse one that already exists
+	// unless this cluster created it, so a later delete cannot wipe it.
+	if ns, err := s.client.Clientset.CoreV1().Namespaces().Get(ctx, spec.Namespace, metav1.GetOptions{}); err == nil {
+		if !k8s.NamespaceOwnedBy(ns.Labels, spec.ClusterName) {
+			return nil, http.StatusConflict, fmt.Errorf("namespace %q already exists; nested clusters need a new namespace of their own", spec.Namespace)
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return nil, http.StatusInternalServerError, fmt.Errorf("checking namespace %q: %w", spec.Namespace, err)
+	}
 	if err := spec.ValidateNetwork(); err != nil {
 		return nil, http.StatusBadRequest, err
 	}

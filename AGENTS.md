@@ -118,7 +118,7 @@ Delete: the confirmation needs the cluster name typed. The API's status write be
 
 ## Teardown
 
-`DeleteCluster` removes VMs, Jobs, the API Route (operator namespace), ISO snapshots/PVCs, cluster-scoped bindings (anyuid, CSI pv-reader), the cUDN, then force-deletes the namespace. The cleanup finalizer is released on both deletion paths; a 2-minute resync re-drives any stranded deletion.
+`DeleteCluster` removes VMs, Jobs, the API Route (operator namespace), ISO snapshots/PVCs, cluster-scoped bindings (anyuid, CSI pv-reader), the cUDN, then force-deletes the namespace **only if this cluster created it** (label `oct-shift-on-shift-virt/cluster=<name>`, `k8s.NamespaceOwnedBy`). Create refuses an existing namespace it does not own (API 409 before anything is created; `CreateNamespace` also refuses) and system namespaces (`openshift*`, `kube-*`, `default`, the operator namespace; `crd.ValidateClusterNamespace`). Before this, a CR naming an existing namespace adopted it, and deleting the cluster wiped it. The cleanup finalizer is released on both deletion paths; a 2-minute resync re-drives any stranded deletion.
 
 
 Deletion bookkeeping (`engine.go`): every reconcile has its own `reconcileRun` entry, and every teardown clears the `deleting` mark when it ends, whichever path started it (Deleting phase or finalizer). A live (non-deleting) event clears a stale mark. Before this, a cluster deleted and re-created with the same name could not be deleted again until its install timed out. Covered by `engine_delete_test.go`.

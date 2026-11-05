@@ -44,6 +44,16 @@ func TestQuickClusterOverrides(t *testing.T) {
 	})
 	srv := NewServer(&k8s.Client{DynamicClient: dyn, Clientset: kube}, logging.New())
 
+	// An existing namespace that this cluster did not create is refused (409).
+	if _, err := kube.CoreV1().Namespaces().Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "quick-z-ns"}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	rec0 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec0, httptest.NewRequest(http.MethodPost, "/api/v1/quick-clusters", strings.NewReader(`{"clusterName":"quick-z"}`)))
+	if rec0.Code != http.StatusConflict || !strings.Contains(rec0.Body.String(), "already exists") {
+		t.Fatalf("existing unowned namespace must be refused with 409, got %d %s", rec0.Code, rec0.Body.String())
+	}
+
 	body := `{"clusterName":"quick-a","graphical":false,"sshPublicKey":"` + quickTestKey + `","pullSecret":"smuggled","baseDomain":"evil.test"}`
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/quick-clusters", strings.NewReader(body)))
