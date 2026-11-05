@@ -80,6 +80,20 @@ func (s *StepExecutor) deployBastionEarly(ctx context.Context, nc *crd.NestedClu
 	if err != nil {
 		return err
 	}
+	// Bastion load balancer: a second NIC on the external VLAN network, its
+	// addresses and return routing set up by cloud-init (see bastionlb.go).
+	var lb *bastionLB
+	var extra []k8s.InfraNetwork
+	if useBastionLB(nc) {
+		if lb, err = newBastionLB(nc); err != nil {
+			return fmt.Errorf("bastion load balancer: %w", err)
+		}
+		nadName, nerr := s.externalNADInClusterNs(ctx, nc)
+		if nerr != nil {
+			return nerr
+		}
+		extra = append(extra, k8s.InfraNetwork{Name: bastionExternalIface, NetworkName: nadName, MACAddress: lb.MAC})
+	}
 	if err := s.client.CreateInfraVM(ctx, k8s.InfraVMParams{
 		Name:             name,
 		Namespace:        clusterNs,
@@ -91,8 +105,9 @@ func (s *StepExecutor) deployBastionEarly(ctx context.Context, nc *crd.NestedClu
 		DataSourceNS:     "openshift-virtualization-os-images",
 		DataSourceName:   bastionBaseImage(),
 		Graphical:        nc.Spec.Bastion.Graphical,
+		ExtraNetworks:    extra,
 		UserData: bastionUserData(name, pubKey, masterIPs, nc.Spec.Bastion.Graphical, desktopUser,
-			"https://console-openshift-console.apps."+nc.Spec.ClusterName+"."+nc.Spec.BaseDomain),
+			"https://console-openshift-console.apps."+nc.Spec.ClusterName+"."+nc.Spec.BaseDomain, lb),
 	}); err != nil {
 		return fmt.Errorf("creating bastion VM: %w", err)
 	}
@@ -110,6 +125,11 @@ func (s *StepExecutor) deployBastionEarly(ctx context.Context, nc *crd.NestedClu
 	}
 	nc.Status.MCSRelayIP = ip
 	s.updateCRStatus(ctx, nc)
+	if lb != nil {
+		log.Info("bastion up (load balancer, external NIC, sshd); DNS records follow in DeployDNS",
+			"ip", ip, "external_api", lb.APIIP, "external_ingress", lb.IngressIP, "gateway", lb.Gateway)
+		return nil
+	}
 	log.Info("bastion up (MCS relay + sshd); DNS records follow in DeployDNS", "ip", ip)
 
 	return s.rewireHAProxyMCSToRelay(ctx, nc, ip)
@@ -135,7 +155,7 @@ func (s *StepExecutor) configureBastionDNS(ctx context.Context, nc *crd.NestedCl
 	if apiVIP == "" || ingressVIP == "" {
 		return fmt.Errorf("cannot build nested DNS records: apiVIP=%q ingressVIP=%q (DeployHAProxy must run first)", apiVIP, ingressVIP)
 	}
-	if apiVIP == bastionIP || ingressVIP == bastionIP {
+	if !useBastionLB(nc) && (apiVIP == bastionIP || ingressVIP == bastionIP) {
 		return fmt.Errorf("haproxy lease collides with the bastion address %s (api=%s ingress=%s) — the bastion must claim its IP before the haproxy pods start",
 			bastionIP, apiVIP, ingressVIP)
 	}
@@ -201,6 +221,7 @@ func (s *StepExecutor) configureBastionDNS(ctx context.Context, nc *crd.NestedCl
 							{Name: "API_IP", Value: apiVIP},
 							{Name: "INGRESS_IP", Value: ingressVIP},
 							{Name: "CLUSTER_DOMAIN", Value: localZone},
+							{Name: "LB_EXTERNAL_IPS", Value: lbExternalIPs(nc)},
 						},
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "dns", MountPath: "/dns", ReadOnly: true},
@@ -263,7 +284,16 @@ func (s *StepExecutor) configureBastionDNS(ctx context.Context, nc *crd.NestedCl
 // bastionUserData renders cloud-init for the combined helper VM: the nested
 // DNS server, the MCS relay and the operator SSH key. python3 ships in the
 // cloud image; the VM runs as root so binding :53 needs no privilege work.
-func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool, desktopUser, consoleURL string) string {
+// lbExternalIPs lists the external addresses the DNS push job checks on the
+// bastion (empty for HAProxy-pod clusters, which skips the check).
+func lbExternalIPs(nc *crd.NestedCluster) string {
+	if !useBastionLB(nc) {
+		return ""
+	}
+	return strings.TrimSpace(nc.Spec.ExternalAccess.APIIP) + " " + strings.TrimSpace(nc.Spec.ExternalAccess.IngressIP)
+}
+
+func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool, desktopUser, consoleURL string, lb *bastionLB) string {
 	masters := strings.Join(masterIPs, " ")
 	// An explicit users: block is REQUIRED. The top-level ssh_authorized_keys
 	// key installs onto the image's DEFAULT user, which on CentOS Stream 9 is
@@ -376,13 +406,33 @@ func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool
   - systemctl start --no-block sos-desktop-install.service
 `, desktopUser)
 	}
+	// Load balancer mode: lb.py replaces relay.py (it still serves the relay
+	// ports) and sos-external configures the external NIC.
+	relayFiles := fmt.Sprintf(`  - path: /opt/mcs-relay/relay.py
+    permissions: '0755'
+    content: |
+%s  - path: /etc/systemd/system/mcs-relay.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=SOS MCS relay (12262/12264 -> masters 22623/22624)
+      After=network-online.target
+      [Service]
+      ExecStart=/usr/bin/python3 /opt/mcs-relay/relay.py %s
+      Restart=always
+      RestartSec=3
+      [Install]
+      WantedBy=multi-user.target
+`, indentBlock(mcsRelayScript, "      "), masters)
+	relayStart := "  - systemctl enable --now mcs-relay.service\n"
+	if lb != nil {
+		relayFiles = lb.writeFiles()
+		relayStart = "  - systemctl enable --now sos-external.service\n  - systemctl enable --now sos-lb.service\n"
+	}
 	return fmt.Sprintf(`#cloud-config
 hostname: %s
 %swrite_files:
-%s  - path: /opt/mcs-relay/relay.py
-    permissions: '0755'
-    content: |
-%s  - path: /etc/systemd/system/sos-dns.service
+%s%s  - path: /etc/systemd/system/sos-dns.service
     permissions: '0644'
     content: |
       [Unit]
@@ -397,23 +447,10 @@ hostname: %s
       StartLimitIntervalSec=0
       [Install]
       WantedBy=multi-user.target
-  - path: /etc/systemd/system/mcs-relay.service
-    permissions: '0644'
-    content: |
-      [Unit]
-      Description=SOS MCS relay (12262/12264 -> masters 22623/22624)
-      After=network-online.target
-      [Service]
-      ExecStart=/usr/bin/python3 /opt/mcs-relay/relay.py %s
-      Restart=always
-      RestartSec=3
-      [Install]
-      WantedBy=multi-user.target
 runcmd:
   - systemctl daemon-reload
   - systemctl enable --now sos-dns.service
-  - systemctl enable --now mcs-relay.service
-%s`, hostname, authorized, desktopFiles, indentBlock(mcsRelayScript, "      "), masters, desktop)
+%s%s`, hostname, authorized, desktopFiles, relayFiles, relayStart, desktop)
 }
 
 // bastionPushDNSScript installs the rendered dns.py onto the bastion and
@@ -469,6 +506,24 @@ if [ "${GRAPHICAL:-false}" = "true" ] && [ -s /deskpw/password ]; then
     else
         echo "WARN: could not set the desktop password (console login will not work)"
     fi
+fi
+
+# Bastion load balancer: the external addresses must be on the bastion and
+# the balancer must listen, or the masters would boot against nothing.
+if [ "$VERIFIED" = "1" ] && [ -n "${LB_EXTERNAL_IPS:-}" ]; then
+    LB_OK=0
+    for i in $(seq 1 30); do
+        if ssh $SSHOPT "$USER_OK@$BASTION_IP" "for a in $LB_EXTERNAL_IPS; do ip -4 -o addr | grep -qw \"\$a\" || exit 1; done; for p in 6443 22623 22624 443 80; do ss -ltnH \"sport = :\$p\" | grep -q . || exit 1; done"; then
+            LB_OK=1; break
+        fi
+        sleep 10
+    done
+    if [ "$LB_OK" != "1" ]; then
+        echo "FATAL: bastion load balancer not ready: external addresses ($LB_EXTERNAL_IPS) or listeners 6443/22623/22624/443/80 missing"
+        ssh $SSHOPT "$USER_OK@$BASTION_IP" "sudo journalctl -u sos-external -u sos-lb --no-pager -n 40; ip -4 -o addr" || true
+        exit 1
+    fi
+    echo "LB_VERIFIED: $LB_EXTERNAL_IPS"
 fi
 
 if [ "$VERIFIED" = "1" ]; then

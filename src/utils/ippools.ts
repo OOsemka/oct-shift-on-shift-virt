@@ -135,7 +135,9 @@ export function poolProblems(form: PoolForm, existingNames: string[]): PoolProbl
       out.push({ field: 'addresses', key: '{{ip}} is the network or broadcast address of {{subnet}}.', values: { ip: edge, subnet } });
     }
     const gw = form.gateway.trim();
-    if (gw) {
+    if (!gw) {
+      out.push({ field: 'gateway', key: 'Required: clusters answer clients outside the VLAN through the gateway.' });
+    } else {
       const g = ipToNum(gw);
       if (g === undefined) out.push({ field: 'gateway', key: 'Enter an IPv4 address or leave it empty.' });
       else if (!inSubnet(g)) out.push({ field: 'gateway', key: 'The gateway is outside {{subnet}}.', values: { subnet } });

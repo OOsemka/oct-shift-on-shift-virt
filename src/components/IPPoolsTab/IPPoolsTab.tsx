@@ -366,7 +366,7 @@ const IPPoolsTab: FC = () => {
                 </HelperText>
               </FormHelperText>
             </FormGroup>
-            <FormGroup label={t('Gateway (optional)')} fieldId="pool-gateway">
+            <FormGroup label={t('Gateway')} isRequired fieldId="pool-gateway">
               <TextInput id="pool-gateway" value={form.gateway} onChange={(_e, v) => update({ gateway: v })} validated={problemFor('gateway') ? 'error' : 'default'} />
               {problemFor('gateway') && (
                 <FormHelperText>

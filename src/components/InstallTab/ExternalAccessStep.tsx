@@ -16,7 +16,7 @@ import {
 } from '@patternfly/react-core';
 import { K8sResourceCommon, useK8sWatchResource } from '@openshift-console/dynamic-plugin-sdk';
 import { ClusterConfig } from './types';
-import { externalAccessProblems, NetworkField } from '../../utils/network-check';
+import { externalAccessProblems, NetworkField, suggestGateway } from '../../utils/network-check';
 import { fetchIPPools, freeAddresses, IPPoolItem } from '../../utils/ippools';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
@@ -87,6 +87,7 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
       ipPool: p.name,
       nadName: p.nadName,
       prefixLength: p.prefixLength,
+      gateway: p.gateway || '',
       apiIP: free[0] || '',
       ingressIP: free[1] || '',
     });
@@ -108,11 +109,12 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
   const apiErr = errorFor('apiIP');
   const ingressErr = errorFor('ingressIP');
   const prefixErr = errorFor('prefixLength');
+  const gatewayErr = errorFor('gateway');
 
   return (
     <Form className="sos-form">
       <Alert variant="info" isInline title={t('These addresses are not assigned automatically')}>
-        {t('Pick an IP pool, or pick the network (NAD) of a VLAN that people can reach and type two free addresses on that VLAN: one for the API and one for Ingress. Do not use the internal VIPs from the Network step. Ask your network team for free addresses if you are unsure.')}
+        {t('Pick an IP pool, or pick the network (NAD) of a VLAN that people can reach and type two free addresses on that VLAN (one for the API, one for Ingress) and its gateway. The cluster\'s bastion VM takes these addresses and load-balances to the cluster. Do not use the internal VIPs from the Network step. Ask your network team for free addresses if you are unsure.')}
       </Alert>
       <FormGroup label={t('Address source')} fieldId="ip-pool">
         {pools === null ? <Spinner size="md" /> : (
@@ -201,7 +203,10 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
           <TextInput
             id="api-ip"
             value={ea.apiIP}
-            onChange={(_e, val) => onChange({ apiIP: val })}
+            onChange={(_e, val) =>
+              // Offer the usual gateway (first host of the subnet) until the user sets one.
+              onChange({ apiIP: val, ...(ea.gateway ? {} : { gateway: suggestGateway(val, ea.prefixLength) }) })
+            }
             validated={apiErr ? 'error' : 'default'}
             placeholder="192.168.100.10"
           />
@@ -259,6 +264,23 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
           <HelperText>
             <HelperTextItem variant={prefixErr ? 'error' : 'default'}>
               {prefixErr || t('Size of the external VLAN subnet, for example 24 for a /24 or 22 for a /22.')}
+            </HelperTextItem>
+          </HelperText>
+        </FormHelperText>
+      </FormGroup>
+      <FormGroup label={t('VLAN gateway')} isRequired fieldId="gateway">
+        <TextInput
+          id="gateway"
+          value={ea.gateway}
+          isDisabled={Boolean(pool)}
+          onChange={(_e, val) => onChange({ gateway: val })}
+          validated={gatewayErr ? 'error' : 'default'}
+          placeholder="192.168.100.1"
+        />
+        <FormHelperText>
+          <HelperText>
+            <HelperTextItem variant={gatewayErr ? 'error' : 'default'}>
+              {gatewayErr || t('Router of the external VLAN. The cluster answers clients outside the VLAN through it.')}
             </HelperTextItem>
           </HelperText>
         </FormHelperText>

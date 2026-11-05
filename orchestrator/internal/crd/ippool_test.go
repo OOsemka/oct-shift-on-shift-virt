@@ -39,6 +39,7 @@ func TestPoolValidate(t *testing.T) {
 		"two subnets":     {pool("192.0.2.10", "192.0.3.10"), "not in the same /24 subnet"},
 		"broadcast":       {pool("192.0.2.250-192.0.2.255"), "network or broadcast"},
 		"gateway in pool": {pool("192.0.2.1-192.0.2.5"), "gateway 192.0.2.1 must not be one of"},
+		"no gateway":      {IPPoolSpec{NADName: "default/x", PrefixLength: 24, Addresses: []string{"192.0.2.10"}}, "gateway is required"},
 		"gateway outside": {IPPoolSpec{NADName: "default/x", PrefixLength: 24, Addresses: []string{"192.0.2.10"}, Gateway: "192.0.3.1"}, "outside the pool subnet"},
 		"bad prefix":      {IPPoolSpec{NADName: "default/x", PrefixLength: 31, Addresses: []string{"192.0.2.10"}}, "between 8 and 30"},
 	}

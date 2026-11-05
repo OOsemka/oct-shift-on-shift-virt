@@ -302,6 +302,9 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 			e.updateStatus(ctx, nc, crd.PhaseFailed, err.Error())
 			return
 		}
+		// New clusters get the bastion load balancer; clusters created
+		// earlier keep their HAProxy pods (the marker is never added later).
+		nc.Status.LoadBalancer = crd.LoadBalancerBastion
 		currentPhase = crd.PhaseOrder[0]
 	}
 

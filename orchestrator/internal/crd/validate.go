@@ -130,6 +130,21 @@ func (s *NestedClusterSpec) ValidateNetwork() error {
 	checkExternal("externalAccess.ingressIP", "external Ingress IP", ea.IngressIP, true)
 	checkExternal("externalAccess.jumpboxIP", "jumpbox IP", ea.JumpboxIP, false)
 
+	// The gateway lets the HAProxy pods answer clients outside the VLAN.
+	switch gw := strings.TrimSpace(ea.Gateway); {
+	case gw == "":
+		add("external VLAN gateway (externalAccess.gateway) is empty: without it the cluster answers only clients on the VLAN itself")
+	case parseIPv4(gw) == nil:
+		add("external VLAN gateway %q is not an IPv4 address", gw)
+	default:
+		g := parseIPv4(gw)
+		if who, ok := external[g.String()]; ok {
+			add("external VLAN gateway %s is also the %s", g, who)
+		} else if vlan != nil && !vlan.Contains(g) {
+			add("external VLAN gateway %s is outside the VLAN subnet %s", g, vlan)
+		}
+	}
+
 	if len(problems) == 0 {
 		return nil
 	}

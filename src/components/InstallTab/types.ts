@@ -23,8 +23,10 @@ export interface ExternalAccessConfig {
   /** Free static addresses on the external VLAN, typed in by the user (never assigned automatically). */
   apiIP: string;
   ingressIP: string;
-  /** Prefix length of the external VLAN subnet (the HAProxy pods get <ip>/<prefix>). */
+  /** Prefix length of the external VLAN subnet. */
   prefixLength: number;
+  /** VLAN gateway: the bastion answers clients outside the VLAN through it. */
+  gateway: string;
   /** IP pool the addresses were picked from; empty when entered by hand. */
   ipPool: string;
 }
@@ -159,6 +161,7 @@ export const DEFAULT_CLUSTER_CONFIG: ClusterConfig = {
     apiIP: '',
     ingressIP: '',
     prefixLength: 24,
+    gateway: '',
     ipPool: '',
   },
   storageClassName: '',

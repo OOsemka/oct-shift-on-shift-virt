@@ -17,6 +17,7 @@ export type NetworkField =
   | 'nadName'
   | 'apiIP'
   | 'ingressIP'
+  | 'gateway'
   | 'prefixLength';
 
 export type NetworkProblem = { field: NetworkField; key: string; values?: Record<string, string> };
@@ -170,5 +171,27 @@ export function externalAccessProblems(config: ClusterConfig): NetworkProblem[] 
       }
     }
   }
+  // The gateway: the bastion answers clients outside the VLAN through it.
+  const gw = (ea.gateway || '').trim();
+  if (!gw) {
+    out.push({ field: 'gateway', key: 'Required. Without the VLAN gateway the cluster answers only clients on the VLAN itself.' });
+  } else {
+    const g = ipToNum(gw);
+    if (g === undefined) {
+      out.push({ field: 'gateway', key: 'Enter an IPv4 address such as 198.51.100.1.' });
+    } else if (seen.has(g)) {
+      out.push({ field: 'gateway', key: 'The gateway must not be the API or Ingress IP.' });
+    } else if (vlan && !contains(vlan, g)) {
+      out.push({ field: 'gateway', key: 'The gateway is outside the VLAN subnet {{cidr}}.', values: { cidr: vlan.text } });
+    }
+  }
   return out;
+}
+
+/** The usual gateway guess for an address: the first host of its subnet. */
+export function suggestGateway(ip: string, prefix: number): string {
+  const n = ipToNum(ip);
+  if (n === undefined || !(prefix >= 8 && prefix <= 30)) return '';
+  const size = 2 ** (32 - prefix);
+  return numToIp(Math.floor(n / size) * size + 1);
 }

@@ -34,8 +34,9 @@ type IPPoolSpec struct {
 	PrefixLength int `json:"prefixLength"`
 	// Addresses: single IPv4 addresses or inclusive ranges "a.b.c.d-a.b.c.e".
 	Addresses []string `json:"addresses"`
-	// Gateway of the VLAN, shown to users; optional.
-	Gateway     string `json:"gateway,omitempty"`
+	// Gateway of the VLAN (required): the HAProxy pods route replies to
+	// clients outside the VLAN through it.
+	Gateway     string `json:"gateway"`
 	Description string `json:"description,omitempty"`
 }
 
@@ -138,7 +139,9 @@ func (p IPPoolSpec) Validate() error {
 				add("%s is the network or broadcast address of %s", a, subnet)
 			}
 		}
-		if gw := strings.TrimSpace(p.Gateway); gw != "" {
+		if gw := strings.TrimSpace(p.Gateway); gw == "" {
+			add("gateway is required: clusters answer clients outside the VLAN through it")
+		} else {
 			g := parseIPv4(gw)
 			switch {
 			case g == nil:
@@ -229,6 +232,9 @@ func (s *NestedClusterSpec) CheckPool(pool *IPPool) error {
 	}
 	if ea.Prefix() != pool.Spec.PrefixLength {
 		problems = append(problems, fmt.Sprintf("prefix length %d is not the pool's /%d", ea.Prefix(), pool.Spec.PrefixLength))
+	}
+	if strings.TrimSpace(ea.Gateway) != strings.TrimSpace(pool.Spec.Gateway) {
+		problems = append(problems, fmt.Sprintf("gateway %q is not the pool's gateway %q", ea.Gateway, pool.Spec.Gateway))
 	}
 	addrs, err := pool.Spec.Expand()
 	if err != nil {

@@ -14,7 +14,31 @@ func spec(apiIP, ingressIP, nad string) NestedClusterSpec {
 			ClusterNetworkCIDR: "10.128.0.0/14",
 			ServiceNetworkCIDR: "172.30.0.0/16",
 		},
-		ExternalAccess: ExternalAccessConfig{NADName: nad, APIIP: apiIP, IngressIP: ingressIP},
+		ExternalAccess: ExternalAccessConfig{NADName: nad, APIIP: apiIP, IngressIP: ingressIP, Gateway: gatewayFor(apiIP)},
+	}
+}
+
+// gatewayFor returns the .1 of the API IP's /24 (test fixtures use /24).
+func gatewayFor(ip string) string {
+	if i := strings.LastIndex(ip, "."); i > 0 && parseIPv4(ip) != nil {
+		return ip[:i] + ".1"
+	}
+	return ""
+}
+
+func TestValidateNetworkGateway(t *testing.T) {
+	s := spec("192.0.2.10", "192.0.2.11", "default/x")
+	s.ExternalAccess.Gateway = ""
+	if err := s.ValidateNetwork(); err == nil || !strings.Contains(err.Error(), "gateway (externalAccess.gateway) is empty") {
+		t.Fatalf("want missing gateway error, got %v", err)
+	}
+	s.ExternalAccess.Gateway = "192.0.3.1"
+	if err := s.ValidateNetwork(); err == nil || !strings.Contains(err.Error(), "outside the VLAN subnet") {
+		t.Fatalf("want gateway outside subnet error, got %v", err)
+	}
+	s.ExternalAccess.Gateway = "192.0.2.10"
+	if err := s.ValidateNetwork(); err == nil || !strings.Contains(err.Error(), "is also the external API IP") {
+		t.Fatalf("want gateway equals API IP error, got %v", err)
 	}
 }
 
