@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 type StepExecutor struct {
@@ -126,17 +127,61 @@ func (s *StepExecutor) createNetwork(ctx context.Context, nc *crd.NestedCluster)
 		nc.Spec.Network.CUDNSubnet, nc.Spec.Network.APIVIP, nc.Spec.Network.IngressVIP)
 }
 
+// labCredentials returns the lab defaults' pull secret and SSH public key
+// (empty when unset or unreadable; the caller falls back to older paths).
+func (s *StepExecutor) labCredentials(ctx context.Context, crNs string) (string, string) {
+	sec, err := s.client.Clientset.CoreV1().Secrets(crNs).Get(ctx, crd.LabDefaultsSecret, metav1.GetOptions{})
+	if err != nil {
+		return "", ""
+	}
+	pull := strings.TrimSpace(string(sec.Data[crd.LabDefaultsPullSecret]))
+	if pull != "" && crd.ValidatePullSecret(pull) != nil {
+		pull = ""
+	}
+	ssh := strings.TrimSpace(string(sec.Data[crd.LabDefaultsSSHKey]))
+	if ssh != "" && crd.ValidateSSHPublicKey(ssh) != nil {
+		ssh = ""
+	}
+	return pull, ssh
+}
+
+// clearSpecPullSecret removes spec.pullSecret from the stored object once it
+// has been copied into the cluster's Secret.
+func (s *StepExecutor) clearSpecPullSecret(ctx context.Context, nc *crd.NestedCluster) {
+	patch := []byte(`{"spec":{"pullSecret":null}}`)
+	if _, err := s.client.DynamicClient.Resource(nestedClusterGVR).Namespace(nc.Namespace).
+		Patch(ctx, nc.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		s.logger.WithCluster(nc.Spec.ClusterName).Error("could not clear spec.pullSecret", "error", err.Error())
+		return
+	}
+	nc.Spec.PullSecret = ""
+}
+
 func (s *StepExecutor) createSecrets(ctx context.Context, nc *crd.NestedCluster) error {
 	ns := nc.Spec.Namespace
 	crNs := "oct-shift-on-shift-virt"
 
-	if nc.Spec.PullSecret != "" {
+	labPull, labSSH := s.labCredentials(ctx, crNs)
+	switch {
+	case nc.Spec.PullSecret != "":
 		secretName := nc.Spec.ClusterName + "-pull-secret"
 		if err := s.client.CreatePullSecret(ctx, ns, secretName, nc.Spec.PullSecret); err != nil {
 			return fmt.Errorf("creating pull secret: %w", err)
 		}
 		nc.Spec.PullSecretRef = crd.SecretRef{Name: secretName}
-	} else {
+		// The pull secret is now in a Secret; it must not stay readable in
+		// the NestedCluster object (anyone who can read clusters could read
+		// it). Later phases read the Secret, not the spec.
+		s.clearSpecPullSecret(ctx, nc)
+	case nc.Spec.PullSecretRef.Name == "" && labPull != "":
+		// Lab defaults: the pull secret admins stored once.
+		secretName := nc.Spec.ClusterName + "-pull-secret"
+		if err := s.client.CreatePullSecret(ctx, ns, secretName, labPull); err != nil {
+			return fmt.Errorf("creating pull secret from lab defaults: %w", err)
+		}
+		nc.Spec.PullSecretRef = crd.SecretRef{Name: secretName}
+		s.logger.WithCluster(nc.Spec.ClusterName).Info("pull secret taken from the lab defaults")
+	default:
 		srcName := nc.Spec.PullSecretRef.Name
 		if srcName == "" {
 			srcName = "pull-secret"
@@ -157,6 +202,12 @@ func (s *StepExecutor) createSecrets(ctx context.Context, nc *crd.NestedCluster)
 	}
 
 	sshSecretName := nc.Spec.ClusterName + "-ssh-key"
+	if strings.TrimSpace(nc.Spec.SSHKey) == "" && nc.Spec.SSHKeyRef.Name == "" && labSSH != "" {
+		// Lab defaults: the operator's public key, authorised on every node.
+		nc.Spec.SSHKey = labSSH
+		s.logger.WithCluster(nc.Spec.ClusterName).Info("SSH public key taken from the lab defaults",
+			"fingerprint", crd.SSHKeyFingerprint(labSSH))
+	}
 	if nc.Spec.SSHKey != "" {
 		if err := s.client.CreateSSHKeySecret(ctx, ns, sshSecretName, nc.Spec.SSHKey); err != nil {
 			return fmt.Errorf("creating SSH key secret: %w", err)

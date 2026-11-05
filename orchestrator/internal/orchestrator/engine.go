@@ -330,8 +330,13 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 
 		op := phaseLog.StartOperation(string(phase))
 		err := e.steps.Execute(ctx, nc, phase)
+		if err != nil && ctx.Err() != nil {
+			// Cancelled (usually by a delete): not a failure, and the
+			// teardown owns the status now. Logged as info, not as errors.
+			phaseLog.Info("reconciliation cancelled during phase", "reason", ctx.Err().Error())
+			return
+		}
 		op.Done(err)
-
 		if err != nil {
 			phaseLog.Error("phase failed", "error", err.Error())
 			e.updateStatus(ctx, nc, crd.PhaseFailed, fmt.Sprintf("Phase %s failed: %s", phase, err.Error()))
