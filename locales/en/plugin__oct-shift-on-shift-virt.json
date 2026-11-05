@@ -234,5 +234,10 @@
   "Required. Without the VLAN gateway the cluster answers only clients on the VLAN itself.": "Required. Without the VLAN gateway the cluster answers only clients on the VLAN itself.",
   "Enter an IPv4 address such as 198.51.100.1.": "Enter an IPv4 address such as 198.51.100.1.",
   "The gateway must not be the API or Ingress IP.": "The gateway must not be the API or Ingress IP.",
-  "The gateway is outside the VLAN subnet {{cidr}}.": "The gateway is outside the VLAN subnet {{cidr}}."
+  "The gateway is outside the VLAN subnet {{cidr}}.": "The gateway is outside the VLAN subnet {{cidr}}.",
+  "Bastion SSH": "Bastion SSH",
+  "Log in as core with the SSH key you gave the wizard; core has passwordless sudo. The image’s default users (cloud-user, centos) have no key.": "Log in as core with the SSH key you gave the wizard; core has passwordless sudo. The image’s default users (cloud-user, centos) have no key.",
+  "The bastion also answers on {{ip}}.": "The bastion also answers on {{ip}}.",
+  "This is the bastion’s cluster network address: reachable only from the cluster network, for example from a pod in {{namespace}}.": "This is the bastion’s cluster network address: reachable only from the cluster network, for example from a pod in {{namespace}}.",
+  "Desktop: log in as {{user}} in the console of VM {{vm}}.": "Desktop: log in as {{user}} in the console of VM {{vm}}."
 }

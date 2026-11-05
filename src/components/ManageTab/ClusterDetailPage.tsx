@@ -50,6 +50,7 @@ interface ClusterDetail {
   namespace: string;
   spec: {
     clusterName: string;
+    namespace?: string;
     baseDomain: string;
     ocpVersion: string;
     topology: string;
@@ -57,9 +58,18 @@ interface ClusterDetail {
       apiIP: string;
       ingressIP: string;
     };
+    bastion?: {
+      graphical?: boolean;
+      username?: string;
+    };
   };
   status: {
     phase: string;
+    // "bastion" when the external addresses live on the bastion VM; empty
+    // for older clusters, where they belong to the HAProxy pods.
+    loadBalancer?: string;
+    // The bastion's cluster-network address, set once the bastion exists.
+    mcsRelayIP?: string;
     message: string;
     apiEndpoint: string;
     consoleURL: string;
@@ -186,6 +196,13 @@ const ClusterDetailPage: FC = () => {
   const { spec, status } = cluster;
   const isReady = status.phase === 'Ready';
   const fqdn = `${spec.clusterName}.${spec.baseDomain}`;
+  // The bastion is up from the MCSRelay phase on, long before Ready, and is
+  // the place to debug a stuck install from, so show how to reach it early.
+  // The cloud-init key lands on user core (as on the RHCOS nodes); the image
+  // defaults (cloud-user, centos) have no key, which is easy to trip over.
+  const bastionOnVLAN = status.loadBalancer === 'bastion';
+  const bastionHost = bastionOnVLAN ? spec.externalAccess?.apiIP : status.mcsRelayIP;
+  const desktopUser = spec.bastion?.graphical ? spec.bastion.username : undefined;
 
   return (
     <>
@@ -376,6 +393,45 @@ const ClusterDetailPage: FC = () => {
                   <code>*.apps.{fqdn}</code> → <code>{spec.externalAccess.ingressIP}</code>
                 </DescriptionListDescription>
               </DescriptionListGroup>
+              {status.mcsRelayIP && bastionHost && (
+                <DescriptionListGroup>
+                  <DescriptionListTerm>{t('Bastion SSH')}</DescriptionListTerm>
+                  <DescriptionListDescription>
+                    <ClipboardCopy isReadOnly variant="inline-compact" isCode>
+                      {`ssh core@${bastionHost}`}
+                    </ClipboardCopy>
+                    <HelperText>
+                      <HelperTextItem>
+                        {t(
+                          'Log in as core with the SSH key you gave the wizard; core has passwordless sudo. The image\u2019s default users (cloud-user, centos) have no key.',
+                        )}
+                      </HelperTextItem>
+                      {bastionOnVLAN ? (
+                        <HelperTextItem variant="indeterminate">
+                          {t('The bastion also answers on {{ip}}.', {
+                            ip: spec.externalAccess.ingressIP,
+                          })}
+                        </HelperTextItem>
+                      ) : (
+                        <HelperTextItem variant="indeterminate">
+                          {t(
+                            'This is the bastion\u2019s cluster network address: reachable only from the cluster network, for example from a pod in {{namespace}}.',
+                            { namespace: spec.namespace || `${spec.clusterName}-ns` },
+                          )}
+                        </HelperTextItem>
+                      )}
+                      {desktopUser && (
+                        <HelperTextItem variant="indeterminate">
+                          {t(
+                            'Desktop: log in as {{user}} in the console of VM {{vm}}.',
+                            { user: desktopUser, vm: `${spec.clusterName}-bastion` },
+                          )}
+                        </HelperTextItem>
+                      )}
+                    </HelperText>
+                  </DescriptionListDescription>
+                </DescriptionListGroup>
+              )}
             </DescriptionList>
           </StackItem>
 
