@@ -113,6 +113,7 @@ const PHASE_VARIANT: Record<string, 'success' | 'info' | 'warning' | 'danger' | 
 
 // Optional post-install features, reported as status conditions.
 const FEATURE_CONDITIONS: Array<{ type: string; label: string }> = [
+  { type: 'NetworkReady', label: 'Network self-test' },
   { type: 'StorageReady', label: 'Nested storage' },
   { type: 'VirtualizationReady', label: 'OpenShift Virtualization' },
 ];

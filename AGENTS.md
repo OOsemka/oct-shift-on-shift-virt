@@ -49,9 +49,13 @@ Each phase is idempotent; `.status.phase` is the resume point after an orchestra
 | **GenerateISO / MountISO** | Agent ISO built in a Job in the operator namespace, converted to Block, distributed to the cluster namespace by snapshot handle, attached as a cdrom (RWO by design). |
 | **PowerOn / ConfigureNodes** | Boot; an in-namespace Job pins node DNS to the bastion, finds the real rendezvous node and keeps a node-guard loop running. Skipped when the kubeconfig Secret exists (cluster already installed). |
 | **WaitBootstrap / WaitInstall** | `openshift-install agent wait-for` Jobs in the cluster namespace. |
-| **PostInstall** | Stores kubeconfig + kubeadmin Secrets, ejects the ISO from the VM templates (masters then show *Restart required*; one restart makes them migratable), publishes optional host Routes. |
+| **PostInstall** | Stores kubeconfig + kubeadmin Secrets, ejects the ISO from the VM templates (masters then show *Restart required*; one restart makes them migratable), publishes optional host Routes, then runs the network self-test (below). |
 | **ConfigureStorage** (opt-in) | Nested storage — see below. Non-fatal: result on condition `StorageReady`. |
 | **ConfigureVirtualization** (opt-in) | Installs OpenShift Virtualization in the nested cluster, patches the `kubevirt-csi` StorageProfile. Non-fatal: condition `VirtualizationReady`. |
+
+## Network self-test (condition `NetworkReady`)
+
+End of PostInstall, every cluster, non-fatal (`network_selftest.go`, `manifests/network/selftest-network.sh`, run by `runScriptJob` in the cluster namespace with the shared `kubevirtcsi/lib.sh`). Checks: all nodes Ready; network operator Available and not Degraded; a client pod reaches a server pod on another schedulable node; a service created during the test resolves by name and answers (this is what catches cluster DNS that stopped following the API); `kubernetes.default.svc/readyz` from a pod. Test pods use `network-tools` from the nested release payload (restricted pod security). Why: the installer's wait-for only needs every operator Available, and a Cilium test cluster reached Ready that way while new services never resolved. To re-run on a live cluster, patch `.status.phase` to `PostInstall`.
 
 ## Nested storage (`spec.storage`, `spec.virtualization`)
 

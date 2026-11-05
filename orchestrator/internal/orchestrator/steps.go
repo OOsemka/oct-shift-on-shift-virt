@@ -2383,6 +2383,9 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 		log.Info("exposure degraded (cluster still healthy)", "error", err.Error())
 	}
 
+	// End-to-end pod network check (non-fatal; NetworkReady condition).
+	s.networkSelfTest(ctx, nc)
+
 	nc.Status.APIEndpoint = nc.APIEndpoint()
 	nc.Status.ConsoleURL = nc.ConsoleEndpoint()
 	nc.Status.IngressDomain = nc.IngressWildcard()
