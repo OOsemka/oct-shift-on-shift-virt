@@ -169,5 +169,6 @@
   "{{ip}} is inside the nested cluster network {{cidr}}.": "{{ip}} is inside the nested cluster network {{cidr}}.",
   "API IP and Ingress IP must be different addresses.": "API IP and Ingress IP must be different addresses.",
   "{{ip}} is the network or broadcast address of {{cidr}}.": "{{ip}} is the network or broadcast address of {{cidr}}.",
-  "Not in the same VLAN subnet as the API IP ({{cidr}}). Check the address or the prefix length.": "Not in the same VLAN subnet as the API IP ({{cidr}}). Check the address or the prefix length."
+  "Not in the same VLAN subnet as the API IP ({{cidr}}). Check the address or the prefix length.": "Not in the same VLAN subnet as the API IP ({{cidr}}). Check the address or the prefix length.",
+  "Enter an IPv4 address such as 198.51.100.10.": "Enter an IPv4 address such as 198.51.100.10."
 }
