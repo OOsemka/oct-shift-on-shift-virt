@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -47,7 +48,7 @@ func TestDeleteSurvivesStatusConflict(t *testing.T) {
 	if conflicts < 2 {
 		t.Errorf("status write should be retried on conflict, tried %d time(s)", conflicts)
 	}
-	if _, err := dyn.Resource(nestedClusterGVR).Namespace(clusterNamespace).Get(t.Context(), "busy", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := dyn.Resource(nestedClusterGVR).Namespace(clusterNamespace).Get(context.Background(), "busy", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("cluster was not deleted despite the status conflict (err=%v)", err)
 	}
 }
