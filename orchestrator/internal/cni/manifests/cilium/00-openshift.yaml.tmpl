@@ -32,6 +32,28 @@ subjects:
   name: cilium-operator
   namespace: cilium
 ---
+# OVN-Kubernetes treats host-network traffic as coming from namespaces with
+# the label policy-group.network.openshift.io/host-network, and OpenShift's
+# default NetworkPolicies rely on that (e.g. host-network routers -> the
+# ingress canary on other nodes). Cilium sees such traffic as the host /
+# remote-node entities, so allow it explicitly. enableDefaultDeny false: this
+# only adds an allow and never puts a pod into default-deny. Needs the
+# CiliumClusterwideNetworkPolicy CRD, which cilium-operator registers early
+# in bootstrap; the installer retries custom manifests until it exists.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: sos-openshift-host-network
+spec:
+  endpointSelector: {}
+  enableDefaultDeny:
+    ingress: false
+    egress: false
+  ingress:
+  - fromEntities:
+    - host
+    - remote-node
+---
 # Cilium replaces kube-proxy (kubeProxyReplacement=true in cilium.yaml).
 apiVersion: operator.openshift.io/v1
 kind: Network

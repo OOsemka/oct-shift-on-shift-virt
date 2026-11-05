@@ -152,6 +152,7 @@ func TestCiliumOpenShiftSettings(t *testing.T) {
 	for _, want := range []string{
 		"/var/run/multus/cni/net.d", "/var/lib/cni/bin", "tunnel-protocol: \"vxlan\"",
 		"system:openshift:scc:privileged", "name: cilium\n",
+		`policy-cidr-match-mode: "nodes"`, "kind: CiliumClusterwideNetworkPolicy", "- remote-node",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("Cilium manifests missing %q", want)
