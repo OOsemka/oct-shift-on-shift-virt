@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/util/retry"
 )
 
 var nestedClusterGVR = schema.GroupVersionResource{
@@ -65,6 +67,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/storageclasses", s.listStorageClasses)
 	s.mux.HandleFunc("GET /api/v1/nads", s.listNADs)
 	s.mux.HandleFunc("GET /api/v1/ippools", s.listIPPools)
+	s.mux.HandleFunc("GET /api/v1/defaults", s.getLabDefaults)
+	s.mux.HandleFunc("GET /api/v1/quick-clusters/preview", s.previewQuickCluster)
+	s.mux.HandleFunc("POST /api/v1/quick-clusters", s.createQuickCluster)
 	s.mux.HandleFunc("GET /api/v1/ocp-versions", s.listOCPVersions)
 	s.mux.HandleFunc("GET /healthz", s.healthz)
 }
@@ -158,9 +163,22 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if code, err := s.checkAddressAvailability(r.Context(), &spec); err != nil {
+	created, code, err := s.createNestedCluster(r.Context(), spec)
+	if err != nil {
 		s.writeError(w, code, err.Error())
 		return
+	}
+	s.writeJSON(w, http.StatusCreated, created.Object)
+}
+
+// createNestedCluster is the single create path (wizard and quick cluster):
+// network checks, address availability and pool membership, then the CR.
+func (s *Server) createNestedCluster(ctx context.Context, spec crd.NestedClusterSpec) (*unstructured.Unstructured, int, error) {
+	if err := spec.ValidateNetwork(); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	if code, err := s.checkAddressAvailability(ctx, &spec); err != nil {
+		return nil, code, err
 	}
 
 	ncNamespace := clusterNamespace
@@ -182,15 +200,28 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 	nc.Object["spec"] = specMap
 
 	created, err := s.client.DynamicClient.Resource(nestedClusterGVR).
-		Namespace(ncNamespace).Create(r.Context(), nc, metav1.CreateOptions{})
+		Namespace(ncNamespace).Create(ctx, nc, metav1.CreateOptions{})
 	if err != nil {
 		s.logger.Error("failed to create cluster", "error", err.Error(), "cluster", spec.ClusterName)
-		s.writeError(w, http.StatusInternalServerError, "failed to create cluster: "+err.Error())
-		return
+		if strings.Contains(err.Error(), "already exists") {
+			return nil, http.StatusConflict, fmt.Errorf("a cluster named %q already exists", spec.ClusterName)
+		}
+		return nil, http.StatusInternalServerError, fmt.Errorf("failed to create cluster: %w", err)
 	}
 
 	s.logger.Info("cluster created", "cluster", spec.ClusterName, "namespace", ncNamespace)
-	s.writeJSON(w, http.StatusCreated, created.Object)
+	return created, 0, nil
+}
+
+// markDeleting sets the Deleting phase in an object's status (in memory).
+func markDeleting(obj *unstructured.Unstructured) {
+	statusMap, _, _ := unstructured.NestedMap(obj.Object, "status")
+	if statusMap == nil {
+		statusMap = map[string]interface{}{}
+	}
+	statusMap["phase"] = string(crd.PhaseDeleting)
+	statusMap["message"] = "Deletion requested"
+	obj.Object["status"] = statusMap
 }
 
 func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
@@ -202,21 +233,22 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	statusMap, _, _ := unstructured.NestedMap(obj.Object, "status")
-	if statusMap == nil {
-		statusMap = map[string]interface{}{}
-	}
-	statusMap["phase"] = string(crd.PhaseDeleting)
-	statusMap["message"] = "Deletion requested"
-	obj.Object["status"] = statusMap
-
-	// Status first, so the UI reflects the request immediately.
-	_, err = s.client.DynamicClient.Resource(nestedClusterGVR).
-		Namespace(obj.GetNamespace()).UpdateStatus(r.Context(), obj, metav1.UpdateOptions{})
-	if err != nil {
-		s.logger.Error("failed to mark cluster for deletion", "error", err.Error())
-		s.writeError(w, http.StatusInternalServerError, "failed to initiate deletion")
-		return
+	// Status first, so the UI reflects the request immediately. This is
+	// cosmetic and must never stop the deletion: during an install the
+	// orchestrator updates the status constantly, so the write can conflict.
+	// Retry against the latest version, and delete regardless. (A conflict
+	// here used to return "failed to initiate deletion" and delete nothing.)
+	ns := obj.GetNamespace()
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		cur, gerr := s.client.DynamicClient.Resource(nestedClusterGVR).Namespace(ns).Get(r.Context(), name, metav1.GetOptions{})
+		if gerr != nil {
+			return gerr
+		}
+		markDeleting(cur)
+		_, uerr := s.client.DynamicClient.Resource(nestedClusterGVR).Namespace(ns).UpdateStatus(r.Context(), cur, metav1.UpdateOptions{})
+		return uerr
+	}); err != nil {
+		s.logger.Info("could not mark cluster as Deleting; deleting anyway", "cluster", name, "error", err.Error())
 	}
 
 	// Then actually delete the object. Marking the phase alone tore down the
@@ -227,7 +259,7 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
 	// which drives the sos.octools.io/cleanup finalizer -> DeleteCluster ->
 	// finalizer release -> the object disappears. That path is already proven.
 	if err := s.client.DynamicClient.Resource(nestedClusterGVR).
-		Namespace(obj.GetNamespace()).Delete(r.Context(), name, metav1.DeleteOptions{}); err != nil {
+		Namespace(ns).Delete(r.Context(), name, metav1.DeleteOptions{}); err != nil {
 		s.logger.Error("failed to delete cluster object", "error", err.Error())
 		s.writeError(w, http.StatusInternalServerError, "failed to delete cluster")
 		return

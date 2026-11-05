@@ -429,10 +429,22 @@ func bastionUserData(hostname, pubKey string, masterIPs []string, graphical bool
 		relayFiles = lb.writeFiles()
 		relayStart = "  - systemctl enable --now sos-external.service\n  - systemctl enable --now sos-lb.service\n"
 	}
+	// SSH stays key-only, whatever the image defaults to: with the bastion
+	// load balancer its sshd is reachable on the external VLAN addresses, and
+	// a graphical bastion sets a desktop password that must never work over
+	// SSH. sshd uses the first value it reads, so 00- wins over the image's
+	// own drop-ins.
+	sshdFiles := `  - path: /etc/ssh/sshd_config.d/00-sos-keys-only.conf
+    permissions: '0600'
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+`
 	return fmt.Sprintf(`#cloud-config
 hostname: %s
 %swrite_files:
-%s%s  - path: /etc/systemd/system/sos-dns.service
+%s%s%s  - path: /etc/systemd/system/sos-dns.service
     permissions: '0644'
     content: |
       [Unit]
@@ -449,8 +461,9 @@ hostname: %s
       WantedBy=multi-user.target
 runcmd:
   - systemctl daemon-reload
+  - systemctl reload sshd || systemctl restart sshd
   - systemctl enable --now sos-dns.service
-%s%s`, hostname, authorized, desktopFiles, relayFiles, relayStart, desktop)
+%s%s`, hostname, authorized, sshdFiles, desktopFiles, relayFiles, relayStart, desktop)
 }
 
 // bastionPushDNSScript installs the rendered dns.py onto the bastion and

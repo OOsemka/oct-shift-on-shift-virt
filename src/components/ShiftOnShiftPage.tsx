@@ -15,6 +15,8 @@ import CommunityDisclaimer from './shared/CommunityDisclaimer';
 import CreateClusterWizard from './InstallTab/CreateClusterWizard';
 import ClusterTable from './ManageTab/ClusterTable';
 import IPPoolsTab from './IPPoolsTab/IPPoolsTab';
+import LabDefaultsTab from './LabDefaultsTab/LabDefaultsTab';
+import QuickClusterCard from './InstallTab/QuickClusterCard';
 import './ShiftOnShiftPage.css';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
@@ -60,6 +62,7 @@ const ShiftOnShiftPage: FC = () => {
                 title={<TabTitleText>{t('Install')}</TabTitleText>}
               >
                 <div className="sos-tab-content">
+                  <QuickClusterCard onOpenDefaults={() => setActiveTab('defaults')} />
                   <CreateClusterWizard />
                 </div>
               </Tab>
@@ -77,6 +80,14 @@ const ShiftOnShiftPage: FC = () => {
               >
                 <div className="sos-tab-content">
                   <IPPoolsTab />
+                </div>
+              </Tab>
+              <Tab
+                eventKey="defaults"
+                title={<TabTitleText>{t('Lab Defaults')}</TabTitleText>}
+              >
+                <div className="sos-tab-content">
+                  <LabDefaultsTab />
                 </div>
               </Tab>
             </Tabs>

@@ -1,4 +1,4 @@
-import React, { FC, useState } from 'react';
+import React, { FC, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom-v5-compat';
 import { useTranslation } from 'react-i18next';
 import {
@@ -18,6 +18,7 @@ import CredentialsStep from './CredentialsStep';
 import ReviewConfigStep from './ReviewConfigStep';
 import { createCluster } from '../../utils/api';
 import { externalAccessProblems, internalVIPs, networkProblems } from '../../utils/network-check';
+import { fetchLabDefaults, LabDefaults } from '../../utils/labdefaults';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
@@ -40,9 +41,20 @@ const CreateClusterWizard: FC = () => {
     setConfig((prev) => ({ ...prev, externalAccess: { ...prev.externalAccess, ...patch } }));
   };
 
+  const [labDefaults, setLabDefaults] = useState<LabDefaults | null>(null);
+  useEffect(() => {
+    fetchLabDefaults().then(setLabDefaults).catch(() => setLabDefaults(null));
+  }, []);
+
   const netProblems = networkProblems(config.network);
   const eaProblems = externalAccessProblems(config);
-  const blocking = [...netProblems, ...eaProblems];
+  // Without a pull secret here or in the lab defaults the install would only
+  // fail later, at CreateSecrets.
+  const credentialProblems: { field: string; key: string; values?: Record<string, string> }[] =
+    !config.pullSecret.trim() && !labDefaults?.pullSecretSet
+      ? [{ field: 'pullSecret', key: 'Paste a pull secret on the Credentials step, or store one in the Lab Defaults tab.' }]
+      : [];
+  const blocking = [...netProblems, ...eaProblems, ...credentialProblems];
 
   const handleDeploy = async () => {
     if (blocking.length > 0) return;
@@ -109,7 +121,7 @@ const CreateClusterWizard: FC = () => {
           <StorageStep config={config} onChange={onChange} />
         </WizardStep>
         <WizardStep name={t('Credentials')} id="credentials">
-          <CredentialsStep config={config} onChange={onChange} />
+          <CredentialsStep config={config} onChange={onChange} labDefaults={labDefaults} />
         </WizardStep>
         <WizardStep
           name={t('Review & Edit Configs')}

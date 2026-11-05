@@ -12,6 +12,7 @@ import {
   ModalFooter,
   ModalHeader,
   Spinner,
+  TextInput,
 } from '@patternfly/react-core';
 import {
   Table,
@@ -46,6 +47,9 @@ const ClusterTable: FC = () => {
   const [clusters, setClusters] = useState<ClusterListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState<string>();
+  // Typing the name guards against deleting the wrong row (it happened).
+  const [confirmName, setConfirmName] = useState('');
+  useEffect(() => setConfirmName(''), [deleteTarget]);
   const [deleting, setDeleting] = useState(false);
 
   const loadClusters = useCallback(() => {
@@ -149,17 +153,27 @@ const ClusterTable: FC = () => {
           onClose={() => setDeleteTarget(undefined)}
           variant="small"
         >
-          <ModalHeader title={t('Delete Cluster')} />
+          <ModalHeader title={t('Delete cluster {{name}}?', { name: deleteTarget })} titleIconVariant="warning" />
           <ModalBody>
-            <p>{t('Are you sure you want to delete cluster {{name}}?', { name: deleteTarget })}</p>
-            <p>{t('This will remove all VMs, networking, and storage resources.')}</p>
+            <p>
+              {t('This permanently deletes the nested cluster {{name}}: its VMs and disks, its bastion, its namespace and networks. Its external addresses go back to the IP pool. This cannot be undone.', { name: deleteTarget })}
+            </p>
+            <p>{t('Type the cluster name to confirm:')}</p>
+            <TextInput
+              id="sos-delete-confirm"
+              aria-label={t('Cluster name')}
+              value={confirmName}
+              onChange={(_e, v) => setConfirmName(v)}
+              placeholder={deleteTarget}
+              autoFocus
+            />
           </ModalBody>
           <ModalFooter>
             <Button
               variant="danger"
               onClick={handleDelete}
               isLoading={deleting}
-              isDisabled={deleting}
+              isDisabled={deleting || confirmName.trim() !== deleteTarget}
             >
               {t('Delete')}
             </Button>

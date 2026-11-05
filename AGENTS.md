@@ -95,6 +95,17 @@ New clusters get no HAProxy pods. The bastion VM (`bastion.go`, `bastionlb.go`) 
 - **Why not pods:** the pods' default route pointed at the cluster network, so clients outside the VLAN never got replies, and on Linux-bridge NADs (no IPAM) they got no static address at all. Fixing that in pods needs NET_ADMIN; a VM has its own routing table.
 - `GetVMIIP` prefers the `default` interface so the external address is never taken for the bastion's cluster address. Clusters without the marker (created earlier) keep the HAProxy-pod path unchanged.
 
+## Lab defaults and the quick compact cluster
+
+One profile of lab defaults in the Secret `sos-lab-defaults` (operator namespace): `pullSecret`, `sshPublicKey`, `settings.json` (`baseDomain`, `ocpVersion`, `storageClassName`, `ipPool`, `masterCores/MemoryGi/DiskGi`). Admins write it from the **Lab Defaults** tab through the Kubernetes API with their own permissions (only changed keys are patched; the pull secret is write-only). The orchestrator only reads it.
+
+- `GET /api/v1/defaults`: what is set (`pullSecretSet`, SSH key + fingerprint, settings); **never the pull secret**.
+- `createSecrets`: empty `pullSecret`/`sshKey` in a cluster are filled from the lab defaults (pull secret: spec > `pullSecretRef` > lab defaults > legacy `pull-secret`). A pull secret sent in the spec is copied into the cluster's Secret and then **removed from the NestedCluster object** (`clearSpecPullSecret`); later phases read the Secret.
+- **Quick compact cluster** (Install tab card): `GET /api/v1/quick-clusters/preview?name=` returns the exact plan (`crd.BuildQuickSpec`: 3 masters at the default size, two free addresses from the default pool, wizard network defaults) or the reasons it cannot be created; `POST /api/v1/quick-clusters` takes **only the name** and creates through the same path as the wizard (`createNestedCluster`: network checks, address availability, pool membership).
+- The wizard blocks Deploy only when there is no pull secret in the form or the lab defaults.
+
+Delete: the confirmation needs the cluster name typed. The API's status write before deleting is retried on conflict and never blocks the delete (a conflict during an install used to return "failed to initiate deletion" and delete nothing; `TestDeleteSurvivesStatusConflict`). A delete that interrupts an install is logged as "reconciliation cancelled", not as phase errors.
+
 ## IP pools (`IPPool`, IP Pools tab)
 
 `ippools.octools.io` (`deploy/crd.yaml`, namespaced, lives in `oct-shift-on-shift-virt`): `nadName` (always `default/<name>`: pools are shared, so they never reference a NAD in a project namespace; enforced by the CRD pattern, `Validate()` and the form), `prefixLength`, `addresses` (single IPv4 or ranges `a-b`, at most 4096), optional `gateway`/`description`. Usage is never stored: an address is in use while a NestedCluster on the same NAD references it (`crd.ExternalAddressUse`), so deleting a cluster frees its addresses.
