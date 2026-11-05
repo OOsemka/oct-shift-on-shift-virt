@@ -8,9 +8,14 @@ import {
   CardBody,
   CardFooter,
   CardTitle,
+  Checkbox,
   Flex,
   FlexItem,
   FormGroup,
+  FormHelperText,
+  HelperText,
+  HelperTextItem,
+  TextArea,
   TextInput,
 } from '@patternfly/react-core';
 import {
@@ -20,6 +25,7 @@ import {
   fetchQuickPlan,
   LabDefaults,
   QuickPlan,
+  sshKeyProblem,
 } from '../../utils/labdefaults';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
@@ -40,9 +46,24 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
   const [deployError, setDeployError] = useState<string>();
   const timer = useRef<ReturnType<typeof setTimeout>>();
   const [defaults, setDefaults] = useState<LabDefaults | null>(null);
+  // Per-cluster choices; the desktop starts from the lab default.
+  const [graphical, setGraphical] = useState<boolean | undefined>(undefined);
+  const [sshKey, setSshKey] = useState('');
+  const [desktopUser, setDesktopUser] = useState('core');
+  const [desktopPassword, setDesktopPassword] = useState('');
   useEffect(() => {
-    fetchLabDefaults().then(setDefaults).catch(() => setDefaults(null));
+    fetchLabDefaults()
+      .then((d) => {
+        setDefaults(d);
+        setGraphical(Boolean(d.settings?.bastionGraphical));
+        // Pre-filled with the profile key; edit it to use another key for this cluster.
+        setSshKey(d.sshPublicKey || '');
+      })
+      .catch(() => setDefaults(null));
   }, []);
+  const keyChanged = sshKey.trim() !== (defaults?.sshPublicKey || '').trim();
+  const pwErr = desktopPassword && desktopPassword.length < 8 ? t('At least 8 characters, or leave empty to have one generated.') : undefined;
+  const sshErr = sshKey.trim() ? sshKeyProblem(sshKey) : undefined;
 
   // The server decides everything but the name; ask it for the exact plan.
   useEffect(() => {
@@ -63,7 +84,12 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
     setDeploying(true);
     setDeployError(undefined);
     try {
-      await createQuickCluster(name.trim());
+      await createQuickCluster(name.trim(), {
+        // Only an edited key is sent; otherwise the server uses the profile key.
+        ...(keyChanged && sshKey.trim() ? { sshPublicKey: sshKey.trim() } : {}),
+        ...(graphical !== undefined ? { graphical } : {}),
+        ...(graphical ? { desktopUsername: desktopUser.trim(), desktopPassword } : {}),
+      });
       navigate(`/community-tools/compute/shift-on-shift-virt/cluster/${encodeURIComponent(name.trim())}`);
     } catch (e) {
       setDeployError(fetchErrorText(e));
@@ -73,7 +99,7 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
   };
 
   const s = plan?.spec;
-  const ready = Boolean(plan && plan.problems.length === 0 && name.trim());
+  const ready = Boolean(plan && plan.problems.length === 0 && name.trim() && !sshErr && !pwErr);
   return (
     <Card className="sos-quick-card" isCompact>
       <CardTitle>{t('Quick compact cluster')}</CardTitle>
@@ -97,17 +123,73 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
                   ingress: s.externalAccess?.ingressIP,
                   pool: s.externalAccess?.ipPool,
                 })}
+                {s.virtualization?.enabled
+                  ? ` · ${t('nested storage + OpenShift Virtualization')}`
+                  : s.storage?.enabled
+                    ? ` · ${t('nested storage (KubeVirt CSI)')}`
+                    : ''}
                 <br />
-                {defaults?.sshKeyFingerprint
-                  ? t('SSH: ssh core@{{api}} with the lab default key ({{fp}}), no password.', {
-                      api: s.externalAccess?.apiIP,
-                      fp: defaults.sshKeyFingerprint,
-                    })
-                  : t('No lab default SSH key: you will not be able to SSH to the bastion.')}
+                {sshKey.trim() && !sshErr
+                  ? t('SSH: ssh core@{{api}} with the key below, no password.', { api: s.externalAccess?.apiIP })
+                  : t('No SSH key: add one below or in Lab Defaults to be able to SSH to the bastion.')}
               </span>
             )}
           </FlexItem>
         </Flex>
+        <FormGroup label={t('SSH public key')} fieldId="quick-ssh">
+          <TextArea
+            id="quick-ssh"
+            value={sshKey}
+            onChange={(_e, v) => setSshKey(v)}
+            rows={2}
+            placeholder="ssh-ed25519 AAAA... user@host"
+            validated={sshErr ? 'error' : 'default'}
+          />
+          <FormHelperText>
+            <HelperText>
+              <HelperTextItem variant={sshErr ? 'error' : 'default'}>
+                {sshErr ||
+                  (keyChanged
+                    ? t('This key is used for this cluster only; the lab default stays unchanged.')
+                    : t('From the lab defaults. Edit it to use another key for this cluster only.'))}
+              </HelperTextItem>
+            </HelperText>
+          </FormHelperText>
+        </FormGroup>
+        <Checkbox
+          id="quick-graphical"
+          isChecked={Boolean(graphical)}
+          onChange={(_e, v) => setGraphical(v)}
+          label={t('Install a desktop on the bastion (adds 2 vCPU / 4 GiB)')}
+        />
+        {graphical && (
+          <Flex spaceItems={{ default: 'spaceItemsMd' }}>
+            <FlexItem>
+              <FormGroup label={t('Desktop username')} fieldId="quick-desktop-user">
+                <TextInput id="quick-desktop-user" value={desktopUser} onChange={(_e, v) => setDesktopUser(v)} />
+              </FormGroup>
+            </FlexItem>
+            <FlexItem>
+              <FormGroup label={t('Desktop password')} fieldId="quick-desktop-pw">
+                <TextInput
+                  id="quick-desktop-pw"
+                  type="password"
+                  value={desktopPassword}
+                  onChange={(_e, v) => setDesktopPassword(v)}
+                  validated={pwErr ? 'error' : 'default'}
+                  placeholder={t('Leave empty to generate')}
+                />
+                <FormHelperText>
+                  <HelperText>
+                    <HelperTextItem variant={pwErr ? 'error' : 'default'}>
+                      {pwErr || t('Only for the desktop login in the VM console, never over SSH. Stored in a Secret.')}
+                    </HelperTextItem>
+                  </HelperText>
+                </FormHelperText>
+              </FormGroup>
+            </FlexItem>
+          </Flex>
+        )}
         {plan && plan.problems.length > 0 && (
           <Alert
             variant="warning"

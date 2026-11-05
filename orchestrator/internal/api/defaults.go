@@ -111,6 +111,7 @@ func (s *Server) previewQuickCluster(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createQuickCluster(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ClusterName string `json:"clusterName"`
+		crd.QuickOverrides
 	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 4096))
 	if len(body) > 0 {
@@ -124,6 +125,8 @@ func (s *Server) createQuickCluster(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Only the SSH key and the desktop choice may be overridden.
+	plan.Problems = append(plan.Problems, crd.ApplyQuickOverrides(&plan.Spec, req.QuickOverrides)...)
 	if len(plan.Problems) > 0 {
 		s.writeError(w, http.StatusBadRequest, "cannot create a quick cluster: "+strings.Join(plan.Problems, "; "))
 		return
