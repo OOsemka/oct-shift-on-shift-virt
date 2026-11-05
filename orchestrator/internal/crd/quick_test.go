@@ -114,3 +114,16 @@ func TestQuickNestedStorageAndVirt(t *testing.T) {
 		t.Fatalf("virtualization must imply storage with the profile class/allowance: %+v %+v", s.Storage, s.Virtualization)
 	}
 }
+
+func TestValidateClusterNamespace(t *testing.T) {
+	for _, ok := range []string{"demo-ns", "quick-1-ns"} {
+		if err := ValidateClusterNamespace(ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "default", "oct-shift-on-shift-virt", "openshift-storage", "openshift", "kube-system", "Bad_NS"} {
+		if ValidateClusterNamespace(bad) == nil {
+			t.Errorf("%q must be refused", bad)
+		}
+	}
+}

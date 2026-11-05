@@ -21,6 +21,22 @@ func ValidateClusterName(name string) error {
 	return nil
 }
 
+// reservedNamespaces may never hold a nested cluster.
+var reservedNamespaces = map[string]bool{"default": true, "oct-shift-on-shift-virt": true}
+
+// ValidateClusterNamespace refuses system namespaces and invalid names.
+func ValidateClusterNamespace(ns string) error {
+	switch {
+	case ns == "":
+		return fmt.Errorf("namespace is required")
+	case len(ns) > 63 || !clusterNameRe.MatchString(ns):
+		return fmt.Errorf("namespace %q is not a valid name", ns)
+	case reservedNamespaces[ns] || strings.HasPrefix(ns, "openshift") || strings.HasPrefix(ns, "kube-"):
+		return fmt.Errorf("namespace %q is a system namespace; use a new namespace for the cluster", ns)
+	}
+	return nil
+}
+
 // SuggestQuickName returns quick-<n> with the lowest n not already taken.
 func SuggestQuickName(existing []string) string {
 	taken := map[string]bool{}

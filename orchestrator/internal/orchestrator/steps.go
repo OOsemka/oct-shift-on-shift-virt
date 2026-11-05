@@ -2498,8 +2498,20 @@ func (s *StepExecutor) DeleteCluster(ctx context.Context, nc *crd.NestedCluster)
 	}
 
 	s.client.DeleteCUDN(ctx, nc.Spec.ClusterName)
-	if err := s.client.DeleteNamespaceForce(ctx, clusterNs, 3*time.Minute); err != nil {
-		return fmt.Errorf("deleting cluster namespace: %w", err)
+	// Only delete the namespace if this cluster created it. A namespace that
+	// existed before (or belongs to another cluster) is left alone: deleting
+	// spec.namespace unconditionally could wipe any namespace named in a CR.
+	if ns, err := s.client.Clientset.CoreV1().Namespaces().Get(ctx, clusterNs, metav1.GetOptions{}); err == nil {
+		if k8s.NamespaceOwnedBy(ns.Labels, nc.Spec.ClusterName) {
+			if err := s.client.DeleteNamespaceForce(ctx, clusterNs, 3*time.Minute); err != nil {
+				return fmt.Errorf("deleting cluster namespace: %w", err)
+			}
+		} else {
+			log.Info("namespace not created by this cluster; leaving it in place", "namespace", clusterNs,
+				"owner_label", ns.Labels[k8s.NamespaceOwnerLabel])
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("checking cluster namespace before deletion: %w", err)
 	}
 
 	log.Info("cluster resources deleted")

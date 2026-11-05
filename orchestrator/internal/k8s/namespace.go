@@ -24,6 +24,16 @@ func (c *Client) CreateNamespace(ctx context.Context, name string, labels map[st
 
 	_, err := c.Clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	if errors.IsAlreadyExists(err) {
+		// Only a namespace this cluster created may be reused (a resume after
+		// a restart). Adopting anyone else's namespace would let a later
+		// delete wipe it.
+		existing, gerr := c.Clientset.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		if gerr != nil {
+			return fmt.Errorf("checking existing namespace %s: %w", name, gerr)
+		}
+		if owner := labels[NamespaceOwnerLabel]; owner == "" || existing.Labels[NamespaceOwnerLabel] != owner {
+			return fmt.Errorf("namespace %s already exists and does not belong to this cluster; pick a new namespace", name)
+		}
 		return nil
 	}
 	if err != nil {
@@ -286,11 +296,21 @@ func (c *Client) NamespaceExists(ctx context.Context, name string) (bool, error)
 	return true, nil
 }
 
+// NamespaceOwnerLabel marks a namespace as created for (owned by) a nested
+// cluster. Only namespaces carrying it with the cluster's name are reused on
+// create or deleted on teardown.
+const NamespaceOwnerLabel = "oct-shift-on-shift-virt/cluster"
+
+// NamespaceOwnedBy reports whether a namespace was created for this cluster.
+func NamespaceOwnedBy(nsLabels map[string]string, clusterName string) bool {
+	return clusterName != "" && nsLabels[NamespaceOwnerLabel] == clusterName
+}
+
 func CUDNNamespaceLabels(clusterName string) map[string]string {
 	return map[string]string{
 		"k8s.ovn.org/primary-user-defined-network": "",
-		"cudn":                            "true",
-		"oct-shift-on-shift-virt/cluster": clusterName,
-		"app.kubernetes.io/managed-by":    "oct-shift-on-shift-virt",
+		"cudn":                         "true",
+		NamespaceOwnerLabel:            clusterName,
+		"app.kubernetes.io/managed-by": "oct-shift-on-shift-virt",
 	}
 }
