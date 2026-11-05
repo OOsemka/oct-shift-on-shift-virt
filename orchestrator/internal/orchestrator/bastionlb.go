@@ -270,7 +270,12 @@ const bastionLBScript = `import http.client, itertools, json, socket, ssl, sys, 
 
 
 def log(msg):
-    print(msg, flush=True)
+    # Never raise: a closed stdout (journald restart) must not kill a
+    # connection handler or a prober.
+    try:
+        print(msg, flush=True)
+    except (OSError, ValueError):
+        pass
 
 
 def insecure_context():
@@ -283,24 +288,49 @@ def insecure_context():
 
 
 def probe(check, host):
-    """One HTTP(S) GET. Returns (ok, detail); only HTTP 200 is ok."""
+    """One HTTP(S) GET. Returns (ok, detail); only HTTP 200 is ok.
+
+    The socket timeout bounds each operation; a watchdog shuts the socket
+    down at the overall deadline, so a backend trickling bytes cannot make
+    one probe last longer than "timeout"."""
     timeout = float(check.get("timeout", 3))
     port = int(check["port"])
-    if check.get("scheme", "http") == "https":
-        conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=insecure_context())
-    else:
-        conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    expired = threading.Event()
+    conn = None
+
+    def kill():
+        expired.set()
+        sock = getattr(conn, "sock", None)
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    watchdog = threading.Timer(timeout, kill)
+    watchdog.daemon = True
     try:
+        if check.get("scheme", "http") == "https":
+            conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=insecure_context())
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        watchdog.start()
         conn.request("GET", check.get("path", "/"), headers={"Connection": "close"})
         resp = conn.getresponse()
         resp.read(4096)
+        if expired.is_set():
+            return False, "timeout after %gs" % timeout
         if resp.status == 200:
             return True, "HTTP 200"
         return False, "HTTP %d" % resp.status
     except Exception as e:  # connection errors, timeouts, TLS errors
+        if expired.is_set():
+            return False, "timeout after %gs" % timeout
         return False, "%s: %s" % (type(e).__name__, e)
     finally:
-        conn.close()
+        watchdog.cancel()
+        if conn is not None:
+            conn.close()
 
 
 class Health:
@@ -364,18 +394,18 @@ class Balancer:
         return self.health[(name, host)].healthy
 
     def note_fail_open(self, port, on):
-        """Log once when a frontend enters or leaves fail-open, not per connection."""
+        """Log once when a frontend enters or leaves fail-open, not per
+        connection. The line is written under the lock, so the last journal
+        line always matches the current state."""
         with self.lock:
             if (port in self.fail_open) == on:
                 return
             if on:
                 self.fail_open.add(port)
+                log("frontend %d: no healthy backend, using all (fail-open)" % port)
             else:
                 self.fail_open.discard(port)
-        if on:
-            log("frontend %d: no healthy backend, using all (fail-open)" % port)
-        else:
-            log("frontend %d: healthy backends again" % port)
+                log("frontend %d: healthy backends again" % port)
 
     def candidates(self, port):
         """Backends in the order to try: round-robin over the healthy ones,
@@ -411,10 +441,14 @@ class Balancer:
         interval = float(c.get("interval", 5))
         while not stop.is_set():
             began = time.monotonic()
-            ok, detail = self.probe_fn(c, host)
-            msg = state.record(ok, detail)
-            if msg:
-                log(msg)
+            try:
+                ok, detail = self.probe_fn(c, host)
+                msg = state.record(ok, detail)
+                if msg:
+                    log(msg)
+            except Exception as e:
+                # A dead prober would freeze this backend's state for good.
+                log("%s %s probe error: %s: %s" % (name, host, type(e).__name__, e))
             stop.wait(max(0.0, interval - (time.monotonic() - began)))
 
     def start_probers(self, stop):
@@ -446,8 +480,18 @@ class Balancer:
 
     def serve(self, srv, port):
         while True:
-            client, _ = srv.accept()
-            threading.Thread(target=self.handle, args=(client, port), daemon=True).start()
+            # Out of file descriptors or threads (EMFILE, "can't start new
+            # thread") must not kill the listener while the port stays bound.
+            try:
+                client, _ = srv.accept()
+            except OSError:
+                time.sleep(0.1)
+                continue
+            try:
+                threading.Thread(target=self.handle, args=(client, port), daemon=True).start()
+            except RuntimeError:
+                client.close()
+                time.sleep(0.1)
 
     def run(self):
         # Bind every listener before the first probe: the DeployDNS job checks

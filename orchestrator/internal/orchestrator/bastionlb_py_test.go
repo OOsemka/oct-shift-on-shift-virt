@@ -26,6 +26,14 @@ func TestBastionLBScriptPython(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// A newer local python would accept 3.10+ syntax (match, X | None) that
+	// fails on the bastion: parse the script with the 3.9 grammar.
+	syntax := exec.CommandContext(ctx, py, "-I", "-c",
+		"import ast, sys; ast.parse(open(sys.argv[1]).read(), feature_version=(3, 9))",
+		filepath.Join(dir, "lb.py"))
+	if out, err := syntax.CombinedOutput(); err != nil {
+		t.Fatalf("lb.py is not Python 3.9 syntax: %v\n%s", err, out)
+	}
 	cmd := exec.CommandContext(ctx, py, "-I", filepath.Join(dir, "test_lb.py"))
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
@@ -35,7 +43,7 @@ func TestBastionLBScriptPython(t *testing.T) {
 	t.Logf("%s", out)
 }
 
-const lbPyTest = `import http.server, os, socket, ssl, sys, threading, time, unittest
+const lbPyTest = `import http.server, os, shutil, socket, ssl, subprocess, sys, tempfile, threading, time, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lb  # noqa: E402
@@ -238,6 +246,101 @@ class ProbeTest(unittest.TestCase):
             Handler.status = 200
             for t in threads:
                 t.join(2)
+
+    def test_https_200_with_self_signed_cert(self):
+        openssl = shutil.which("openssl")
+        if not openssl:
+            self.skipTest("openssl not on PATH")
+        with tempfile.TemporaryDirectory() as d:
+            key, crt = os.path.join(d, "k.pem"), os.path.join(d, "c.pem")
+            subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key,
+                            "-out", crt, "-days", "1", "-subj", "/CN=sos-lb-test"],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            srv = Server(("127.0.0.1", 0), Handler)
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(crt, key)
+            srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            Handler.status = 200
+            port = srv.server_address[1]
+            self.assertEqual(lb.probe(self.check(scheme="https", port=port), "127.0.0.1"), (True, "HTTP 200"))
+            Handler.status = 503
+            self.assertEqual(lb.probe(self.check(scheme="https", port=port), "127.0.0.1"), (False, "HTTP 503"))
+        finally:
+            Handler.status = 200
+            srv.shutdown()
+            srv.server_close()
+
+    def test_overall_deadline_against_trickling_backend(self):
+        # Sends one byte every 0.1 s: no single read times out, the whole
+        # probe must still stop at its 0.5 s deadline.
+        lsock = socket.socket()
+        lsock.bind(("127.0.0.1", 0))
+        lsock.listen(1)
+        done = threading.Event()
+
+        def trickle():
+            c, _ = lsock.accept()
+            try:
+                c.recv(4096)
+                for ch in b"HTTP/1.1 200 OK\r\nX-Slow: " + b"a" * 1000:
+                    if done.is_set():
+                        break
+                    c.sendall(bytes([ch]))
+                    time.sleep(0.1)
+            except OSError:
+                pass
+            finally:
+                c.close()
+
+        threading.Thread(target=trickle, daemon=True).start()
+        try:
+            began = time.monotonic()
+            ok, detail = lb.probe(self.check(port=lsock.getsockname()[1], timeout=0.5), "127.0.0.1")
+            took = time.monotonic() - began
+        finally:
+            done.set()
+            lsock.close()
+        self.assertFalse(ok)
+        self.assertIn("timeout", detail)
+        self.assertLess(took, 1.0)
+
+    def test_prober_survives_exceptions(self):
+        calls = []
+
+        def flaky(check, host):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            return False, "HTTP 503"
+
+        c = {"frontends": {"443": [["10.0.0.9", 443]]},
+             "checks": {"ingress": {"interval": 0.02, "rise": 1, "fall": 1}},
+             "frontend_checks": {"443": "ingress"}}
+        b = lb.Balancer(c, probe_fn=flaky)
+        stop = threading.Event()
+        threads = b.start_probers(stop)
+        try:
+            self.assertTrue(wait(lambda: not b.is_healthy(443, "10.0.0.9")))
+        finally:
+            stop.set()
+            for t in threads:
+                t.join(2)
+
+    def test_log_swallows_broken_stdout(self):
+        class Broken:
+            def write(self, s):
+                raise BrokenPipeError()
+
+            def flush(self):
+                raise BrokenPipeError()
+
+        orig, sys.stdout = sys.stdout, Broken()
+        try:
+            lb.log("must not raise")
+        finally:
+            sys.stdout = orig
 
 
 def wait(cond, timeout=3.0):
