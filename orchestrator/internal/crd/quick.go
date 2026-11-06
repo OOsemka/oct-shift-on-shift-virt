@@ -109,8 +109,10 @@ func ApplyQuickOverrides(spec *NestedClusterSpec, o QuickOverrides) []string {
 // default IP pool's free addresses. Credentials are left empty on purpose:
 // the orchestrator takes them from the lab defaults Secret, so the pull secret
 // never travels through the browser or lands in the cluster object.
+// The internal network is the first candidate that stays clear of the host
+// nodes (host, read from the Kubernetes API): the usual default on most hosts.
 // It returns every reason the quick cluster cannot be created.
-func BuildQuickSpec(name string, s LabSettings, hasPullSecret bool, pool *IPPool, free []string) (NestedClusterSpec, []string) {
+func BuildQuickSpec(name string, s LabSettings, hasPullSecret bool, pool *IPPool, free []string, host []HostNodeAddress) (NestedClusterSpec, []string) {
 	s = s.WithDefaults()
 	var problems []string
 	if err := ValidateClusterName(name); err != nil {
@@ -140,6 +142,13 @@ func BuildQuickSpec(name string, s LabSettings, hasPullSecret bool, pool *IPPool
 		problems = append(problems, fmt.Sprintf("IP pool %q has %d free address(es); a cluster needs 2", s.IPPool, len(free)))
 	}
 
+	cudn := FreeCUDNSubnet(host, DefaultClusterNetworkCIDR, DefaultServiceNetworkCIDR)
+	if cudn == "" {
+		problems = append(problems, "no default internal network is free of the host cluster's node addresses; use the wizard and choose one")
+		cudn = DefaultCUDNSubnet
+	}
+	apiVIP, ingressVIP := InternalVIPs(cudn)
+
 	spec := NestedClusterSpec{
 		ClusterName: name,
 		BaseDomain:  strings.TrimSpace(s.BaseDomain),
@@ -156,8 +165,8 @@ func BuildQuickSpec(name string, s LabSettings, hasPullSecret bool, pool *IPPool
 			{Name: "cluster-master-2", Role: "master"},
 		},
 		Network: NetworkConfig{
-			CUDNSubnet: "10.100.0.0/16", APIVIP: "10.100.0.10", IngressVIP: "10.100.0.11",
-			ClusterNetworkCIDR: "10.128.0.0/14", ServiceNetworkCIDR: "172.30.0.0/16",
+			CUDNSubnet: cudn, APIVIP: apiVIP, IngressVIP: ingressVIP,
+			ClusterNetworkCIDR: DefaultClusterNetworkCIDR, ServiceNetworkCIDR: DefaultServiceNetworkCIDR,
 		},
 		StorageClassName: strings.TrimSpace(s.StorageClassName),
 		Bastion:          BastionConfig{Username: "core", Graphical: s.BastionGraphical},

@@ -101,6 +101,8 @@ Two kinds of addresses, easy to mix up: the **internal VIPs** (`spec.network.api
 
 `crd.(*NestedClusterSpec).ValidateNetwork()` (`orchestrator/internal/crd/validate.go`) refuses settings that can only produce a broken cluster: blank or invalid external IPs (they made the annotation `"ips":["/24"]` and the HAProxy pod never started), external IPs equal to the internal VIPs or inside the internal, pod or service networks, the same address twice, addresses in different VLAN subnets or on the network/broadcast address, no NAD, an internal network smaller than /24 or overlapping the pod/service networks. It runs in the create API (HTTP 400 with the reasons) and at the start of a new cluster's reconcile (so `oc apply` is covered); existing clusters are never re-checked. The wizard runs the same rules (`src/utils/network-check.ts`): Next stays disabled on Network and External Access, and Deploy is blocked while any problem remains. Keep the two in step.
 
+**Host node network** (`crd.(*NestedClusterSpec).CheckHostNetwork`, `orchestrator/internal/crd/hostnetwork.go`): the internal network must not contain a host node's `InternalIP`/`ExternalIP`, nor overlap the node network OVN-Kubernetes publishes in `k8s.ovn.org/node-primary-ifaddr`. Why: OVN-Kubernetes requires UDN subnets not to overlap the node network; on a host that was itself a nested cluster on `10.100.0.0/16`, a cluster with the default subnet had working DNS but no egress from its cUDN, so the agent's connectivity check failed and assisted-service never started. Node addresses are read at runtime (`k8s.HostNodeAddresses`, ClusterRole `nodes` get/list); it runs in `createNestedCluster` (400 naming the node address and a free range) and at the start of a new cluster's reconcile, like ValidateNetwork, and is skipped (logged) when nodes cannot be listed. `GET /api/v1/host-network` returns the addresses plus `suggestedCudnSubnet`, the first free entry of a fixed candidate list that starts with the default `10.100.0.0/16` and skips the nested pod/service networks (`crd.FreeCUDNSubnet`). The quick cluster (`BuildQuickSpec`) and the wizard's untouched default use that suggestion; the wizard's `hostNetworkProblem` blocks Next/Deploy and is skipped if the endpoint fails.
+
 ## Bastion load balancer (`status.loadBalancer: bastion`)
 
 New clusters get no HAProxy pods. The bastion VM (`bastion.go`, `bastionlb.go`) has a second NIC (`external`, bridge binding, MAC pinned by `externalMAC(cluster)`) on the selected external network, copied into the cluster namespace (`externalNADInClusterNs`). It works the same on Linux-bridge and OVN localnet networks: the guest sets its own addresses, so the NAD needs no IPAM.
@@ -157,7 +159,7 @@ Deletion bookkeeping (`engine.go`): every reconcile has its own `reconcileRun` e
 
 ## RBAC
 
-`deploy/install.yaml` ClusterRole `oct-shift-on-shift-virt-orchestrator` is the source of truth; the storefront bundle is generated from it. Storage added: `subresources.kubevirt.io` add/removevolume (update), `persistentvolumes` get, `roles`/`rolebindings`, `resourcequotas`.
+`deploy/install.yaml` ClusterRole `oct-shift-on-shift-virt-orchestrator` is the source of truth; the storefront bundle is generated from it. Storage added: `subresources.kubevirt.io` add/removevolume (update), `persistentvolumes` get, `roles`/`rolebindings`, `resourcequotas`. Host network check added: `nodes` get/list (read-only).
 
 ## Build
 

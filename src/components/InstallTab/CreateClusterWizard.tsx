@@ -6,7 +6,7 @@ import {
   Wizard,
   WizardStep,
 } from '@patternfly/react-core';
-import { ClusterConfig, DEFAULT_CLUSTER_CONFIG } from './types';
+import { ClusterConfig, DEFAULT_CLUSTER_CONFIG, HostNetwork } from './types';
 import ClusterBasicsStep from './ClusterBasicsStep';
 import TopologyStep from './TopologyStep';
 import VMSizingStep from './VMSizingStep';
@@ -16,11 +16,24 @@ import ExternalAccessStep from './ExternalAccessStep';
 import StorageStep from './StorageStep';
 import CredentialsStep from './CredentialsStep';
 import ReviewConfigStep from './ReviewConfigStep';
-import { createCluster } from '../../utils/api';
+import { createCluster, fetchHostNetwork } from '../../utils/api';
 import { externalAccessProblems, internalVIPs, networkPluginProblems, networkProblems } from '../../utils/network-check';
 import { fetchLabDefaults, LabDefaults } from '../../utils/labdefaults';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
+
+/**
+ * Moves an untouched default internal network off the host's node network
+ * (the orchestrator suggests the first free candidate; on most hosts that is
+ * the default itself, so nothing changes). A subnet the user typed is kept.
+ */
+function withHostDefaults(config: ClusterConfig, host: HostNetwork | null): ClusterConfig {
+  const suggested = host?.suggestedCudnSubnet;
+  if (!suggested || config.network.cudnSubnet !== DEFAULT_CLUSTER_CONFIG.network.cudnSubnet || suggested === config.network.cudnSubnet) {
+    return config;
+  }
+  return { ...config, network: { ...config.network, cudnSubnet: suggested, ...(internalVIPs(suggested) || {}) } };
+}
 
 const CreateClusterWizard: FC = () => {
   const { t } = useTranslation(I18N);
@@ -46,7 +59,22 @@ const CreateClusterWizard: FC = () => {
     fetchLabDefaults().then(setLabDefaults).catch(() => setLabDefaults(null));
   }, []);
 
-  const netProblems = [...networkProblems(config.network), ...networkPluginProblems(config)];
+  // Host node addresses: the internal network must not overlap them. If the
+  // orchestrator cannot tell (older RBAC, error), the check is skipped here
+  // and enforced by the create API.
+  const [hostNetwork, setHostNetwork] = useState<HostNetwork | null>(null);
+  useEffect(() => {
+    fetchHostNetwork()
+      .then((data: unknown) => {
+        const h = data as HostNetwork;
+        if (!Array.isArray(h?.nodeAddresses)) return;
+        setHostNetwork(h);
+        setConfig((prev) => withHostDefaults(prev, h));
+      })
+      .catch(() => setHostNetwork(null));
+  }, []);
+
+  const netProblems = [...networkProblems(config.network, hostNetwork), ...networkPluginProblems(config)];
   const eaProblems = externalAccessProblems(config);
   // Without a pull secret here or in the lab defaults the install would only
   // fail later, at CreateSecrets.
@@ -95,7 +123,7 @@ const CreateClusterWizard: FC = () => {
         </Alert>
       )}
       <Wizard
-        onClose={() => setConfig({ ...DEFAULT_CLUSTER_CONFIG })}
+        onClose={() => setConfig(withHostDefaults({ ...DEFAULT_CLUSTER_CONFIG }, hostNetwork))}
       >
         <WizardStep name={t('Cluster Basics')} id="basics">
           <ClusterBasicsStep config={config} onChange={onChange} />
@@ -110,7 +138,7 @@ const CreateClusterWizard: FC = () => {
           <NodeNamingStep config={config} onChange={onChange} />
         </WizardStep>
         <WizardStep name={t('Network')} id="network" footer={{ isNextDisabled: netProblems.length > 0 }}>
-          <NetworkStep config={config} onChange={onNetworkChange} />
+          <NetworkStep config={config} onChange={onNetworkChange} hostNetwork={hostNetwork} />
         </WizardStep>
         <WizardStep
           name={t('External Access')}

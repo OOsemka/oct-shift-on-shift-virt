@@ -75,6 +75,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/v1/quick-clusters", s.createQuickCluster)
 	s.mux.HandleFunc("GET /api/v1/ocp-versions", s.listOCPVersions)
 	s.mux.HandleFunc("GET /api/v1/network-plugins", s.listNetworkPlugins)
+	s.mux.HandleFunc("GET /api/v1/host-network", s.getHostNetwork)
 	s.mux.HandleFunc("GET /healthz", s.healthz)
 }
 
@@ -192,6 +193,9 @@ func (s *Server) createNestedCluster(ctx context.Context, spec crd.NestedCluster
 	}
 	if err := spec.ValidateNetwork(); err != nil {
 		return nil, http.StatusBadRequest, err
+	}
+	if code, err := s.checkHostNetwork(ctx, &spec); err != nil {
+		return nil, code, err
 	}
 	if code, err := s.checkAddressAvailability(ctx, &spec); err != nil {
 		return nil, code, err

@@ -345,5 +345,9 @@
   "Could not download the CA: {{msg}}": "Could not download the CA: {{msg}}",
   "Console (host route)": "Console (host route)",
   "No DNS needed. The certificate is signed by this cluster’s own CA: download it and trust it, or your browser shows a warning.": "No DNS needed. The certificate is signed by this cluster’s own CA: download it and trust it, or your browser shows a warning.",
-  "Download CA certificate": "Download CA certificate"
+  "Download CA certificate": "Download CA certificate",
+  "Contains host node {{node}} address {{ip}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access. Use a free range such as {{suggestion}}.": "Contains host node {{node}} address {{ip}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access. Use a free range such as {{suggestion}}.",
+  "Contains host node {{node}} address {{ip}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access.": "Contains host node {{node}} address {{ip}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access.",
+  "Overlaps host node {{node}} network {{cidr}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access. Use a free range such as {{suggestion}}.": "Overlaps host node {{node}} network {{cidr}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access. Use a free range such as {{suggestion}}.",
+  "Overlaps host node {{node}} network {{cidr}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access.": "Overlaps host node {{node}} network {{cidr}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access."
 }

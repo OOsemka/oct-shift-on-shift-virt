@@ -30,6 +30,15 @@ rules:
   - watch
   - create
   - delete
+# Read-only: host node addresses, so a cluster's internal network never
+# overlaps the host's node network (OVN-Kubernetes UDN rule).
+- apiGroups:
+  - ''
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
 - apiGroups:
   - kubevirt.io
   resources:

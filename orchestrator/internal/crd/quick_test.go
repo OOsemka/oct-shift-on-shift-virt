@@ -13,7 +13,7 @@ func TestBuildQuickSpec(t *testing.T) {
 	if strings.Join(free, ",") != "192.0.2.12,192.0.2.13" {
 		t.Fatalf("free = %v", free)
 	}
-	s, problems := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "example.test", OCPVersion: "4.22", IPPool: "lab"}, true, pool, free)
+	s, problems := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "example.test", OCPVersion: "4.22", IPPool: "lab"}, true, pool, free, nil)
 	if len(problems) != 0 {
 		t.Fatalf("problems: %v", problems)
 	}
@@ -32,7 +32,7 @@ func TestBuildQuickSpec(t *testing.T) {
 	if ea.HostRoutes {
 		t.Error("host routes are opt-in (publishHostRoutes)")
 	}
-	if s2, _ := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "example.test", OCPVersion: "4.22", IPPool: "lab", PublishHostRoutes: true}, true, pool, free); !s2.ExternalAccess.HostRoutes {
+	if s2, _ := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "example.test", OCPVersion: "4.22", IPPool: "lab", PublishHostRoutes: true}, true, pool, free, nil); !s2.ExternalAccess.HostRoutes {
 		t.Error("publishHostRoutes must set externalAccess.hostRoutes")
 	}
 	if s.PullSecret != "" || s.SSHKey != "" {
@@ -50,17 +50,17 @@ func TestBuildQuickSpec(t *testing.T) {
 func TestBuildQuickSpecProblems(t *testing.T) {
 	pool := &IPPool{Name: "lab", Spec: IPPoolSpec{NADName: "default/vlan-a", PrefixLength: 24, Gateway: "192.0.2.1",
 		Addresses: []string{"192.0.2.10"}}}
-	_, problems := BuildQuickSpec("Bad_Name", LabSettings{IPPool: "lab"}, false, pool, []string{"192.0.2.10"})
+	_, problems := BuildQuickSpec("Bad_Name", LabSettings{IPPool: "lab"}, false, pool, []string{"192.0.2.10"}, nil)
 	joined := strings.Join(problems, "; ")
 	for _, want := range []string{"cluster name", "no pull secret", "no base domain", "no OpenShift version", "1 free address"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("problems lack %q: %s", want, joined)
 		}
 	}
-	if _, p := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "gone"}, true, nil, nil); !strings.Contains(strings.Join(p, ";"), `"gone" does not exist`) {
+	if _, p := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "gone"}, true, nil, nil, nil); !strings.Contains(strings.Join(p, ";"), `"gone" does not exist`) {
 		t.Errorf("missing pool not reported: %v", p)
 	}
-	if _, p := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", MasterDiskGi: 100}, true, nil, nil); !strings.Contains(strings.Join(p, ";"), "below the minimum") {
+	if _, p := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", MasterDiskGi: 100}, true, nil, nil, nil); !strings.Contains(strings.Join(p, ";"), "below the minimum") {
 		t.Errorf("undersized nodes not reported: %v", p)
 	}
 	if SuggestQuickName([]string{"quick-1", "quick-3"}) != "quick-2" {
@@ -71,7 +71,7 @@ func TestBuildQuickSpecProblems(t *testing.T) {
 func TestQuickOverrides(t *testing.T) {
 	pool := &IPPool{Name: "lab", Spec: IPPoolSpec{NADName: "default/vlan-a", PrefixLength: 24, Gateway: "192.0.2.1",
 		Addresses: []string{"192.0.2.10-192.0.2.13"}}}
-	s, _ := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab", BastionGraphical: true}, true, pool, []string{"192.0.2.10", "192.0.2.11"})
+	s, _ := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab", BastionGraphical: true}, true, pool, []string{"192.0.2.10", "192.0.2.11"}, nil)
 	if !s.Bastion.Graphical {
 		t.Fatal("lab default desktop setting must apply")
 	}
@@ -92,7 +92,7 @@ func TestQuickOverrides(t *testing.T) {
 	if ApplyQuickOverrides(&s, QuickOverrides{HostRoutes: &no}); s.ExternalAccess.HostRoutes {
 		t.Fatal("hostRoutes=false must turn the lab default off")
 	}
-	s2, _ := BuildQuickSpec("quick-2", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab"}, true, pool, []string{"192.0.2.12", "192.0.2.13"})
+	s2, _ := BuildQuickSpec("quick-2", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab"}, true, pool, []string{"192.0.2.12", "192.0.2.13"}, nil)
 	if p := ApplyQuickOverrides(&s2, QuickOverrides{Graphical: &yes, DesktopUsername: "chris", DesktopPassword: "correct-horse"}); len(p) != 0 {
 		t.Fatalf("valid desktop overrides: %v", p)
 	}
@@ -102,7 +102,7 @@ func TestQuickOverrides(t *testing.T) {
 	if p := ApplyQuickOverrides(&s2, QuickOverrides{DesktopUsername: "root", DesktopPassword: "short"}); len(p) != 2 {
 		t.Fatalf("root user and short password must both be problems: %v", p)
 	}
-	s3, _ := BuildQuickSpec("quick-3", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab"}, true, pool, []string{"192.0.2.12", "192.0.2.13"})
+	s3, _ := BuildQuickSpec("quick-3", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab"}, true, pool, []string{"192.0.2.12", "192.0.2.13"}, nil)
 	ApplyQuickOverrides(&s3, QuickOverrides{DesktopUsername: "chris", DesktopPassword: "correct-horse"})
 	if s3.Bastion.Password != "" || s3.Bastion.Username != "core" {
 		t.Fatal("desktop credentials must be ignored without a desktop")
@@ -113,7 +113,7 @@ func TestQuickNestedStorageAndVirt(t *testing.T) {
 	pool := &IPPool{Name: "lab", Spec: IPPoolSpec{NADName: "default/vlan-a", PrefixLength: 24, Gateway: "192.0.2.1",
 		Addresses: []string{"192.0.2.10-192.0.2.13"}}}
 	base := LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab"}
-	s, _ := BuildQuickSpec("q", base, true, pool, []string{"192.0.2.10", "192.0.2.11"})
+	s, _ := BuildQuickSpec("q", base, true, pool, []string{"192.0.2.10", "192.0.2.11"}, nil)
 	if s.Storage.Enabled || s.Virtualization.Enabled {
 		t.Fatal("nested storage/virtualization must be off unless the profile turns them on")
 	}
@@ -121,7 +121,7 @@ func TestQuickNestedStorageAndVirt(t *testing.T) {
 	v.NestedVirtualization = true
 	v.NestedStorageClass = "fast-rbd"
 	v.NestedStorageAllowanceGi = 250
-	s, _ = BuildQuickSpec("q", v, true, pool, []string{"192.0.2.10", "192.0.2.11"})
+	s, _ = BuildQuickSpec("q", v, true, pool, []string{"192.0.2.10", "192.0.2.11"}, nil)
 	if !s.Virtualization.Enabled || !s.Storage.Enabled || s.Storage.InfraStorageClassName != "fast-rbd" || s.Storage.AllowanceGi != 250 {
 		t.Fatalf("virtualization must imply storage with the profile class/allowance: %+v %+v", s.Storage, s.Virtualization)
 	}
