@@ -328,9 +328,37 @@ spec:
                 agentConfigOverrides:
                   type: string
                   description: User-provided YAML overrides for agent-config.yaml (merged on top of generated config).
+                source:
+                  type: object
+                  description: Clone this cluster from a master (Express) instead of installing it.
+                  required: [master]
+                  properties:
+                    master:
+                      type: string
+                      description: Name of a NestedCluster in phase Master (same namespace).
+                    internalName:
+                      type: string
+                      description: The master's cluster name; the cloned nodes keep it internally.
+                    internalBaseDomain:
+                      type: string
+                      description: The master's base domain.
             status:
               type: object
               properties:
+                master:
+                  type: object
+                  description: Set once the cluster was turned into a master (Express); clones are created from its snapshots.
+                  properties:
+                    snapshots:
+                      type: object
+                      additionalProperties:
+                        type: string
+                      description: Root disk PVC to VolumeSnapshot.
+                    releaseVersion:
+                      type: string
+                    createdAt:
+                      type: string
+                      format: date-time
                 hostConsoleURL:
                   type: string
                   description: Nested console through a host Route (externalAccess.hostRoutes).
@@ -374,6 +402,13 @@ spec:
                     - PublishRoutes
                     - ConfigureStorage
                     - ConfigureVirtualization
+                    - MakeMaster
+                    - Master
+                    - CloneVMs
+                    - WaitCloneAPI
+                    - Sanitize
+                    - CloneCredentials
+                    - FinishIsolation
                     - Ready
                     - Deleting
                     - Failed

@@ -159,7 +159,7 @@ func (s *StepExecutor) configureBastionDNS(ctx context.Context, nc *crd.NestedCl
 		return fmt.Errorf("haproxy lease collides with the bastion address %s (api=%s ingress=%s) — the bastion must claim its IP before the haproxy pods start",
 			bastionIP, apiVIP, ingressVIP)
 	}
-	localZone := nc.Spec.ClusterName + "." + nc.Spec.BaseDomain
+	localZone := nc.FQDN()
 
 	cmName := nc.Spec.ClusterName + "-dns-script"
 	cm := &corev1.ConfigMap{

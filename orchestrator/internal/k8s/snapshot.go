@@ -126,6 +126,18 @@ func (c *Client) WaitForVolumeSnapshot(ctx context.Context, namespace, name stri
 // underlying CSI snapshot handle. This is the standard cross-namespace snapshot
 // restore pattern — no pods or network access required.
 func (c *Client) CloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapshotName, driver, snapshotHandle, snapshotClassName string) error {
+	return c.cloneSnapshotToNamespace(ctx, dstNs, dstSnapshotName, driver, snapshotHandle, snapshotClassName, "Delete")
+}
+
+// ShareSnapshotToNamespace is CloneSnapshotToNamespace for a snapshot that
+// stays owned by its source (an Express master's golden snapshot): the
+// content is Retain, so deleting the destination never deletes the CSI
+// snapshot the source and other clones still use.
+func (c *Client) ShareSnapshotToNamespace(ctx context.Context, dstNs, dstSnapshotName, driver, snapshotHandle, snapshotClassName string) error {
+	return c.cloneSnapshotToNamespace(ctx, dstNs, dstSnapshotName, driver, snapshotHandle, snapshotClassName, "Retain")
+}
+
+func (c *Client) cloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapshotName, driver, snapshotHandle, snapshotClassName, deletionPolicy string) error {
 	contentName := dstSnapshotName + "-content"
 
 	// Re-entrancy sweep: the content name is deterministic, so a phase retry
@@ -177,7 +189,7 @@ func (c *Client) CloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapsho
 				// the pair is swept+recreated on every retry, so the CSI
 				// snapshot must share its lifecycle — Retain leaked an rbd
 				// snapshot per retry attempt.
-				"deletionPolicy": "Delete",
+				"deletionPolicy": deletionPolicy,
 				"driver":         driver,
 				"source": map[string]interface{}{
 					"snapshotHandle": snapshotHandle,

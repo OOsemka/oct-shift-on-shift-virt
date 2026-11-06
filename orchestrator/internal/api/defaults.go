@@ -108,6 +108,9 @@ func (s *Server) previewQuickCluster(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if m := r.URL.Query().Get("master"); m != "" {
+		s.applyMasterToPlan(r.Context(), &plan, m)
+	}
 	s.writeJSON(w, http.StatusOK, plan)
 }
 
@@ -131,8 +134,11 @@ func (s *Server) createQuickCluster(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Only the SSH key and the desktop choice may be overridden.
+	// Only the SSH key, the desktop, host routes and the master may be chosen.
 	plan.Problems = append(plan.Problems, crd.ApplyQuickOverrides(&plan.Spec, req.QuickOverrides)...)
+	if req.Master != "" {
+		s.applyMasterToPlan(r.Context(), &plan, req.Master)
+	}
 	if len(plan.Problems) > 0 {
 		s.writeError(w, http.StatusBadRequest, "cannot create a quick cluster: "+strings.Join(plan.Problems, "; "))
 		return

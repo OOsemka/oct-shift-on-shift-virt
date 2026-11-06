@@ -181,7 +181,7 @@ func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) 
 	}
 	e.mu.Unlock()
 
-	if phase == crd.PhaseReady || phase == crd.PhaseFailed {
+	if phase == crd.PhaseReady || phase == crd.PhaseFailed || phase == crd.PhaseMaster {
 		return
 	}
 
@@ -294,6 +294,21 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 	}
 
 	currentPhase := nc.Status.Phase
+	// "Make master" (requested through the API on a Ready cluster): shut it
+	// down and snapshot its disks; it then stays in phase Master.
+	if currentPhase == crd.PhaseMakeMaster {
+		if err := e.steps.MakeMaster(ctx, nc); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Error("make master failed", "error", err.Error())
+			e.updateStatus(ctx, nc, crd.PhaseFailed, "Make master failed: "+err.Error())
+			return
+		}
+		e.updateStatus(ctx, nc, crd.PhaseMaster, "Master: clones are created from its snapshots")
+		return
+	}
+	order := crd.PhasesFor(nc)
 	if currentPhase == crd.PhaseEmpty {
 		// A new cluster (also one applied with oc, bypassing the API): fail
 		// before anything is created if the network settings cannot work.
@@ -321,19 +336,19 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 		// New clusters get the bastion load balancer; clusters created
 		// earlier keep their HAProxy pods (the marker is never added later).
 		nc.Status.LoadBalancer = crd.LoadBalancerBastion
-		currentPhase = crd.PhaseOrder[0]
+		currentPhase = order[0]
 	}
 
 	startIdx := 0
-	for i, p := range crd.PhaseOrder {
+	for i, p := range order {
 		if p == currentPhase {
 			startIdx = i
 			break
 		}
 	}
 
-	for i := startIdx; i < len(crd.PhaseOrder); i++ {
-		phase := crd.PhaseOrder[i]
+	for i := startIdx; i < len(order); i++ {
+		phase := order[i]
 		phaseLog := log.WithPhase(string(phase))
 
 		if err := ctx.Err(); err != nil {

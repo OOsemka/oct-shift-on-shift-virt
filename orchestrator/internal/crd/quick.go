@@ -67,6 +67,9 @@ type QuickOverrides struct {
 	// reach the console and API through host-cluster routes instead of
 	// external DNS records. Quick clusters always use pool addresses.
 	HostRoutes *bool `json:"hostRoutes,omitempty"`
+	// Master clones the cluster from this master (Express) instead of
+	// installing it; applied by the API (it needs the master's spec).
+	Master string `json:"master,omitempty"`
 }
 
 var linuxUserRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
