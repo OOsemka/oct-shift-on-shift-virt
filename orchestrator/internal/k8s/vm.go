@@ -38,6 +38,51 @@ type VMCreateParams struct {
 	StorageClassName string
 	MACAddress       string
 	UDNName          string
+	// NestedVirt passes the host's hardware virtualization (AMD svm or
+	// Intel vmx) through to the guest, for clusters that run OpenShift
+	// Virtualization themselves.
+	NestedVirt bool
+}
+
+// spreadAffinity prefers a different host node for each VM of the same
+// cluster and role: two masters on one host lose etcd quorum with that host.
+// Preferred, not required, so clusters still fit on small host clusters.
+func spreadAffinity(clusterName, role string) map[string]interface{} {
+	return map[string]interface{}{
+		"podAntiAffinity": map[string]interface{}{
+			"preferredDuringSchedulingIgnoredDuringExecution": []interface{}{
+				map[string]interface{}{
+					"weight": int64(100),
+					"podAffinityTerm": map[string]interface{}{
+						"topologyKey": "kubernetes.io/hostname",
+						"labelSelector": map[string]interface{}{
+							"matchLabels": map[string]interface{}{
+								"oct-shift-on-shift-virt/cluster": clusterName,
+								"oct-shift-on-shift-virt/role":    role,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// vmCPU is the VM's domain.cpu. KubeVirt's host-model CPU disables svm/vmx
+// (seen on AMD EPYC hosts with kvm_amd nested=1), so nested clusters got
+// OpenShift Virtualization but no /dev/kvm. Both flags are "optional":
+// libvirt enables the one the host has (svm -> require on AMD, vmx disabled)
+// without vendor detection or a node selector, so live migration between
+// equal hosts keeps working.
+func vmCPU(params VMCreateParams) map[string]interface{} {
+	cpu := map[string]interface{}{"cores": int64(params.CPUCores)}
+	if params.NestedVirt {
+		cpu["features"] = []interface{}{
+			map[string]interface{}{"name": "svm", "policy": "optional"},
+			map[string]interface{}{"name": "vmx", "policy": "optional"},
+		}
+	}
+	return cpu
 }
 
 func (c *Client) CreateVM(ctx context.Context, params VMCreateParams) (string, error) {
@@ -64,12 +109,15 @@ func (c *Client) CreateVM(ctx context.Context, params VMCreateParams) (string, e
 					},
 					"spec": map[string]interface{}{
 						"domain": map[string]interface{}{
-							"cpu": map[string]interface{}{
-								"cores": int64(params.CPUCores),
-							},
+							"cpu": vmCPU(params),
 							"memory": map[string]interface{}{
 								"guest": fmt.Sprintf("%dGi", params.MemoryGi),
 							},
+							// IO threads take disk I/O off the vCPU threads;
+							// etcd on the root disk is fsync-latency bound.
+							// No blockMultiQueue: KubeVirt makes one queue per
+							// vCPU and one dedicated thread serves them all.
+							"ioThreadsPolicy": "shared",
 							"devices": map[string]interface{}{
 								"disks": []interface{}{
 									map[string]interface{}{
@@ -77,9 +125,19 @@ func (c *Client) CreateVM(ctx context.Context, params VMCreateParams) (string, e
 										"disk": map[string]interface{}{
 											"bus": "virtio",
 										},
-										"bootOrder": int64(1),
+										"bootOrder":         int64(1),
+										"dedicatedIOThread": true,
 									},
 								},
+								// Entropy for the TLS-heavy first boot.
+								"rng": map[string]interface{}{},
+								// KubeVirt never inflates the balloon; it is
+								// only an extra device.
+								"autoattachMemBalloon": false,
+								// No networkInterfaceMultiqueue: one queue per
+								// vCPU, and with CPU overcommit (requests are a
+								// fraction of the cores) the extra vhost workers
+								// cause drops rather than throughput.
 								"interfaces": []interface{}{
 									makePrimaryInterface(params.MACAddress),
 								},
@@ -91,6 +149,12 @@ func (c *Client) CreateVM(ctx context.Context, params VMCreateParams) (string, e
 								"pod":  map[string]interface{}{},
 							},
 						},
+						// Migrate on host drains once the VM is migratable
+						// (after the post-install restart ejects the ISO);
+						// before that, behave as None instead of blocking the
+						// drain, which a cluster-wide LiveMigrate default does.
+						"evictionStrategy": "LiveMigrateIfPossible",
+						"affinity":         spreadAffinity(params.ClusterName, params.Role),
 						"volumes": []interface{}{
 							map[string]interface{}{
 								"name": "rootdisk",

@@ -318,6 +318,7 @@ func (s *StepExecutor) createVMs(ctx context.Context, nc *crd.NestedCluster) err
 			StorageClassName: nc.Spec.StorageClassName,
 			MACAddress:       mac,
 			UDNName:          nc.Spec.ClusterName,
+			NestedVirt:       nc.Spec.Virtualization.Enabled,
 		})
 		if err != nil {
 			return fmt.Errorf("creating VM %s: %w", node.Name, err)

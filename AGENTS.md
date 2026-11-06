@@ -53,6 +53,17 @@ Each phase is idempotent; `.status.phase` is the resume point after an orchestra
 | **ConfigureStorage** (opt-in) | Nested storage — see below. Non-fatal: result on condition `StorageReady`. |
 | **ConfigureVirtualization** (opt-in) | Installs OpenShift Virtualization in the nested cluster, patches the `kubevirt-csi` StorageProfile. Non-fatal: condition `VirtualizationReady`. |
 
+## Node VM spec (`k8s.CreateVM`)
+
+Tuned for nested OpenShift; `TestCreateVMNestedOpenShiftTuning` guards it.
+
+- **Spread:** preferred pod anti-affinity per host (`kubernetes.io/hostname`) on `cluster` + `role` labels: two masters on one host lose etcd quorum with it. Preferred so small host clusters still fit.
+- **Disk:** `ioThreadsPolicy: shared` + `dedicatedIOThread` on the root disk (etcd is fsync-latency bound). No `blockMultiQueue`.
+- **No `networkInterfaceMultiqueue`:** KubeVirt creates one queue per vCPU with no cap; with CPU overcommit (requests are a fraction of the cores, `cpuAllocationRatio`) the extra vhost workers cause drops rather than throughput.
+- `rng: {}`, `autoattachMemBalloon: false`.
+- **`evictionStrategy: LiveMigrateIfPossible`:** a host drain migrates masters once they are migratable (after the post-install restart) and does not hang on them before (a cluster-wide `LiveMigrate` default would).
+- **Nested virtualization** (`spec.virtualization`): `cpu.features` svm and vmx, both `optional`. KubeVirt's host-model CPU disables svm even on hosts with `kvm_amd nested=1`, so nested clusters got OpenShift Virtualization without `/dev/kvm`. libvirt turns the flag the host has into `require` and disables the other; no vendor detection, no node selector. ConfigureVirtualization reports `VirtualizationReady=True` only once a nested node advertises `devices.kubevirt.io/kvm`. Existing VMs are not changed: add the features to the VM and restart it, one master at a time.
+
 ## Network self-test (condition `NetworkReady`)
 
 End of PostInstall, every cluster, non-fatal (`network_selftest.go`, `manifests/network/selftest-network.sh`, run by `runScriptJob` in the cluster namespace with the shared `kubevirtcsi/lib.sh`). Checks: all nodes Ready; network operator Available and not Degraded; a client pod reaches a server pod on another schedulable node; a service created during the test resolves by name and answers (this is what catches cluster DNS that stopped following the API); `kubernetes.default.svc/readyz` from a pod. Test pods use `network-tools` from the nested release payload (restricted pod security). Why: the installer's wait-for only needs every operator Available, and a Cilium test cluster reached Ready that way while new services never resolved. To re-run on a live cluster, patch `.status.phase` to `PostInstall`.
