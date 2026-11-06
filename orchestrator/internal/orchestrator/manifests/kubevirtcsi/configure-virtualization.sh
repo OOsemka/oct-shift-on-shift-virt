@@ -37,4 +37,13 @@ print(json.dumps({"spec": spec}))')
 $N patch storageprofile kubevirt-csi --type=merge -p "$patch" >/dev/null
 $N annotate storageclass kubevirt-csi --overwrite storageclass.kubevirt.io/is-default-virt-class=true >/dev/null
 echo "OK StorageProfile kubevirt-csi set to $NESTED_CPS; kubevirt-csi is the default virtualization class"
+# OpenShift Virtualization installs without hardware virtualization but its VMs
+# cannot start, so VirtualizationReady waits for /dev/kvm on a nested node
+# (virt-handler advertises devices.kubevirt.io/kvm once it runs). Without it
+# the host did not pass svm/vmx through: clusters created before the VM spec
+# asked for them, or a host with nested virtualization off in kvm_amd/kvm_intel.
+kvm_nodes() { $N get nodes -o jsonpath='{range .items[*]}{.status.allocatable.devices\.kubevirt\.io/kvm}{"\n"}{end}' | grep -c -v -E '^0?$'; }
+kvm_ok() { [ "$(kvm_nodes)" -gt 0 ]; }
+poll 600 kvm_ok || fatal "OpenShift Virtualization is installed but no nested node offers /dev/kvm, so VMs cannot start. The nested VMs need the host CPU's svm/vmx flag (spec.domain.cpu.features) and nested virtualization enabled on the host's KVM module"
+echo "OK /dev/kvm on $(kvm_nodes) nested node(s)"
 echo "VIRT_OK"
