@@ -27,6 +27,9 @@ spec:
         - name: OCP Version
           type: string
           jsonPath: .spec.ocpVersion
+        - name: Release
+          type: string
+          jsonPath: .status.releaseVersion
         - name: Topology
           type: string
           jsonPath: .spec.topology
@@ -334,6 +337,15 @@ spec:
                 hostAPIURL:
                   type: string
                   description: Nested API through a host Route (externalAccess.hostRoutes).
+                releaseVersion:
+                  type: string
+                  description: OpenShift release spec.ocpVersion resolved to at GenerateISO (e.g. 4.22.22 for "4.22").
+                releaseImage:
+                  type: string
+                  description: Release payload being installed, pinned by digest.
+                installerImage:
+                  type: string
+                  description: The payload's installer image, used by the wait-for Jobs.
                 loadBalancer:
                   type: string
                   description: '"bastion" when the API/Ingress load balancer runs on the bastion VM; empty for clusters that use HAProxy pods.'

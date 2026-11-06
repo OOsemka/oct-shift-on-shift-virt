@@ -7,12 +7,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/cni"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/crd"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/installer"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/k8s"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/logging"
+	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/release"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -196,6 +198,15 @@ func (s *Server) createNestedCluster(ctx context.Context, spec crd.NestedCluster
 	}
 	if code, err := s.checkHostNetwork(ctx, &spec); err != nil {
 		return nil, code, err
+	}
+	// The version must be one the tool supports and must exist now
+	// (GenerateISO resolves it again and pins the result); otherwise it
+	// would only fail an hour into the install.
+	if err := release.Supported(spec.OCPVersion); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	if _, err := release.Default.Resolve(ctx, spec.OCPVersion); err != nil {
+		return nil, http.StatusBadRequest, err
 	}
 	if code, err := s.checkAddressAvailability(ctx, &spec); err != nil {
 		return nil, code, err
@@ -490,16 +501,18 @@ func (s *Server) listNADs(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{"items": items})
 }
 
+// listOCPVersions returns the supported minors (release.SupportedMinors,
+// newest first) and, best effort, the release each one installs today:
+// {"items":["5.0","4.22"],"latest":{"5.0":"5.0.1","4.22":"4.22.22"}}.
 func (s *Server) listOCPVersions(w http.ResponseWriter, r *http.Request) {
-	versions := []string{
-		"4.22",
-		"4.21",
-		"4.20",
-		"4.19",
-		"4.18",
-	}
+	versions := release.SupportedMinors
 
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{"items": versions})
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"items":  versions,
+		"latest": release.Default.Latest(ctx, versions),
+	})
 }
 
 // listNetworkPlugins returns the network plugin choices (OVN-Kubernetes,

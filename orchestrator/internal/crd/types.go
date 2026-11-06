@@ -246,8 +246,17 @@ type NestedClusterStatus struct {
 	LoadBalancer string `json:"loadBalancer,omitempty"`
 	// HostConsoleURL / HostAPIURL: the nested console and API through host
 	// Routes (externalAccess.hostRoutes); set by PublishRoutes.
-	HostConsoleURL string             `json:"hostConsoleURL,omitempty"`
-	HostAPIURL     string             `json:"hostAPIURL,omitempty"`
+	HostConsoleURL string `json:"hostConsoleURL,omitempty"`
+	HostAPIURL     string `json:"hostAPIURL,omitempty"`
+	// ReleaseVersion/ReleaseImage: the OpenShift release spec.ocpVersion
+	// resolved to at GenerateISO ("4.22" -> 4.22.22, payload by digest).
+	// Recorded once, so a re-run phase installs the same release.
+	ReleaseVersion string `json:"releaseVersion,omitempty"`
+	ReleaseImage   string `json:"releaseImage,omitempty"`
+	// InstallerImage is the payload's installer image; the wait-for Jobs run
+	// it (the cluster namespace cannot download a matching binary). Empty
+	// for clusters installed before: they keep the helper image.
+	InstallerImage string             `json:"installerImage,omitempty"`
 	Message        string             `json:"message,omitempty"`
 	StartedAt      *metav1.Time       `json:"startedAt,omitempty"`
 	CompletedAt    *metav1.Time       `json:"completedAt,omitempty"`

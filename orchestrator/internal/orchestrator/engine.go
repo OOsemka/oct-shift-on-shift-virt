@@ -10,6 +10,7 @@ import (
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/crd"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/k8s"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/logging"
+	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/release"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -298,6 +299,11 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 		// before anything is created if the network settings cannot work.
 		// Existing clusters are not re-checked so an upgrade never fails them.
 		if err := nc.Spec.ValidateNetwork(); err != nil {
+			log.Error("refusing to install", "error", err.Error())
+			e.updateStatus(ctx, nc, crd.PhaseFailed, err.Error())
+			return
+		}
+		if err := release.Supported(nc.Spec.OCPVersion); err != nil {
 			log.Error("refusing to install", "error", err.Error())
 			e.updateStatus(ctx, nc, crd.PhaseFailed, err.Error())
 			return

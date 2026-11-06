@@ -63,6 +63,10 @@ func TestBuildQuickSpecProblems(t *testing.T) {
 	if _, p := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", MasterDiskGi: 100}, true, nil, nil, nil); !strings.Contains(strings.Join(p, ";"), "below the minimum") {
 		t.Errorf("undersized nodes not reported: %v", p)
 	}
+	// Lab defaults saved before only 5.0 and 4.22 were offered.
+	if _, p := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "x.test", OCPVersion: "4.20"}, true, nil, nil, nil); !strings.Contains(strings.Join(p, ";"), "not supported") {
+		t.Errorf("unsupported lab default version not reported: %v", p)
+	}
 	if SuggestQuickName([]string{"quick-1", "quick-3"}) != "quick-2" {
 		t.Error("SuggestQuickName must take the lowest free number")
 	}
