@@ -3,8 +3,10 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"regexp"
@@ -2237,17 +2239,14 @@ cp /state/kubeadmin-password /tmp/work/config/auth/kubeadmin-password
 
 openshift-install agent wait-for install-complete --dir=/tmp/work/config --log-level=info
 
-# xtrace OFF for the dump: with set -x bash echoes '+ echo "=== KUBECONFIG ==="'
-# to the same log, postInstall's Index() matches the marker inside THAT trace
-# line, and the kubeconfig it stores starts with a stray quote + "+ cat ..."
-# — invalid YAML, unusable secret (run 15/16).
+# Credentials are NOT printed: postInstall reads them from the installer
+# state Secret. Never echo secrets into a pod log. Only the CA bundle (public
+# certificates; wait-for adds the ingress CA to it) is printed, so the stored
+# kubeconfig matches what the installer produced.
 set +x
-echo "=== KUBECONFIG ==="
-cat /tmp/work/config/auth/kubeconfig
-echo "=== KUBEADMIN ==="
-cat /tmp/work/config/auth/kubeadmin-password
-echo ""
-echo "=== DONE ==="
+echo "=== CA ==="
+sed -n 's/^ *certificate-authority-data: *//p' /tmp/work/config/auth/kubeconfig | head -1
+echo "=== CA END ==="
 `},
 							Env: []corev1.EnvVar{
 								{Name: "HOME", Value: "/tmp"},
@@ -2298,7 +2297,85 @@ echo "=== DONE ==="
 	return nil
 }
 
-func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) error {
+// credentialsFromInstallerState reads the admin kubeconfig and kubeadmin
+// password from <cluster>-installer-state (written by GenerateISO).
+func (s *StepExecutor) credentialsFromInstallerState(ctx context.Context, nc *crd.NestedCluster) (string, string) {
+	sec, err := s.client.Clientset.CoreV1().Secrets(nc.Spec.Namespace).Get(ctx, nc.Spec.ClusterName+"-installer-state", metav1.GetOptions{})
+	if err != nil {
+		return "", ""
+	}
+	kc := strings.TrimSpace(string(sec.Data["kubeconfig"]))
+	pw := strings.TrimSpace(string(sec.Data["kubeadmin-password"]))
+	if !strings.HasPrefix(kc, "apiVersion:") || pw == "" || strings.ContainsAny(pw, " \n") {
+		return "", ""
+	}
+	return kc + "\n", pw
+}
+
+// waitInstallCABundle returns the base64 CA bundle the wait-install Job
+// printed (public certificates only), or "" if absent or not certificates.
+func (s *StepExecutor) waitInstallCABundle(ctx context.Context, nc *crd.NestedCluster) string {
+	pods, err := s.client.Clientset.CoreV1().Pods(nc.Spec.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "oct-shift-on-shift-virt/cluster=" + nc.Spec.ClusterName + ",oct-shift-on-shift-virt/component=wait-install",
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return ""
+	}
+	newest := pods.Items[0]
+	for _, p := range pods.Items[1:] {
+		if p.CreationTimestamp.After(newest.CreationTimestamp.Time) {
+			newest = p
+		}
+	}
+	raw, err := s.client.Clientset.CoreV1().Pods(nc.Spec.Namespace).GetLogs(newest.Name, &corev1.PodLogOptions{}).Do(ctx).Raw()
+	if err != nil {
+		return ""
+	}
+	return parseCABundle(sectionBetween(string(raw), "=== CA ===", "=== CA END ==="))
+}
+
+// parseCABundle accepts only base64 that decodes to PEM CERTIFICATE blocks.
+func parseCABundle(b64 string) string {
+	b64 = strings.TrimSpace(b64)
+	der, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil || len(der) == 0 {
+		return ""
+	}
+	rest := der
+	n := 0
+	for {
+		var blk *pem.Block
+		blk, rest = pem.Decode(rest)
+		if blk == nil {
+			break
+		}
+		if blk.Type != "CERTIFICATE" {
+			return ""
+		}
+		n++
+	}
+	if n == 0 || len(strings.TrimSpace(string(rest))) > 0 {
+		return ""
+	}
+	return b64
+}
+
+// withCABundle replaces the kubeconfig's certificate-authority-data value.
+func withCABundle(kubeconfig, ca string) string {
+	lines := strings.Split(kubeconfig, "\n")
+	for i, l := range lines {
+		t := strings.TrimLeft(l, " ")
+		if strings.HasPrefix(t, "certificate-authority-data:") {
+			lines[i] = l[:len(l)-len(t)] + "certificate-authority-data: " + ca
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// credentialsFromWaitInstallLog is the legacy path: wait-install jobs from
+// images before 0.4.1 printed the credentials between markers in their log.
+func (s *StepExecutor) credentialsFromWaitInstallLog(ctx context.Context, nc *crd.NestedCluster) (string, string, error) {
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("postinstall")
 	clusterNs := nc.Spec.Namespace
 
@@ -2323,7 +2400,7 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 		}
 	}
 	if err != nil || len(pods.Items) == 0 {
-		return fmt.Errorf("no pods found for wait-install (selector %s, job-name fallback also empty)", labelSelector)
+		return "", "", fmt.Errorf("no pods found for wait-install (selector %s, job-name fallback also empty)", labelSelector)
 	}
 	// Newest attempt wins (a retried job -r2 carries the authoritative output).
 	newest := pods.Items[0]
@@ -2335,7 +2412,7 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 
 	logBytes, err := s.client.Clientset.CoreV1().Pods(clusterNs).GetLogs(newest.Name, &corev1.PodLogOptions{}).Do(ctx).Raw()
 	if err != nil {
-		return fmt.Errorf("getting wait-install job logs: %w", err)
+		return "", "", fmt.Errorf("getting wait-install job logs: %w", err)
 	}
 
 	logStr := string(logBytes)
@@ -2352,12 +2429,38 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 		kubeconfigData = kubeconfigData[i:]
 	}
 	if kubeconfigData != "" && !strings.HasPrefix(kubeconfigData, "apiVersion:") {
-		return fmt.Errorf("wait-install log did not yield a parseable kubeconfig (got %.40q)", kubeconfigData)
+		return "", "", fmt.Errorf("wait-install log did not yield a parseable kubeconfig")
 	}
 	if kubeadminData != "" {
 		// the password is a single line; trace remnants would add more
 		lines := strings.Fields(kubeadminData)
 		kubeadminData = lines[len(lines)-1]
+	}
+	return kubeconfigData, kubeadminData, nil
+}
+
+func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) error {
+	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("postinstall")
+	clusterNs := nc.Spec.Namespace
+
+	// The admin kubeconfig and kubeadmin password come from the installer
+	// state Secret that GenerateISO wrote (openshift-install wait-for does not
+	// change them). They used to be printed by the wait-install Job and parsed
+	// out of its log, which left both readable by anyone with pods/log in the
+	// namespace and in any log forwarding. The log path stays only as a
+	// fallback for jobs started by older images.
+	kubeconfigData, kubeadminData := s.credentialsFromInstallerState(ctx, nc)
+	if kubeconfigData != "" {
+		if ca := s.waitInstallCABundle(ctx, nc); ca != "" {
+			kubeconfigData = withCABundle(kubeconfigData, ca)
+		}
+	}
+	if kubeconfigData == "" || kubeadminData == "" {
+		k, a, err := s.credentialsFromWaitInstallLog(ctx, nc)
+		if err != nil {
+			return err
+		}
+		kubeconfigData, kubeadminData = k, a
 	}
 
 	if kubeconfigData != "" {
