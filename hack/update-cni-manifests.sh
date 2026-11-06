@@ -8,12 +8,19 @@
 #
 #   Calico: the upstream OpenShift bundle (ocp.tgz) of the release, verbatim,
 #           except the two files the orchestrator renders per cluster
-#           (Installation CR, kubernetes-services-endpoint ConfigMap).
+#           (Installation CR, kubernetes-services-endpoint ConfigMap), the
+#           operator DNS pin below, and images pinned by digest.
 #   Cilium: `helm template` of the upstream chart with the OpenShift settings
 #           below. Per-cluster values are placeholders (__SOS_*__) that the
 #           orchestrator substitutes.
 #
-# Requires: curl, tar, helm.
+# Every image is pinned by digest (tag@sha256:...): these are third-party
+# images running privileged in the nested network stack, and a re-pushed tag
+# must not silently change what new clusters run. The chart already pins
+# Cilium; Calico's bundle uses tags, so pin_images resolves them here. The
+# digest is the multi-arch index digest when the image has one.
+#
+# Requires: curl, tar, helm, oc (for `oc image info`).
 set -euo pipefail
 
 CALICO_VERSIONS=(v3.33.0 v3.32.3)
@@ -24,6 +31,27 @@ OUT=$ROOT/orchestrator/internal/cni/manifests
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+
+# digest_of IMAGE:TAG -> sha256:... (manifest list digest if multi-arch)
+digest_of() {
+  oc image info "$1" -o json --filter-by-os=linux/amd64 2>/dev/null \
+    | python3 -c 'import json,sys; j=json.load(sys.stdin); print(j.get("listDigest") or j["digest"])'
+}
+
+# pin_images FILE: rewrite every tag-only `image:` to tag@digest, then fail
+# if any image in the file is still unpinned.
+pin_images() {
+  local f=$1 ref d
+  for ref in $(sed -nE 's/^[[:space:]]*(- )?image:[[:space:]]*"?([^"@[:space:]]+)"?[[:space:]]*$/\2/p' "$f" | sort -u); do
+    d=$(digest_of "$ref")
+    case "$d" in sha256:*) ;; *) echo "cannot resolve a digest for $ref" >&2; exit 1;; esac
+    sed -i.bak -E "s#(image:[[:space:]]*\"?)${ref}(\"?[[:space:]]*)\$#\1${ref}@${d}\2#" "$f" && rm -f "$f.bak"
+    echo "  pinned $ref@$d"
+  done
+  if grep -E '^[[:space:]]*(- )?image:' "$f" | grep -qv '@sha256:'; then
+    echo "unpinned image left in $f:" >&2; grep -E 'image:' "$f" | grep -v '@sha256:' >&2; exit 1
+  fi
+}
 
 # Only the version directories: manifests/<plugin>/*.yaml.tmpl are ours.
 rm -rf "$OUT"/calico/v* "$OUT"/cilium/v*
@@ -48,6 +76,7 @@ for v in "${CALICO_VERSIONS[@]}"; do
       dnsConfig:\
         nameservers:\
           - __SOS_DNS_IP__|' "$op" && rm -f "$op.bak"
+  for f in "$dir"/*.yaml; do pin_images "$f"; done
   echo "calico $v: $(ls "$dir" | wc -l | tr -d ' ') files"
 done
 
@@ -87,5 +116,6 @@ for v in "${CILIUM_VERSIONS[@]}"; do
       --set envoy.enabled=false \
       --set hubble.enabled=false
   } > "$dir/cilium.yaml"
+  pin_images "$dir/cilium.yaml"   # already pinned by the chart; asserts it
   echo "cilium v$v: $(wc -c < "$dir/cilium.yaml" | tr -d ' ') bytes"
 done

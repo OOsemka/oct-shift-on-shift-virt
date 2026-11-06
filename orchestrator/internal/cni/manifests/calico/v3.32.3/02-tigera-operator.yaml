@@ -35,7 +35,7 @@ spec:
           - __SOS_DNS_IP__
       containers:
         - name: tigera-operator
-          image: quay.io/tigera/operator:v1.42.7
+          image: quay.io/tigera/operator:v1.42.7@sha256:0c7765b21e55d3167bfd48713939866a705c15aef0921d30f95b3a76fbc2e6a3
           imagePullPolicy: IfNotPresent
           command:
             - operator
@@ -76,7 +76,7 @@ spec:
       initContainers:
         # Install CRDs first, so that APIs exist for calicoctl to use.
         - name: bootstrap-crds
-          image: quay.io/tigera/operator:v1.42.7
+          image: quay.io/tigera/operator:v1.42.7@sha256:0c7765b21e55d3167bfd48713939866a705c15aef0921d30f95b3a76fbc2e6a3
           command:
             - operator
           args:
@@ -87,7 +87,7 @@ spec:
                 optional: true
         # Install any v3 API resources provided in the calico-resources ConfigMap.
         - name: create-initial-resources
-          image: quay.io/calico/ctl:v3.32.3
+          image: quay.io/calico/ctl:v3.32.3@sha256:e57954691745cb278d6e709d30a7ead6a3400c9e19271913804324ef41178640
           env:
             - name: DATASTORE_TYPE
               value: kubernetes

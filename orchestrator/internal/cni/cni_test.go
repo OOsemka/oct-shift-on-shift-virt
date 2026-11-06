@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"io/fs"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -196,3 +198,33 @@ func stripComments(doc []byte) []byte {
 }
 
 func bufioReader(b []byte) *bufio.Reader { return bufio.NewReader(bytes.NewReader(b)) }
+
+// Third-party images run privileged in the nested network stack: a re-pushed
+// tag must not change what new clusters run. hack/update-cni-manifests.sh pins
+// every image by digest; this keeps it that way.
+func TestEveryImagePinnedByDigest(t *testing.T) {
+	re := regexp.MustCompile(`(?m)^\s*(?:- )?image:\s*"?([^"\s]+)"?\s*$`)
+	seen := 0
+	err := fs.WalkDir(manifestsFS, "manifests", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(manifestsFS, path)
+		if err != nil {
+			return err
+		}
+		for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+			seen++
+			if !strings.Contains(m[1], "@sha256:") {
+				t.Errorf("%s: image %q is not pinned by digest (run hack/update-cni-manifests.sh)", path, m[1])
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen == 0 {
+		t.Fatal("no image: lines found; the pattern no longer matches the manifests")
+	}
+}
