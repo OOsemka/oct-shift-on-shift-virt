@@ -20,6 +20,7 @@ import (
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/installer"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/k8s"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/logging"
+	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/release"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -1279,6 +1280,21 @@ func (s *StepExecutor) generateISO(ctx context.Context, nc *crd.NestedCluster) e
 		return fmt.Errorf("getting pull secret: %w", err)
 	}
 
+	// The release to install: spec.ocpVersion ("4.22" = newest 4.22.z)
+	// resolved once and pinned by digest in the status, so a re-run of this
+	// phase installs the same release even after a newer one ships.
+	if nc.Status.ReleaseImage == "" {
+		rel, err := release.Default.Resolve(ctx, nc.Spec.OCPVersion)
+		if err != nil {
+			return fmt.Errorf("resolving OpenShift %q: %w", nc.Spec.OCPVersion, err)
+		}
+		nc.Status.ReleaseVersion = rel.Version
+		nc.Status.ReleaseImage = rel.Image
+		s.updateCRStatus(ctx, nc)
+	}
+	log.Info("installing OpenShift release", "requested", nc.Spec.OCPVersion,
+		"version", nc.Status.ReleaseVersion, "image", nc.Status.ReleaseImage)
+
 	sshKeyName := nc.Spec.SSHKeyRef.Name
 	if sshKeyName == "" && nc.Spec.SSHKey != "" {
 		sshKeyName = nc.Spec.ClusterName + "-ssh-key"
@@ -1336,6 +1352,9 @@ func (s *StepExecutor) generateISO(ctx context.Context, nc *crd.NestedCluster) e
 	configData := map[string][]byte{
 		"install-config.yaml": []byte(installConfig),
 		"agent-config.yaml":   []byte(agentConfig),
+		// For `oc adm release extract`; the same secret is already inside
+		// install-config.yaml in this Secret.
+		"pull-secret.json": pullSecret,
 	}
 	// Calico/Cilium: the plugin's manifests ride in the same Secret
 	// (cni-*.yaml keys, ~50 KB) and the Job copies them into openshift/,
@@ -1399,9 +1418,27 @@ func (s *StepExecutor) generateISO(ctx context.Context, nc *crd.NestedCluster) e
 								// how many hosts sos-installer-args waits for
 								// before patching (see the ISO surgery below).
 								{Name: "HOST_COUNT", Value: strconv.Itoa(len(nc.Status.Nodes))},
+								{Name: "RELEASE_IMAGE", Value: nc.Status.ReleaseImage},
 							},
 							Command: []string{"/bin/bash", "-c"},
 							Args: []string{`set -ex
+# openshift-install from the release being installed: extracted binaries
+# have that payload pinned (by digest), so ISO, agent and release match. The
+# binary baked into this image is only the fallback for an empty RELEASE_IMAGE.
+if [ -n "${RELEASE_IMAGE:-}" ]; then
+  mkdir -p /tmp/bin
+  n=0
+  until oc adm release extract -a /secrets/pull-secret.json --command=openshift-install --to=/tmp/bin "$RELEASE_IMAGE"; do
+    n=$((n+1)); [ "$n" -ge 3 ] && { echo "cannot extract openshift-install from $RELEASE_IMAGE"; exit 43; }
+    sleep 30
+  done
+  export PATH=/tmp/bin:$PATH
+  # The wait-for Jobs run this image: the cluster namespace has no internet.
+  rm -f /output/installer-image
+  oc adm release info -a /secrets/pull-secret.json --image-for=installer "$RELEASE_IMAGE" > /output/installer-image.tmp
+  mv /output/installer-image.tmp /output/installer-image
+fi
+openshift-install version
 mkdir -p /output/config
 cp /secrets/install-config.yaml /output/config/
 cp /secrets/agent-config.yaml /output/config/
@@ -1668,6 +1705,19 @@ echo "ISO generation complete"
 	kubeadminData, err := s.readFileFromPVC(ctx, crNs, pvcName, "/data/config/auth/kubeadmin-password")
 	if err != nil {
 		return fmt.Errorf("reading kubeadmin password from PVC: %w", err)
+	}
+	if nc.Status.ReleaseImage != "" {
+		raw, err := s.readFileFromPVC(ctx, crNs, pvcName, "/data/installer-image")
+		if err != nil {
+			return fmt.Errorf("reading the release's installer image from PVC: %w", err)
+		}
+		img, err := parseInstallerImage(raw)
+		if err != nil {
+			return err
+		}
+		nc.Status.InstallerImage = img
+		s.updateCRStatus(ctx, nc)
+		log.Info("wait-for Jobs will use the release's installer image", "image", img)
 	}
 	if err := s.client.CreateOpaqueSecret(ctx, clusterNs, nc.Spec.ClusterName+"-installer-state", map[string][]byte{
 		".openshift_install_state.json": stateData,
@@ -2046,6 +2096,7 @@ func (s *StepExecutor) detectRendezvousNode(ctx context.Context, nc *crd.NestedC
 }
 
 func (s *StepExecutor) waitBootstrap(ctx context.Context, nc *crd.NestedCluster) error {
+	waitImage, waitPull, waitPullSecrets := waitForImage(nc)
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("installer")
 	clusterNs := nc.Spec.Namespace
 
@@ -2097,8 +2148,8 @@ func (s *StepExecutor) waitBootstrap(ctx context.Context, nc *crd.NestedCluster)
 					Containers: []corev1.Container{
 						{
 							Name:            "wait",
-							Image:           "quay.io/cjanisze/sos-installer-helper:4.22",
-							ImagePullPolicy: corev1.PullAlways,
+							Image:           waitImage,
+							ImagePullPolicy: waitPull,
 							Command:         []string{"/bin/bash", "-c"},
 							Args: []string{`set -ex
 mkdir -p /tmp/work/config/auth
@@ -2117,6 +2168,7 @@ echo "Bootstrap complete"
 							},
 						},
 					},
+					ImagePullSecrets: waitPullSecrets,
 					Volumes: []corev1.Volume{
 						{
 							Name: "state",
@@ -2192,6 +2244,7 @@ func applyUDNDNS(job *batchv1.Job, nc *crd.NestedCluster) {
 }
 
 func (s *StepExecutor) waitInstall(ctx context.Context, nc *crd.NestedCluster) error {
+	waitImage, waitPull, waitPullSecrets := waitForImage(nc)
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("installer")
 	clusterNs := nc.Spec.Namespace
 
@@ -2230,8 +2283,8 @@ func (s *StepExecutor) waitInstall(ctx context.Context, nc *crd.NestedCluster) e
 					Containers: []corev1.Container{
 						{
 							Name:            "wait",
-							Image:           "quay.io/cjanisze/sos-installer-helper:4.22",
-							ImagePullPolicy: corev1.PullAlways,
+							Image:           waitImage,
+							ImagePullPolicy: waitPull,
 							Command:         []string{"/bin/bash", "-c"},
 							Args: []string{`set -ex
 mkdir -p /tmp/work/config/auth
@@ -2258,6 +2311,7 @@ echo "=== CA END ==="
 							},
 						},
 					},
+					ImagePullSecrets: waitPullSecrets,
 					Volumes: []corev1.Volume{
 						{
 							Name: "state",
@@ -2533,6 +2587,31 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 		"console", nc.Status.ConsoleURL)
 
 	return nil
+}
+
+// waitForImage is the image of the wait-for Jobs: the release's own
+// installer image (pulled with the cluster's pull secret; the binary must
+// match the release that GenerateISO used), or the helper image for clusters
+// whose ISO was generated before releases were resolved.
+func waitForImage(nc *crd.NestedCluster) (string, corev1.PullPolicy, []corev1.LocalObjectReference) {
+	if nc.Status.InstallerImage == "" {
+		return "quay.io/cjanisze/sos-installer-helper:4.22", corev1.PullAlways, nil
+	}
+	ps := nc.Spec.PullSecretRef.Name
+	if ps == "" {
+		ps = nc.Spec.ClusterName + "-pull-secret"
+	}
+	return nc.Status.InstallerImage, corev1.PullIfNotPresent, []corev1.LocalObjectReference{{Name: ps}}
+}
+
+// parseInstallerImage validates the `oc adm release info --image-for=installer`
+// output GenerateISO left on the PVC.
+func parseInstallerImage(raw []byte) (string, error) {
+	img := strings.TrimSpace(string(raw))
+	if img == "" || strings.ContainsAny(img, " \t\n") || !strings.Contains(img, "@sha256:") {
+		return "", fmt.Errorf("unexpected installer image from the release payload: %q", img)
+	}
+	return img, nil
 }
 
 func (s *StepExecutor) readFileFromPVC(ctx context.Context, namespace, pvcName, filePath string) ([]byte, error) {

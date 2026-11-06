@@ -49,7 +49,8 @@ const LabDefaultsTab: FC = () => {
   const [settings, setSettings] = useState<LabSettings>({});
   const [newPullSecret, setNewPullSecret] = useState('');
   const [sshKey, setSshKey] = useState('');
-  const [versions, setVersions] = useState<string[]>(['4.22', '4.21']);
+  const [versions, setVersions] = useState<string[]>(['5.0', '4.22', '4.21']);
+  const [latestReleases, setLatestReleases] = useState<Record<string, string>>({});
   const [pools, setPools] = useState<IPPoolItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>();
@@ -74,8 +75,9 @@ const LabDefaultsTab: FC = () => {
     load();
     fetchOCPVersions()
       .then((r) => {
-        const items = (r as { items?: string[] }).items;
+        const { items, latest } = r as { items?: string[]; latest?: Record<string, string> };
         if (items?.length) setVersions(items);
+        if (latest) setLatestReleases(latest);
       })
       .catch(() => undefined);
     fetchIPPools().then(setPools).catch(() => setPools([]));
@@ -216,7 +218,11 @@ const LabDefaultsTab: FC = () => {
           <FormSelect id="lab-version" value={settings.ocpVersion || ''} onChange={(_e, v) => update({ ocpVersion: v })}>
             <FormSelectOption value="" label={t('Select a version')} isDisabled />
             {versions.map((v) => (
-              <FormSelectOption key={v} value={v} label={v} />
+              <FormSelectOption
+                key={v}
+                value={v}
+                label={latestReleases[v] ? t('{{version}} (currently {{release}})', { version: v, release: latestReleases[v] }) : v}
+              />
             ))}
           </FormSelect>
         </FormGroup>

@@ -26,7 +26,7 @@ import { fetchOCPVersions } from '../../utils/api';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
-const FALLBACK_VERSIONS = ['4.22', '4.21', '4.20', '4.19', '4.18'];
+const FALLBACK_VERSIONS = ['5.0', '4.22', '4.21', '4.20', '4.19', '4.18'];
 
 type NamespaceKind = K8sResourceCommon & {
   metadata: { name: string; labels?: Record<string, string> };
@@ -40,6 +40,9 @@ interface Props {
 const ClusterBasicsStep: FC<Props> = ({ config, onChange }) => {
   const { t } = useTranslation(I18N);
   const [ocpVersions, setOcpVersions] = useState<string[]>(FALLBACK_VERSIONS);
+  // Release each version installs today ("4.22" -> "4.22.22"), when the
+  // orchestrator could reach the OpenShift update graph.
+  const [latestReleases, setLatestReleases] = useState<Record<string, string>>({});
   const [versionsLoading, setVersionsLoading] = useState(true);
   const [createNewNs, setCreateNewNs] = useState(false);
   const [nsFilter, setNsFilter] = useState('');
@@ -62,8 +65,9 @@ const ClusterBasicsStep: FC<Props> = ({ config, onChange }) => {
   useEffect(() => {
     fetchOCPVersions()
       .then((data: unknown) => {
-        const resp = data as { items?: string[] };
+        const resp = data as { items?: string[]; latest?: Record<string, string> };
         if (resp.items?.length) setOcpVersions(resp.items);
+        if (resp.latest) setLatestReleases(resp.latest);
       })
       .catch(() => {})
       .finally(() => setVersionsLoading(false));
@@ -197,10 +201,25 @@ const ClusterBasicsStep: FC<Props> = ({ config, onChange }) => {
           >
             <FormSelectOption key="" value="" label={t('Select the OpenShift version to deploy')} isDisabled />
             {ocpVersions.map((v) => (
-              <FormSelectOption key={v} value={v} label={`OpenShift ${v}`} />
+              <FormSelectOption
+                key={v}
+                value={v}
+                label={
+                  latestReleases[v]
+                    ? t('OpenShift {{version}} (currently {{release}})', { version: v, release: latestReleases[v] })
+                    : `OpenShift ${v}`
+                }
+              />
             ))}
           </FormSelect>
         )}
+        <FormHelperText>
+          <HelperText>
+            <HelperTextItem>
+              {t('Installs the newest release of the selected version available when the installation starts.')}
+            </HelperTextItem>
+          </HelperText>
+        </FormHelperText>
       </FormGroup>
     </Form>
   );

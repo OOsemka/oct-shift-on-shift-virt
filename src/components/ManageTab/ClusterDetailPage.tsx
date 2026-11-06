@@ -69,6 +69,8 @@ interface ClusterDetail {
   };
   status: {
     phase: string;
+    // Release spec.ocpVersion resolved to ("4.22" -> "4.22.22"), set at GenerateISO.
+    releaseVersion?: string;
     // "bastion" when the external addresses live on the bastion VM; empty
     // for older clusters, where they belong to the HAProxy pods.
     loadBalancer?: string;
@@ -411,6 +413,12 @@ const ClusterDetailPage: FC = () => {
                 <DescriptionListGroup>
                   <DescriptionListTerm>{t('Ingress Domain')}</DescriptionListTerm>
                   <DescriptionListDescription>{status.ingressDomain}</DescriptionListDescription>
+                </DescriptionListGroup>
+                <DescriptionListGroup>
+                  <DescriptionListTerm>{t('OpenShift version')}</DescriptionListTerm>
+                  <DescriptionListDescription>
+                    {status.releaseVersion || cluster.spec.ocpVersion}
+                  </DescriptionListDescription>
                 </DescriptionListGroup>
                 <DescriptionListGroup>
                   <DescriptionListTerm>{t('Network plugin')}</DescriptionListTerm>
