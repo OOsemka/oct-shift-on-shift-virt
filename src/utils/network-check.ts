@@ -8,7 +8,7 @@
  * internal VIPs typed in as external IPs, and settings changed in a later step
  * after an earlier step looked fine.
  */
-import { ClusterConfig } from '../components/InstallTab/types';
+import { ClusterConfig, HostNetwork, HostNodeAddress } from '../components/InstallTab/types';
 
 export type NetworkField =
   | 'cudnSubnet'
@@ -69,14 +69,73 @@ export function internalVIPs(cudnSubnet: string): { apiVIP: string; ingressVIP: 
   return { apiVIP: numToIp(c.base + API_VIP_OFFSET), ingressVIP: numToIp(c.base + INGRESS_VIP_OFFSET) };
 }
 
-/** Problems on the Network step. */
-export function networkProblems(net: ClusterConfig['network']): NetworkProblem[] {
+/**
+ * How the internal network collides with the host cluster's node network, or
+ * undefined. OVN-Kubernetes requires UDN subnets not to overlap the node
+ * network: on a host whose nodes were inside the default 10.100.0.0/16, pods
+ * and VMs on the cUDN had no internet and the install never started.
+ * Mirrors crd.CheckHostNetwork (orchestrator/internal/crd/hostnetwork.go).
+ */
+export function hostNetworkProblem(
+  cudnSubnet: string,
+  hostAddresses: HostNodeAddress[] | undefined,
+  suggestedSubnet?: string,
+): NetworkProblem | undefined {
+  const cudn = parseCidr(cudnSubnet);
+  if (!cudn || !hostAddresses?.length) return undefined;
+  const suggestion = suggestedSubnet && suggestedSubnet !== cudn.text ? suggestedSubnet : '';
+  for (const h of hostAddresses) {
+    const n = ipToNum(h.address);
+    if (n !== undefined && contains(cudn, n)) {
+      const values = { node: h.node, ip: h.address, suggestion };
+      return suggestion
+        ? {
+            field: 'cudnSubnet',
+            key: 'Contains host node {{node}} address {{ip}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access. Use a free range such as {{suggestion}}.',
+            values,
+          }
+        : {
+            field: 'cudnSubnet',
+            key: 'Contains host node {{node}} address {{ip}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access.',
+            values,
+          };
+    }
+  }
+  for (const h of hostAddresses) {
+    const sub = h.subnet ? parseCidr(h.subnet) : undefined;
+    if (sub && cudn.base < sub.base + sub.size && sub.base < cudn.base + cudn.size) {
+      const values = { node: h.node, cidr: sub.text, suggestion };
+      return suggestion
+        ? {
+            field: 'cudnSubnet',
+            key: 'Overlaps host node {{node}} network {{cidr}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access. Use a free range such as {{suggestion}}.',
+            values,
+          }
+        : {
+            field: 'cudnSubnet',
+            key: 'Overlaps host node {{node}} network {{cidr}}. The internal network must not overlap the host cluster node network, or the cluster has no internet access.',
+            values,
+          };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Problems on the Network step. hostNetwork comes from GET /api/v1/host-network;
+ * when it is unavailable the host overlap check is skipped here (the
+ * orchestrator still enforces it).
+ */
+export function networkProblems(net: ClusterConfig['network'], hostNetwork?: HostNetwork | null): NetworkProblem[] {
   const out: NetworkProblem[] = [];
   const cudn = parseCidr(net.cudnSubnet);
   if (!cudn) {
     out.push({ field: 'cudnSubnet', key: 'Enter an IPv4 CIDR such as 10.100.0.0/16.' });
   } else if (cudn.prefix > MAX_INTERNAL_PREFIX) {
     out.push({ field: 'cudnSubnet', key: 'The internal network must be a /24 or larger (for example /16).' });
+  } else {
+    const hostProblem = hostNetworkProblem(net.cudnSubnet, hostNetwork?.nodeAddresses, hostNetwork?.suggestedCudnSubnet);
+    if (hostProblem) out.push(hostProblem);
   }
   const pod = parseCidr(net.clusterNetworkCIDR);
   const svc = parseCidr(net.serviceNetworkCIDR);

@@ -10,7 +10,7 @@ import {
   HelperTextItem,
   TextInput,
 } from '@patternfly/react-core';
-import { ClusterConfig, NetworkPlugin, NetworkType } from './types';
+import { ClusterConfig, HostNetwork, NetworkPlugin, NetworkType } from './types';
 import {
   internalVIPs,
   MIN_THIRD_PARTY_CNI_MINOR,
@@ -29,12 +29,14 @@ const I18N = 'plugin__oct-shift-on-shift-virt';
 interface Props {
   config: ClusterConfig;
   onChange: (patch: Partial<ClusterConfig['network']>) => void;
+  /** Host node addresses (GET /api/v1/host-network); null when unavailable. */
+  hostNetwork?: HostNetwork | null;
 }
 
-const NetworkStep: FC<Props> = ({ config, onChange }) => {
+const NetworkStep: FC<Props> = ({ config, onChange, hostNetwork }) => {
   const { t } = useTranslation(I18N);
   const net = config.network;
-  const problems = [...networkProblems(net), ...networkPluginProblems(config)];
+  const problems = [...networkProblems(net, hostNetwork), ...networkPluginProblems(config)];
   const [plugins, setPlugins] = useState<NetworkPlugin[]>(FALLBACK_PLUGINS);
 
   useEffect(() => {
@@ -74,7 +76,7 @@ const NetworkStep: FC<Props> = ({ config, onChange }) => {
           value={net.cudnSubnet}
           onChange={(_e, val) => onChange({ cudnSubnet: val })}
           validated={cudnErr ? 'error' : 'default'}
-          placeholder="10.100.0.0/16"
+          placeholder={hostNetwork?.suggestedCudnSubnet || '10.100.0.0/16'}
         />
         <FormHelperText>
           <HelperText>

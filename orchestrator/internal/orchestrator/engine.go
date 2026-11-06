@@ -302,6 +302,16 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 			e.updateStatus(ctx, nc, crd.PhaseFailed, err.Error())
 			return
 		}
+		// The internal network must not overlap the host's node network
+		// (OVN-Kubernetes UDN rule; otherwise no egress, and the agent
+		// installer never starts). Skipped if nodes cannot be read.
+		if host, err := e.client.HostNodeAddresses(ctx); err != nil {
+			log.Info("cannot list host nodes; skipping the internal network overlap check", "error", err.Error())
+		} else if err := nc.Spec.CheckHostNetwork(host); err != nil {
+			log.Error("refusing to install", "error", err.Error())
+			e.updateStatus(ctx, nc, crd.PhaseFailed, err.Error())
+			return
+		}
 		// New clusters get the bastion load balancer; clusters created
 		// earlier keep their HAProxy pods (the marker is never added later).
 		nc.Status.LoadBalancer = crd.LoadBalancerBastion

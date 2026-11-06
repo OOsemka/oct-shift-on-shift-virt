@@ -34,6 +34,21 @@ export interface NetworkPlugin {
   minOCPVersion?: string;
 }
 
+/** One host cluster node address from GET /api/v1/host-network (orchestrator crd.HostNodeAddress). */
+export interface HostNodeAddress {
+  node: string;
+  address: string;
+  /** The node's network with prefix (from OVN-Kubernetes), when known. */
+  subnet?: string;
+}
+
+/** GET /api/v1/host-network: host node addresses and a free default internal network. */
+export interface HostNetwork {
+  nodeAddresses: HostNodeAddress[];
+  /** Empty when no default candidate is free. */
+  suggestedCudnSubnet: string;
+}
+
 export interface ExternalAccessConfig {
   nadName: string;
   /** Free static addresses on the external VLAN, typed in by the user (never assigned automatically). */

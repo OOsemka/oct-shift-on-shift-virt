@@ -48,5 +48,8 @@ export const fetchOCPVersions = (): Promise<unknown> =>
 export const fetchNetworkPlugins = (): Promise<unknown> =>
   consoleFetchJSON(`${PROXY_BASE}/api/v1/network-plugins`);
 
-export const previewConfig = (config: ClusterConfig): Promise<unknown> =>
+export const fetchHostNetwork = (): Promise<unknown> =>
+  consoleFetchJSON(`${PROXY_BASE}/api/v1/host-network`);
+
+export const previewConfig =(config: ClusterConfig): Promise<unknown> =>
   consoleFetchJSON.post(`${PROXY_BASE}/api/v1/clusters/preview-config`, config);

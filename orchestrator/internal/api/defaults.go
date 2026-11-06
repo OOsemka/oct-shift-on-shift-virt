@@ -84,7 +84,13 @@ func (s *Server) planQuickCluster(ctx context.Context, name string) (quickPlan, 
 			pool = p
 		}
 	}
-	spec, problems := crd.BuildQuickSpec(name, d.Settings, d.pullSecretValid, pool, crd.FreePoolAddresses(pool, clusters))
+	// The internal network must stay clear of the host nodes. If they cannot
+	// be read the usual default is planned and createNestedCluster decides.
+	host, _, err := s.hostNodeAddresses(ctx)
+	if err != nil {
+		s.logger.Info("cannot list host nodes for the quick cluster plan", "error", err.Error())
+	}
+	spec, problems := crd.BuildQuickSpec(name, d.Settings, d.pullSecretValid, pool, crd.FreePoolAddresses(pool, clusters), host)
 	for _, c := range clusters {
 		if c.ClusterName == name {
 			problems = append(problems, "a cluster named "+name+" already exists")
