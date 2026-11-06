@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
 	"os/exec"
@@ -55,23 +56,53 @@ func TestExternalAccessCertData(t *testing.T) {
 		t.Error("API cert must not cover the console host")
 	}
 
+	// Name constraints: the CA can vouch only for this cluster's names.
+	if !ca.PermittedDNSDomainsCritical || len(ca.PermittedDNSDomains) != 3 {
+		t.Fatalf("CA must be name-constrained to the 3 host names: %v", ca.PermittedDNSDomains)
+	}
+	rogue, _, err := issueLeaf(ca, mustCAKey(t, data), "rogue", []string{"intranet.example.com"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parsePEMCert(t, rogue).Verify(x509.VerifyOptions{DNSName: "intranet.example.com", Roots: pool, CurrentTime: now}); err == nil {
+		t.Fatal("a certificate for a foreign name signed by the cluster CA must not verify")
+	}
+
 	// Same names: nothing to do.
 	again, changed, err := externalAccessCertData(long, []string{oauth, console}, api, data, now)
 	if err != nil || changed || string(again["routes.crt"]) != string(data["routes.crt"]) {
 		t.Fatalf("re-run with same hosts should be a no-op: changed=%v err=%v", changed, err)
 	}
 
-	// New names: leaves re-issued, CA kept.
+	// New names: the CA is constrained to the old names, so it is replaced
+	// together with the leaves.
 	moved, changed, err := externalAccessCertData(long, []string{"c.example.com", "o.example.com"}, "a.example.com", data, now)
 	if err != nil || !changed {
 		t.Fatalf("host change should re-issue: changed=%v err=%v", changed, err)
 	}
-	if string(moved["ca.crt"]) != string(data["ca.crt"]) || string(moved["ca.key"]) != string(data["ca.key"]) {
-		t.Error("CA must be reused when only the hosts change")
+	if string(moved["ca.crt"]) == string(data["ca.crt"]) {
+		t.Error("a name-constrained CA must be replaced when the names change")
 	}
-	if _, err := parsePEMCert(t, moved["routes.crt"]).Verify(x509.VerifyOptions{DNSName: "c.example.com", Roots: pool, CurrentTime: now}); err != nil {
-		t.Errorf("re-issued cert does not verify against the kept CA: %v", err)
+	pool2 := x509.NewCertPool()
+	pool2.AddCert(parsePEMCert(t, moved["ca.crt"]))
+	if _, err := parsePEMCert(t, moved["routes.crt"]).Verify(x509.VerifyOptions{DNSName: "c.example.com", Roots: pool2, CurrentTime: now}); err != nil {
+		t.Errorf("re-issued cert does not verify against the new CA: %v", err)
 	}
+	// Same names but the leaves are missing: the CA is kept.
+	partial := map[string][]byte{"ca.crt": data["ca.crt"], "ca.key": data["ca.key"]}
+	kept, _, err := externalAccessCertData(long, []string{console, oauth}, api, partial, now)
+	if err != nil || string(kept["ca.crt"]) != string(data["ca.crt"]) {
+		t.Errorf("CA must be reused when the names are unchanged: err=%v", err)
+	}
+}
+
+func mustCAKey(t *testing.T, data map[string][]byte) *ecdsa.PrivateKey {
+	t.Helper()
+	_, k, err := parseCertAndKey(data["ca.crt"], data["ca.key"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
 }
 
 func TestHostRouteNamesAndLabels(t *testing.T) {

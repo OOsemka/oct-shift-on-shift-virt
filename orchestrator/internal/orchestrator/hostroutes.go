@@ -322,7 +322,7 @@ func externalAccessCertData(cluster string, routeHosts []string, apiHost string,
 	var caPEM, caKeyPEM []byte
 	if existing != nil && len(existing["ca.crt"]) > 0 && len(existing["ca.key"]) > 0 {
 		c, k, err := parseCertAndKey(existing["ca.crt"], existing["ca.key"])
-		if err == nil && c.IsCA && now.Before(c.NotAfter) {
+		if err == nil && c.IsCA && now.Before(c.NotAfter) && caPermitsExactly(c, allNames(routeHosts, apiHost)) {
 			caCert, caKey, caPEM, caKeyPEM = c, k, existing["ca.crt"], existing["ca.key"]
 		}
 	}
@@ -340,6 +340,10 @@ func externalAccessCertData(cluster string, routeHosts []string, apiHost string,
 			BasicConstraintsValid: true,
 			IsCA:                  true,
 			MaxPathLenZero:        true,
+			// People trust this CA in their browsers, so it must not be able
+			// to vouch for anything but this cluster's own host-route names.
+			PermittedDNSDomainsCritical: true,
+			PermittedDNSDomains:         allNames(routeHosts, apiHost),
 		}
 		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
 		if err != nil {
@@ -369,6 +373,28 @@ func externalAccessCertData(cluster string, routeHosts []string, apiHost string,
 		"api.crt": apiCrt, "api.key": apiKey,
 		"hosts": []byte(hostsKey),
 	}, true, nil
+}
+
+// allNames is the sorted, de-duplicated set of host names a CA may sign.
+func allNames(routeHosts []string, apiHost string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, n := range append(append([]string{}, routeHosts...), apiHost) {
+		if n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// caPermitsExactly reports whether a CA is name-constrained to exactly names
+// (CAs from 0.4.x had no constraints and are replaced on the next publish).
+func caPermitsExactly(ca *x509.Certificate, names []string) bool {
+	got := append([]string{}, ca.PermittedDNSDomains...)
+	sort.Strings(got)
+	return ca.PermittedDNSDomainsCritical && strings.Join(got, ",") == strings.Join(names, ",")
 }
 
 // issueLeaf signs a server certificate. The names go in subjectAltName only:
