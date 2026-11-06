@@ -47,3 +47,20 @@ func TestWaitInstallJobPrintsNoCredentials(t *testing.T) {
 		}
 	}
 }
+
+// The installer writes the kubeconfig WITHOUT apiVersion/kind (0.4.1 bug: a
+// prefix check rejected it and PostInstall stored no credentials).
+func TestValidKubeconfigInstallerFormat(t *testing.T) {
+	installer := "clusters:\n- cluster:\n    certificate-authority-data: Zm9v\n    server: https://api.x:6443\n  name: x\ncontexts:\n- context:\n    cluster: x\n    user: admin\n  name: admin\ncurrent-context: admin\npreferences: {}\nusers:\n- name: admin\n  user:\n    client-certificate-data: Zm9v\n    client-key-data: Zm9v\n"
+	if !validKubeconfig(installer) {
+		t.Fatal("installer-format kubeconfig (no apiVersion) must be accepted")
+	}
+	if !validKubeconfig("apiVersion: v1\nkind: Config\n" + installer) {
+		t.Fatal("kubeconfig with apiVersion must be accepted")
+	}
+	for _, bad := range []string{"", "not: [yaml", "clusters: []\nusers: []\n"} {
+		if validKubeconfig(bad) {
+			t.Errorf("%q must be rejected", bad)
+		}
+	}
+}

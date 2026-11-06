@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 type StepExecutor struct {
@@ -2306,10 +2307,18 @@ func (s *StepExecutor) credentialsFromInstallerState(ctx context.Context, nc *cr
 	}
 	kc := strings.TrimSpace(string(sec.Data["kubeconfig"]))
 	pw := strings.TrimSpace(string(sec.Data["kubeadmin-password"]))
-	if !strings.HasPrefix(kc, "apiVersion:") || pw == "" || strings.ContainsAny(pw, " \n") {
+	if !validKubeconfig(kc) || pw == "" || strings.ContainsAny(pw, " \n") {
 		return "", ""
 	}
 	return kc + "\n", pw
+}
+
+// validKubeconfig reports whether data parses as a kubeconfig with at least
+// one cluster and one user. The installer writes it without apiVersion/kind
+// (it starts with "clusters:"), so a prefix check is wrong.
+func validKubeconfig(data string) bool {
+	cfg, err := clientcmd.Load([]byte(data))
+	return err == nil && len(cfg.Clusters) > 0 && len(cfg.AuthInfos) > 0
 }
 
 // waitInstallCABundle returns the base64 CA bundle the wait-install Job
@@ -2461,6 +2470,11 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 			return err
 		}
 		kubeconfigData, kubeadminData = k, a
+	}
+	// Never finish PostInstall without credentials: every later phase and
+	// the cluster page depend on them, and a silent miss looks like success.
+	if kubeconfigData == "" || kubeadminData == "" {
+		return fmt.Errorf("no admin kubeconfig/kubeadmin password found (installer-state Secret %s-installer-state unusable and no legacy log markers)", nc.Spec.ClusterName)
 	}
 
 	if kubeconfigData != "" {
