@@ -16,6 +16,7 @@ import CreateClusterWizard from './InstallTab/CreateClusterWizard';
 import ClusterTable from './ManageTab/ClusterTable';
 import IPPoolsTab from './IPPoolsTab/IPPoolsTab';
 import LabDefaultsTab from './LabDefaultsTab/LabDefaultsTab';
+import MastersTab from './MastersTab/MastersTab';
 import QuickClusterCard from './InstallTab/QuickClusterCard';
 import './ShiftOnShiftPage.css';
 
@@ -72,6 +73,14 @@ const ShiftOnShiftPage: FC = () => {
               >
                 <div className="sos-tab-content">
                   <ClusterTable />
+                </div>
+              </Tab>
+              <Tab
+                eventKey="masters"
+                title={<TabTitleText>{t('Masters')}</TabTitleText>}
+              >
+                <div className="sos-tab-content">
+                  <MastersTab />
                 </div>
               </Tab>
               <Tab

@@ -50,6 +50,8 @@ interface ClusterDetail {
   namespace: string;
   spec: {
     clusterName: string;
+    // Express: set on clones (the master's internal name is kept).
+    source?: { master: string; internalName?: string; internalBaseDomain?: string };
     namespace?: string;
     baseDomain: string;
     ocpVersion: string;
@@ -110,6 +112,7 @@ interface ClusterDetail {
 const PHASE_COLORS: Record<string, 'green' | 'blue' | 'orange' | 'red' | 'grey'> = {
   Ready: 'green',
   Failed: 'red',
+  Master: 'grey',
 };
 
 const PHASE_VARIANT: Record<string, 'success' | 'info' | 'warning' | 'danger' | 'pending'> = {
@@ -123,6 +126,7 @@ const FEATURE_CONDITIONS: Array<{ type: string; label: string }> = [
   { type: 'StorageReady', label: 'Nested storage' },
   { type: 'VirtualizationReady', label: 'OpenShift Virtualization' },
   { type: 'HostRoutesReady', label: 'Host routes' },
+  { type: 'Isolated', label: 'Isolated from its master' },
 ];
 
 const ClusterDetailPage: FC = () => {
@@ -224,7 +228,9 @@ const ClusterDetailPage: FC = () => {
 
   const { spec, status } = cluster;
   const isReady = status.phase === 'Ready';
-  const fqdn = `${spec.clusterName}.${spec.baseDomain}`;
+  const fqdn = spec.source?.internalName
+    ? `${spec.source.internalName}.${spec.source.internalBaseDomain}`
+    : `${spec.clusterName}.${spec.baseDomain}`;
   // The bastion is up from the MCSRelay phase on, long before Ready, and is
   // the place to debug a stuck install from, so show how to reach it early.
   // The cloud-init key lands on user core (as on the RHCOS nodes); the image
@@ -264,8 +270,20 @@ const ClusterDetailPage: FC = () => {
                 </Label>
               </SplitItem>
               <SplitItem>{status.message}</SplitItem>
+              {spec.source?.master && (
+                <SplitItem>
+                  <Label color="purple">{t('Clone of {{m}}', { m: spec.source.master })}</Label>
+                </SplitItem>
+              )}
             </Split>
           </StackItem>
+          {status.phase === 'Master' && (
+            <StackItem>
+              <Alert variant="info" isInline title={t('This cluster is a master')}>
+                {t('It is shut down and kept as the template for Express clones (Masters tab). Clone it from the quick cluster card on the Install tab. It cannot be deleted while it has clones.')}
+              </Alert>
+            </StackItem>
+          )}
 
           {status.phaseHistory && status.phaseHistory.length > 0 && (
             <StackItem>

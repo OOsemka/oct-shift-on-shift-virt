@@ -119,6 +119,10 @@ func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
 		OCPVersion  string `json:"ocpVersion"`
 		Topology    string `json:"topology"`
 		CreatedAt   string `json:"createdAt"`
+		// Express: the master a clone came from, and why a cluster cannot
+		// become a master ("" if it can).
+		CloneOf       string `json:"cloneOf,omitempty"`
+		MasterRefusal string `json:"masterRefusal,omitempty"`
 	}
 
 	var items []clusterItem
@@ -139,6 +143,13 @@ func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
 			Topology:    topology,
 			CreatedAt:   item.GetCreationTimestamp().Format("2006-01-02T15:04:05Z"),
 		})
+		if nc, err := toNestedCluster(&item); err == nil {
+			last := &items[len(items)-1]
+			if nc.IsClone() {
+				last.CloneOf = nc.Spec.Source.Master
+			}
+			last.MasterRefusal = nc.MasterRefusal()
+		}
 	}
 
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{"items": items})

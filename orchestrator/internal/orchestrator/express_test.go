@@ -23,7 +23,8 @@ func masterVM(t *testing.T, name string, bastion bool) *unstructured.Unstructure
 			"dataVolumeTemplates": []interface{}{map[string]interface{}{
 				"metadata": map[string]interface{}{"name": name + "-rootdisk"},
 				"spec": map[string]interface{}{"sourceRef": map[string]interface{}{"kind": "DataSource", "name": "centos"},
-					"storage": map[string]interface{}{"volumeMode": "Block"}}}},
+					"storage": map[string]interface{}{"volumeMode": "Block", "accessModes": []interface{}{"ReadWriteMany"},
+						"resources": map[string]interface{}{"requests": map[string]interface{}{"storage": "120Gi"}}}}}},
 			"template": map[string]interface{}{
 				"metadata": map[string]interface{}{"labels": map[string]interface{}{"oct-shift-on-shift-virt/cluster": "m1"}},
 				"spec": map[string]interface{}{
@@ -47,21 +48,18 @@ func TestCloneVMObject(t *testing.T) {
 	if rootDiskPVC(vm) != "cluster-master-0-rootdisk" {
 		t.Fatal("root disk PVC not found")
 	}
-	dv, err := cloneDVSpec(vm, "m1-ns", "cluster-master-0-rootdisk-golden")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := dv["sourceRef"]; ok {
-		t.Error("sourceRef must be dropped (a DataVolume takes source OR sourceRef)")
-	}
-	if src := dv["source"].(map[string]interface{})["snapshot"].(map[string]interface{}); src["namespace"] != "m1-ns" || src["name"] != "cluster-master-0-rootdisk-golden" {
-		t.Errorf("snapshot source: %v", src)
+	size, modes, err := diskShape(vm)
+	if err != nil || size != "120Gi" || len(modes) != 1 || modes[0] != "ReadWriteMany" {
+		t.Fatalf("disk shape: %s %v %v", size, modes, err)
 	}
 	c := cloneVMObject(vm, "cluster-master-0", "c1-ns", "m1", "c1", "cluster-master-0-rootdisk")
 	b, _ := json.Marshal(c.Object)
 	js := string(b)
 	if strings.Contains(js, `"m1"`) {
 		t.Errorf("master name left in the clone VM: %s", js)
+	}
+	if !strings.Contains(js, `"persistentVolumeClaim":{"claimName":"cluster-master-0-rootdisk"}`) {
+		t.Error("clone VM must use the restored PVC")
 	}
 	if strings.Contains(js, "dataVolumeTemplates") || !strings.Contains(js, `"runStrategy":"Always"`) {
 		t.Error("clone VM must have no dataVolumeTemplates and run")

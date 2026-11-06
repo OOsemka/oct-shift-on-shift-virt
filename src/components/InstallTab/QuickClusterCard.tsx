@@ -14,6 +14,8 @@ import {
   FlexItem,
   FormGroup,
   FormHelperText,
+  FormSelect,
+  FormSelectOption,
   HelperText,
   HelperTextItem,
   TextArea,
@@ -28,6 +30,7 @@ import {
   QuickPlan,
   sshKeyProblem,
 } from '../../utils/labdefaults';
+import { fetchMasters, masterLabel, MasterItem } from '../../utils/masters';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
@@ -54,6 +57,12 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
   const [desktopPassword, setDesktopPassword] = useState('');
   // Access path; starts from the lab default (publishHostRoutes).
   const [hostRoutes, setHostRoutes] = useState<boolean | undefined>(undefined);
+  // Express: clone from a master instead of installing ('' = fresh install).
+  const [masters, setMasters] = useState<MasterItem[]>([]);
+  const [master, setMaster] = useState('');
+  useEffect(() => {
+    fetchMasters().then(setMasters).catch(() => setMasters([]));
+  }, []);
   useEffect(() => {
     fetchLabDefaults()
       .then((d) => {
@@ -73,7 +82,7 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
   useEffect(() => {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => {
-      fetchQuickPlan(name)
+      fetchQuickPlan(name, master)
         .then((p) => {
           setPlan(p);
           setPlanError(undefined);
@@ -82,7 +91,7 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
         .catch((e) => setPlanError(fetchErrorText(e)));
     }, name ? 400 : 0);
     return () => clearTimeout(timer.current);
-  }, [name]);
+  }, [name, master]);
 
   const deploy = async () => {
     setDeploying(true);
@@ -92,7 +101,8 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
         // Only an edited key is sent; otherwise the server uses the profile key.
         ...(keyChanged && sshKey.trim() ? { sshPublicKey: sshKey.trim() } : {}),
         ...(graphical !== undefined ? { graphical } : {}),
-        ...(hostRoutes !== undefined ? { hostRoutes } : {}),
+        ...(hostRoutes !== undefined && !master ? { hostRoutes } : {}),
+        ...(master ? { master } : {}),
         ...(graphical ? { desktopUsername: desktopUser.trim(), desktopPassword } : {}),
       });
       navigate(`/community-tools/compute/shift-on-shift-virt/cluster/${encodeURIComponent(name.trim())}`);
@@ -161,6 +171,26 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
             </HelperText>
           </FormHelperText>
         </FormGroup>
+        {masters.length > 0 && (
+          <FormGroup label={t('How to create it')} fieldId="quick-source">
+            <FormSelect id="quick-source" value={master} onChange={(_e, v) => setMaster(v)}>
+              <FormSelectOption value="" label={t('Fresh install (about 60 minutes)')} />
+              {masters.map((m) => (
+                <FormSelectOption key={m.name} value={m.name} label={t('Clone from master {{m}} (usable in a few minutes)', { m: masterLabel(m) })} />
+              ))}
+            </FormSelect>
+            <FormHelperText>
+              <HelperText>
+                <HelperTextItem>
+                  {master
+                    ? t('Shift-on-Shift Express: copied from the master, then given its own credentials. Usable within minutes; isolated from the master and other clones about 15 minutes later. Clones always use hosting cluster routes and keep the master\'s internal name, sizing and OpenShift release.')
+                    : t('Installs OpenShift from scratch with the lab defaults.')}
+                </HelperTextItem>
+              </HelperText>
+            </FormHelperText>
+          </FormGroup>
+        )}
+        {!master && (
         <FormGroup role="radiogroup" isInline={false} label={t('How people reach the console and API')} fieldId="quick-access">
           <Radio
             id="quick-access-dns"
@@ -187,6 +217,7 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
             description={t('Console, login and API are published as routes on this cluster, under its *.apps domain, so they work right away. Certificates come from a per-cluster CA you download from the cluster page (browsers warn until you trust it). Console and login then always use these names; your own applications in the nested cluster still need DNS. The API also keeps working through DNS if you add it later.')}
           />
         </FormGroup>
+        )}
         <Checkbox
           id="quick-graphical"
           isChecked={Boolean(graphical)}

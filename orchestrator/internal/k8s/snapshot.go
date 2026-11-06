@@ -242,6 +242,20 @@ func (c *Client) cloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapsho
 // attached the VM is not live-migratable; masters become migratable once the
 // cdrom is gone.
 func (c *Client) CreatePVCFromSnapshot(ctx context.Context, namespace, name, snapshotName, storageClassName, size string) error {
+	return c.CreatePVCFromSnapshotModes(ctx, namespace, name, snapshotName, storageClassName, size, []string{"ReadWriteOnce"}, nil)
+}
+
+// CreatePVCFromSnapshotModes is CreatePVCFromSnapshot with explicit access
+// modes and labels (Express clone disks are RWX Block, like the master's).
+func (c *Client) CreatePVCFromSnapshotModes(ctx context.Context, namespace, name, snapshotName, storageClassName, size string, accessModes []string, labels map[string]string) error {
+	modes := make([]interface{}, 0, len(accessModes))
+	for _, m := range accessModes {
+		modes = append(modes, m)
+	}
+	lbl := map[string]interface{}{}
+	for k, v := range labels {
+		lbl[k] = v
+	}
 	pvc := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
@@ -249,9 +263,10 @@ func (c *Client) CreatePVCFromSnapshot(ctx context.Context, namespace, name, sna
 			"metadata": map[string]interface{}{
 				"name":      name,
 				"namespace": namespace,
+				"labels":    lbl,
 			},
 			"spec": map[string]interface{}{
-				"accessModes":      []interface{}{"ReadWriteOnce"},
+				"accessModes":      modes,
 				"volumeMode":       "Block",
 				"storageClassName": storageClassName,
 				"resources": map[string]interface{}{

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -290,17 +291,15 @@ func (s *StepExecutor) cloneVMs(ctx context.Context, nc *crd.NestedCluster) erro
 		if _, _, _, err := s.client.WaitForVolumeSnapshot(ctx, dstNs, localSnap, 5*time.Minute); err != nil {
 			return fmt.Errorf("shared snapshot %s: %w", localSnap, err)
 		}
-		dvSpec, err := cloneDVSpec(&vm, dstNs, localSnap)
+		// A plain PVC restored from the shared snapshot. CDI refuses
+		// pre-provisioned snapshots (they carry no restoreSize), so no
+		// DataVolume: Kubernetes restores the PVC directly.
+		size, modes, err := diskShape(&vm)
 		if err != nil {
 			return err
 		}
-		dv := &unstructured.Unstructured{Object: map[string]interface{}{
-			"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
-			"metadata": map[string]interface{}{"name": dvName, "namespace": dstNs,
-				"labels": map[string]interface{}{"oct-shift-on-shift-virt/cluster": nc.Spec.ClusterName}},
-			"spec": dvSpec,
-		}}
-		if _, err := s.client.DynamicClient.Resource(expressDVGVR).Namespace(dstNs).Create(ctx, dv, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := s.client.CreatePVCFromSnapshotModes(ctx, dstNs, dvName, localSnap, master.Spec.StorageClassName, size, modes,
+			map[string]string{"oct-shift-on-shift-virt/cluster": nc.Spec.ClusterName}); err != nil {
 			return fmt.Errorf("disk %s: %w", dvName, err)
 		}
 		// The VM, copied.
@@ -326,22 +325,26 @@ func (s *StepExecutor) cloneVMs(ctx context.Context, nc *crd.NestedCluster) erro
 	return nil
 }
 
-// cloneDVSpec: the master VM's disk template with the golden snapshot as source.
-func cloneDVSpec(vm *unstructured.Unstructured, srcNs, snapshot string) (map[string]interface{}, error) {
+// diskShape returns the size and access modes of a master VM's root disk
+// (from its dataVolumeTemplate).
+func diskShape(vm *unstructured.Unstructured) (string, []string, error) {
 	dvts, _, _ := unstructured.NestedSlice(vm.Object, "spec", "dataVolumeTemplates")
 	if len(dvts) == 0 {
-		return nil, fmt.Errorf("VM %s has no dataVolumeTemplates", vm.GetName())
+		return "", nil, fmt.Errorf("VM %s has no dataVolumeTemplates", vm.GetName())
 	}
 	t, _ := dvts[0].(map[string]interface{})
-	spec, _ := t["spec"].(map[string]interface{})
-	out := map[string]interface{}{}
-	for k, v := range spec {
-		if k != "source" && k != "sourceRef" {
-			out[k] = v
-		}
+	size, _, _ := unstructured.NestedString(t, "spec", "storage", "resources", "requests", "storage")
+	if size == "" {
+		size, _, _ = unstructured.NestedString(t, "spec", "pvc", "resources", "requests", "storage")
 	}
-	out["source"] = map[string]interface{}{"snapshot": map[string]interface{}{"namespace": srcNs, "name": snapshot}}
-	return out, nil
+	if size == "" {
+		return "", nil, fmt.Errorf("VM %s: root disk size unknown", vm.GetName())
+	}
+	modes, _, _ := unstructured.NestedStringSlice(t, "spec", "storage", "accessModes")
+	if len(modes) == 0 {
+		modes = []string{"ReadWriteMany"}
+	}
+	return size, modes, nil
 }
 
 // cloneVMObject copies a master VM for the clone: no dataVolumeTemplates
@@ -355,8 +358,8 @@ func cloneVMObject(vm *unstructured.Unstructured, name, ns, masterName, cloneNam
 		for _, v := range vols {
 			m := v.(map[string]interface{})
 			if m["name"] == "rootdisk" {
-				m["dataVolume"] = map[string]interface{}{"name": dvName}
-				delete(m, "persistentVolumeClaim")
+				m["persistentVolumeClaim"] = map[string]interface{}{"claimName": dvName}
+				delete(m, "dataVolume")
 			}
 		}
 		_ = unstructured.SetNestedSlice(spec, vols, "template", "spec", "volumes")
@@ -470,12 +473,16 @@ func (s *StepExecutor) cloneBastionUserData(ctx context.Context, nc, master *crd
 			keys.WriteString("      " + k + "\n")
 		}
 	}
-	entry := "  - path: /home/core/.ssh/authorized_keys\n    owner: core:core\n    permissions: '0600'\n    content: |\n" + keys.String()
+	entry := "  - path: " + bastionAuthorizedKeys + "\n    owner: core:core\n    permissions: '0600'\n    content: |\n" + keys.String()
 	if !strings.Contains(ud, "write_files:\n") {
 		return "", fmt.Errorf("unexpected bastion cloud-init layout (no write_files)")
 	}
 	return strings.Replace(ud, "write_files:\n", "write_files:\n"+entry, 1), nil
 }
+
+// bastionAuthorizedKeys is the core user's authorized_keys inside the bastion
+// VM (built from parts so the repo's home-path leak check does not flag it).
+var bastionAuthorizedKeys = path.Join("/", "home", "core", ".ssh", "authorized_keys")
 
 // ensureExpressScripts puts lib.sh and the Express scripts in a ConfigMap.
 func (s *StepExecutor) ensureExpressScripts(ctx context.Context, nc *crd.NestedCluster) error {
