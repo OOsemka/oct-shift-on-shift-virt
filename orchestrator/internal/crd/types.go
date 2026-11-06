@@ -166,6 +166,24 @@ type NetworkConfig struct {
 	ClusterNetworkCIDR string `json:"clusterNetworkCIDR,omitempty"`
 	ServiceNetworkCIDR string `json:"serviceNetworkCIDR,omitempty"`
 	DNSIP              string `json:"dnsIP,omitempty"`
+	// NetworkType is the nested cluster's network plugin: OVNKubernetes
+	// (empty, the default) or the open-source Calico or Cilium (OCP 4.22+,
+	// manifests embedded in internal/cni). Fixed at install time.
+	NetworkType string `json:"networkType,omitempty"`
+	// CNIVersion selects the Calico/Cilium release (cni.Versions); empty
+	// means the newest embedded one. Must be empty for OVNKubernetes.
+	CNIVersion string `json:"cniVersion,omitempty"`
+}
+
+// DefaultClusterNetworkCIDR is the pod network when none is set.
+const DefaultClusterNetworkCIDR = "10.128.0.0/14"
+
+// PodCIDR returns the cluster (pod) network, defaulting like the CRD.
+func (n NetworkConfig) PodCIDR() string {
+	if n.ClusterNetworkCIDR == "" {
+		return DefaultClusterNetworkCIDR
+	}
+	return n.ClusterNetworkCIDR
 }
 
 type ExternalAccessConfig struct {

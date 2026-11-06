@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/cni"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/crd"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/installer"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/k8s"
@@ -72,6 +73,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/quick-clusters/preview", s.previewQuickCluster)
 	s.mux.HandleFunc("POST /api/v1/quick-clusters", s.createQuickCluster)
 	s.mux.HandleFunc("GET /api/v1/ocp-versions", s.listOCPVersions)
+	s.mux.HandleFunc("GET /api/v1/network-plugins", s.listNetworkPlugins)
 	s.mux.HandleFunc("GET /healthz", s.healthz)
 }
 
@@ -471,6 +473,12 @@ func (s *Server) listOCPVersions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{"items": versions})
+}
+
+// listNetworkPlugins returns the network plugin choices (OVN-Kubernetes,
+// Calico, Cilium) with their versions, newest first, for the wizard.
+func (s *Server) listNetworkPlugins(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{"items": cni.Plugins()})
 }
 
 func (s *Server) findCluster(r *http.Request, name string) (*unstructured.Unstructured, error) {

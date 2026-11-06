@@ -5,6 +5,8 @@ import (
 	"net"
 	"regexp"
 	"strings"
+
+	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/cni"
 )
 
 var dns1123 = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
@@ -144,6 +146,10 @@ func (s *NestedClusterSpec) ValidateNetwork() error {
 			add("external VLAN gateway %s is outside the VLAN subnet %s", g, vlan)
 		}
 	}
+
+	// Network plugin: a known choice, an embedded version, an OpenShift
+	// release whose agent installer accepts it.
+	problems = append(problems, cni.Validate(n.NetworkType, n.CNIVersion, s.OCPVersion)...)
 
 	if len(problems) == 0 {
 		return nil

@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Regenerates the third-party CNI manifests embedded in the orchestrator
+# (orchestrator/internal/cni/manifests/). Run it when bumping a version and
+# commit the result; nothing is downloaded at install time.
+#
+# The orchestrator offers every version directory it finds, newest first, so
+# keep exactly two per plugin: the latest release and the one before it.
+#
+#   Calico: the upstream OpenShift bundle (ocp.tgz) of the release, verbatim,
+#           except the two files the orchestrator renders per cluster
+#           (Installation CR, kubernetes-services-endpoint ConfigMap), the
+#           operator DNS pin below, and images pinned by digest.
+#   Cilium: `helm template` of the upstream chart with the OpenShift settings
+#           below. Per-cluster values are placeholders (__SOS_*__) that the
+#           orchestrator substitutes.
+#
+# Every image is pinned by digest (tag@sha256:...): these are third-party
+# images running privileged in the nested network stack, and a re-pushed tag
+# must not silently change what new clusters run. The chart already pins
+# Cilium; Calico's bundle uses tags, so pin_images resolves them here. The
+# digest is the multi-arch index digest when the image has one.
+#
+# Requires: curl, tar, helm, oc (for `oc image info`).
+set -euo pipefail
+
+CALICO_VERSIONS=(v3.33.0 v3.32.3)
+CILIUM_VERSIONS=(1.20.4 1.19.10)
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+OUT=$ROOT/orchestrator/internal/cni/manifests
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# digest_of IMAGE:TAG -> sha256:... (manifest list digest if multi-arch)
+digest_of() {
+  oc image info "$1" -o json --filter-by-os=linux/amd64 2>/dev/null \
+    | python3 -c 'import json,sys; j=json.load(sys.stdin); print(j.get("listDigest") or j["digest"])'
+}
+
+# pin_images FILE: rewrite every tag-only `image:` to tag@digest, then fail
+# if any image in the file is still unpinned.
+pin_images() {
+  local f=$1 ref d
+  for ref in $(sed -nE 's/^[[:space:]]*(- )?image:[[:space:]]*"?([^"@[:space:]]+)"?[[:space:]]*$/\2/p' "$f" | sort -u); do
+    d=$(digest_of "$ref")
+    case "$d" in sha256:*) ;; *) echo "cannot resolve a digest for $ref" >&2; exit 1;; esac
+    sed -i.bak -E "s#(image:[[:space:]]*\"?)${ref}(\"?[[:space:]]*)\$#\1${ref}@${d}\2#" "$f" && rm -f "$f.bak"
+    echo "  pinned $ref@$d"
+  done
+  if grep -E '^[[:space:]]*(- )?image:' "$f" | grep -qv '@sha256:'; then
+    echo "unpinned image left in $f:" >&2; grep -E 'image:' "$f" | grep -v '@sha256:' >&2; exit 1
+  fi
+}
+
+# Only the version directories: manifests/<plugin>/*.yaml.tmpl are ours.
+rm -rf "$OUT"/calico/v* "$OUT"/cilium/v*
+
+for v in "${CALICO_VERSIONS[@]}"; do
+  dir=$OUT/calico/$v
+  mkdir -p "$dir" "$tmp/calico-$v"
+  curl -fsSL "https://github.com/projectcalico/calico/releases/download/$v/ocp.tgz" | tar xz -C "$tmp/calico-$v"
+  cp "$tmp/calico-$v"/ocp/*.yaml "$dir/"
+  # Rendered per cluster by the orchestrator (installation.yaml.tmpl,
+  # services-endpoint.yaml.tmpl).
+  rm -f "$dir/03-cr-installation.yaml" "$dir/01-configmap-kubernetes-services-endpoint.yaml"
+  # The operator runs host-network with dnsPolicy ClusterFirstWithHostNet,
+  # i.e. it resolves through cluster DNS, which cannot run before Calico does,
+  # so api-int never resolves (seen: "lookup api-int... on 172.30.0.10:53: no
+  # such host", Init:Error). Pin it to the nested DNS on the bastion instead.
+  # The operator copies its own dnsPolicy/dnsConfig to calico-node
+  # (pkg/controller/installation/core_controller.go), so this covers both.
+  op=$dir/02-tigera-operator.yaml
+  grep -q '^      dnsPolicy: ClusterFirstWithHostNet$' "$op" || { echo "calico $v: dnsPolicy line not found in $op" >&2; exit 1; }
+  sed -i.bak 's|^      dnsPolicy: ClusterFirstWithHostNet$|      dnsPolicy: None\
+      dnsConfig:\
+        nameservers:\
+          - __SOS_DNS_IP__|' "$op" && rm -f "$op.bak"
+  for f in "$dir"/*.yaml; do pin_images "$f"; done
+  echo "calico $v: $(ls "$dir" | wc -l | tr -d ' ') files"
+done
+
+helm repo add cilium https://helm.cilium.io >/dev/null 2>&1 || true
+helm repo update cilium >/dev/null
+for v in "${CILIUM_VERSIONS[@]}"; do
+  dir=$OUT/cilium/v$v
+  mkdir -p "$dir"
+  # OpenShift: Multus owns the CNI config directory and loads the default
+  # network from /var/run/multus/cni/net.d; plugins live in /var/lib/cni/bin.
+  # SELinux needs the agent privileged. VXLAN because the nested nodes sit on
+  # an OVN Layer2 network with port security (unencapsulated pod IPs are
+  # dropped). Mask 23 = hostPrefix of the generated install-config.
+  # kube-proxy replacement: cilium/00-openshift.yaml.tmpl sets
+  # deployKubeProxy: false.
+  # policyCIDRMatchMode=nodes: OpenShift ships default NetworkPolicies whose
+  # egress to the (host-network) API servers is an ipBlock; by default Cilium
+  # never matches node IPs with an ipBlock, so e.g. CoreDNS lost its API
+  # watch (seen: "Policy denied ... -> kube-apiserver", new services never
+  # resolved).
+  {
+    echo "# Generated by hack/update-cni-manifests.sh: helm template cilium/cilium --version $v"
+    helm template cilium cilium/cilium --version "$v" --namespace cilium \
+      --set ipam.mode=cluster-pool \
+      --set 'ipam.operator.clusterPoolIPv4PodCIDRList={__SOS_CLUSTER_NETWORK_CIDR__}' \
+      --set ipam.operator.clusterPoolIPv4MaskSize=23 \
+      --set cni.binPath=/var/lib/cni/bin \
+      --set cni.confPath=/var/run/multus/cni/net.d \
+      --set cni.exclusive=false \
+      --set kubeProxyReplacement=true \
+      --set k8sServiceHost=__SOS_API_INT_HOST__ \
+      --set k8sServicePort=6443 \
+      --set routingMode=tunnel \
+      --set tunnelProtocol=vxlan \
+      --set securityContext.privileged=true \
+      --set policyCIDRMatchMode=nodes \
+      --set envoy.enabled=false \
+      --set hubble.enabled=false
+  } > "$dir/cilium.yaml"
+  pin_images "$dir/cilium.yaml"   # already pinned by the chart; asserts it
+  echo "cilium v$v: $(wc -c < "$dir/cilium.yaml" | tr -d ' ') bytes"
+done

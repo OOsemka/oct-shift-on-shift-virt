@@ -54,6 +54,10 @@ interface ClusterDetail {
     baseDomain: string;
     ocpVersion: string;
     topology: string;
+    network?: {
+      networkType?: string;
+      cniVersion?: string;
+    };
     externalAccess: {
       apiIP: string;
       ingressIP: string;
@@ -109,6 +113,7 @@ const PHASE_VARIANT: Record<string, 'success' | 'info' | 'warning' | 'danger' | 
 
 // Optional post-install features, reported as status conditions.
 const FEATURE_CONDITIONS: Array<{ type: string; label: string }> = [
+  { type: 'NetworkReady', label: 'Network self-test' },
   { type: 'StorageReady', label: 'Nested storage' },
   { type: 'VirtualizationReady', label: 'OpenShift Virtualization' },
 ];
@@ -344,6 +349,14 @@ const ClusterDetailPage: FC = () => {
                 <DescriptionListGroup>
                   <DescriptionListTerm>{t('Ingress Domain')}</DescriptionListTerm>
                   <DescriptionListDescription>{status.ingressDomain}</DescriptionListDescription>
+                </DescriptionListGroup>
+                <DescriptionListGroup>
+                  <DescriptionListTerm>{t('Network plugin')}</DescriptionListTerm>
+                  <DescriptionListDescription>
+                    {cluster.spec.network?.networkType && cluster.spec.network.networkType !== 'OVNKubernetes'
+                      ? [cluster.spec.network.networkType, cluster.spec.network.cniVersion].filter(Boolean).join(' ')
+                      : 'OVN-Kubernetes'}
+                  </DescriptionListDescription>
                 </DescriptionListGroup>
                 {FEATURE_CONDITIONS.map(({ type, label }) => {
                   const c = status.conditions?.find((x) => x.type === type);

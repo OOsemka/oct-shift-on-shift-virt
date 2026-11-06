@@ -17,7 +17,7 @@ import StorageStep from './StorageStep';
 import CredentialsStep from './CredentialsStep';
 import ReviewConfigStep from './ReviewConfigStep';
 import { createCluster } from '../../utils/api';
-import { externalAccessProblems, internalVIPs, networkProblems } from '../../utils/network-check';
+import { externalAccessProblems, internalVIPs, networkPluginProblems, networkProblems } from '../../utils/network-check';
 import { fetchLabDefaults, LabDefaults } from '../../utils/labdefaults';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
@@ -46,7 +46,7 @@ const CreateClusterWizard: FC = () => {
     fetchLabDefaults().then(setLabDefaults).catch(() => setLabDefaults(null));
   }, []);
 
-  const netProblems = networkProblems(config.network);
+  const netProblems = [...networkProblems(config.network), ...networkPluginProblems(config)];
   const eaProblems = externalAccessProblems(config);
   // Without a pull secret here or in the lab defaults the install would only
   // fail later, at CreateSecrets.

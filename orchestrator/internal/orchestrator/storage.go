@@ -592,9 +592,15 @@ func (s *StepExecutor) waitDeploymentAvailable(ctx context.Context, ns, name str
 	}
 }
 
-// runStorageJob runs one of the embedded scripts in the cluster namespace —
-// the only place that can reach the nested API — and returns its log.
+// runStorageJob runs one of the embedded storage scripts in the cluster
+// namespace — the only place that can reach the nested API — and returns its log.
 func (s *StepExecutor) runStorageJob(ctx context.Context, nc *crd.NestedCluster, jobName, script string, extra []corev1.EnvVar, timeout time.Duration) (string, error) {
+	return s.runScriptJob(ctx, nc, storageScriptsCM(nc.Spec.ClusterName), jobName, script, extra, timeout)
+}
+
+// runScriptJob runs script from the scripts ConfigMap cm (mounted at /m) in
+// the cluster namespace with the nested kubeconfig and the pull secret.
+func (s *StepExecutor) runScriptJob(ctx context.Context, nc *crd.NestedCluster, cm, jobName, script string, extra []corev1.EnvVar, timeout time.Duration) (string, error) {
 	cluster, ns := nc.Spec.ClusterName, nc.Spec.Namespace
 	labels := map[string]string{
 		"oct-shift-on-shift-virt/cluster":   cluster,
@@ -632,7 +638,7 @@ func (s *StepExecutor) runStorageJob(ctx context.Context, nc *crd.NestedCluster,
 					}},
 					Volumes: []corev1.Volume{
 						{Name: "m", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-							LocalObjectReference: corev1.LocalObjectReference{Name: storageScriptsCM(cluster)}}}},
+							LocalObjectReference: corev1.LocalObjectReference{Name: cm}}}},
 						{Name: "nested", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 							SecretName: nc.Status.KubeconfigRef,
 							Items:      []corev1.KeyToPath{{Key: "kubeconfig", Path: "kubeconfig"}}}}},

@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tigera-operator
+  namespace: tigera-operator
+  labels:
+    k8s-app: tigera-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: tigera-operator
+  template:
+    metadata:
+      labels:
+        name: tigera-operator
+        k8s-app: tigera-operator
+    spec:
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - effect: NoExecute
+          operator: Exists
+        - effect: NoSchedule
+          operator: Exists
+      serviceAccountName: tigera-operator
+      # Set the termination grace period to match how long the operator will wait for
+      # resources to terminate when being uninstalled.
+      terminationGracePeriodSeconds: 60
+      hostNetwork: true
+      # This must be set when hostNetwork is true or else the cluster services won't resolve
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - __SOS_DNS_IP__
+      containers:
+        - name: tigera-operator
+          image: quay.io/tigera/operator:v1.42.7@sha256:0c7765b21e55d3167bfd48713939866a705c15aef0921d30f95b3a76fbc2e6a3
+          imagePullPolicy: IfNotPresent
+          command:
+            - operator
+          args:
+            # Configure tigera-operator to manage installation of the necessary CRDs.
+            - -manage-crds=true
+          volumeMounts:
+            - name: var-lib-calico
+              readOnly: true
+              mountPath: /var/lib/calico
+          env:
+            - name: WATCH_NAMESPACE
+              value: ""
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPERATOR_NAME
+              value: "tigera-operator"
+            - name: TIGERA_OPERATOR_INIT_IMAGE_VERSION
+              value: v1.42.7
+          envFrom:
+            - configMapRef:
+                name: kubernetes-services-endpoint
+                optional: true
+      volumes:
+        - name: var-lib-calico
+          hostPath:
+            path: /var/lib/calico
+        - name: calico-resources
+          configMap:
+            defaultMode: 0400
+            name: calico-resources
+        - name: install-resources-script
+          configMap:
+            defaultMode: 0777
+            name: install-resources-script
+      initContainers:
+        # Install CRDs first, so that APIs exist for calicoctl to use.
+        - name: bootstrap-crds
+          image: quay.io/tigera/operator:v1.42.7@sha256:0c7765b21e55d3167bfd48713939866a705c15aef0921d30f95b3a76fbc2e6a3
+          command:
+            - operator
+          args:
+            - -bootstrap-crds
+          envFrom:
+            - configMapRef:
+                name: kubernetes-services-endpoint
+                optional: true
+        # Install any v3 API resources provided in the calico-resources ConfigMap.
+        - name: create-initial-resources
+          image: quay.io/calico/ctl:v3.32.3@sha256:e57954691745cb278d6e709d30a7ead6a3400c9e19271913804324ef41178640
+          env:
+            - name: DATASTORE_TYPE
+              value: kubernetes
+          command:
+            - calicoctl
+          args:
+            - --allow-version-mismatch
+            - create
+            - --skip-exists
+            - --skip-empty
+            - -f
+            - /calico-resources
+          volumeMounts:
+            - name: calico-resources
+              mountPath: /calico-resources

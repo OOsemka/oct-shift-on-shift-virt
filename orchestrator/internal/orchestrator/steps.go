@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/cni"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/crd"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/installer"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/k8s"
@@ -1313,6 +1314,27 @@ func (s *StepExecutor) generateISO(ctx context.Context, nc *crd.NestedCluster) e
 		"install-config.yaml": []byte(installConfig),
 		"agent-config.yaml":   []byte(agentConfig),
 	}
+	// Calico/Cilium: the plugin's manifests ride in the same Secret
+	// (cni-*.yaml keys, ~50 KB) and the Job copies them into openshift/,
+	// which the agent installer hands to assisted-service as custom manifests.
+	cniManifests, err := cni.Manifests(cni.Params{
+		NetworkType:        nc.Spec.Network.NetworkType,
+		Version:            nc.Spec.Network.CNIVersion,
+		ClusterName:        nc.Spec.ClusterName,
+		BaseDomain:         nc.Spec.BaseDomain,
+		ClusterNetworkCIDR: nc.Spec.Network.PodCIDR(),
+		DNSServerIP:        nc.Status.DNSIPCUDN,
+	})
+	if err != nil {
+		return fmt.Errorf("rendering network plugin manifests: %w", err)
+	}
+	for name, data := range cniManifests {
+		configData[name] = data
+	}
+	if len(cniManifests) > 0 {
+		log.Info("network plugin manifests added", "networkType", nc.Spec.Network.NetworkType,
+			"version", cni.ResolveVersion(nc.Spec.Network.NetworkType, nc.Spec.Network.CNIVersion), "files", len(cniManifests))
+	}
 	if err := s.client.CreateOpaqueSecret(ctx, crNs, nc.Spec.ClusterName+"-install-config", configData); err != nil {
 		return fmt.Errorf("storing install configs: %w", err)
 	}
@@ -1360,6 +1382,16 @@ func (s *StepExecutor) generateISO(ctx context.Context, nc *crd.NestedCluster) e
 mkdir -p /output/config
 cp /secrets/install-config.yaml /output/config/
 cp /secrets/agent-config.yaml /output/config/
+# Third-party network plugin (Calico/Cilium) manifests, if any. Copied again
+# before every attempt: a failed attempt clears the install dir.
+copy_cni() {
+  if ls /secrets/cni-*.yaml >/dev/null 2>&1; then
+    mkdir -p /output/config/openshift
+    cp /secrets/cni-*.yaml /output/config/openshift/
+    ls /output/config/openshift/
+  fi
+}
+copy_cni
 
 echo "Generating agent ISO..."
 # Registry flakes (quay 502s on release layers) are transient; the whole
@@ -1372,6 +1404,7 @@ until openshift-install agent create image --dir=/output/config --log-level=info
   echo "create image failed (attempt $attempt); retrying in 90s"
   find /output/config -mindepth 1 -maxdepth 1 ! -name 'auth' ! -name 'install-config.yaml' ! -name 'agent-config.yaml' -delete || true
   sleep 90
+  copy_cni
 done
 
 ISO=$(ls /output/config/*.iso | head -1)
@@ -2349,6 +2382,9 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 	if err := s.exposeCluster(ctx, nc); err != nil {
 		log.Info("exposure degraded (cluster still healthy)", "error", err.Error())
 	}
+
+	// End-to-end pod network check (non-fatal; NetworkReady condition).
+	s.networkSelfTest(ctx, nc)
 
 	nc.Status.APIEndpoint = nc.APIEndpoint()
 	nc.Status.ConsoleURL = nc.ConsoleEndpoint()
