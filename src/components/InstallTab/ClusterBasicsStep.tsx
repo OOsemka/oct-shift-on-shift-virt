@@ -26,7 +26,8 @@ import { fetchOCPVersions } from '../../utils/api';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 
-const FALLBACK_VERSIONS = ['5.0', '4.22', '4.21', '4.20', '4.19', '4.18'];
+// Same as the orchestrator's release.SupportedMinors (used if the API is unreachable).
+const FALLBACK_VERSIONS = ['5.0', '4.22'];
 
 type NamespaceKind = K8sResourceCommon & {
   metadata: { name: string; labels?: Record<string, string> };

@@ -49,7 +49,7 @@ const LabDefaultsTab: FC = () => {
   const [settings, setSettings] = useState<LabSettings>({});
   const [newPullSecret, setNewPullSecret] = useState('');
   const [sshKey, setSshKey] = useState('');
-  const [versions, setVersions] = useState<string[]>(['5.0', '4.22', '4.21']);
+  const [versions, setVersions] = useState<string[]>(['5.0', '4.22']);
   const [latestReleases, setLatestReleases] = useState<Record<string, string>>({});
   const [pools, setPools] = useState<IPPoolItem[]>([]);
   const [saving, setSaving] = useState(false);

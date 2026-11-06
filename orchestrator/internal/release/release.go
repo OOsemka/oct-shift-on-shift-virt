@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -37,6 +38,31 @@ type Release struct {
 	// graph (tag only for the offline fallback).
 	Image string `json:"image"`
 }
+
+// SupportedMinors are the OpenShift minors this tool installs, newest first:
+// the only ones tested end to end. Older minors only appeared to work while
+// every cluster got the helper image's 4.22.14 regardless of the choice; add
+// a minor here only together with a real install test.
+var SupportedMinors = []string{"5.0", "4.22"}
+
+// Supported accepts a supported minor or any release of one ("4.22.14").
+func Supported(requested string) error {
+	v, err := Parse(requested)
+	if err != nil {
+		return err
+	}
+	for _, m := range SupportedMinors {
+		if v.MinorString() == m {
+			return nil
+		}
+	}
+	return fmt.Errorf("OpenShift %s is not supported by Shift-on-Shift Virt: choose %s (or a release of them, e.g. %s.1)",
+		strings.TrimSpace(requested), strings.Join(SupportedMinors, " or "), SupportedMinors[len(SupportedMinors)-1])
+}
+
+// maxGraphResponse caps what is read from the update graph (real channels
+// are ~150 KB).
+const maxGraphResponse = 8 << 20
 
 var versionRe = regexp.MustCompile(`^(\d+)\.(\d+)(?:\.(\d+)(?:-([0-9A-Za-z.-]+))?)?$`)
 
@@ -167,10 +193,17 @@ func (r *Resolver) channel(ctx context.Context, name string) ([]graphNode, error
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("OpenShift update graph (%s): HTTP %d", name, resp.StatusCode)
 	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxGraphResponse+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading the OpenShift update graph (%s): %w", name, err)
+	}
+	if len(raw) > maxGraphResponse {
+		return nil, fmt.Errorf("OpenShift update graph (%s): response larger than %d bytes", name, maxGraphResponse)
+	}
 	var body struct {
 		Nodes []graphNode `json:"nodes"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, fmt.Errorf("decoding the OpenShift update graph (%s): %w", name, err)
 	}
 	r.mu.Lock()

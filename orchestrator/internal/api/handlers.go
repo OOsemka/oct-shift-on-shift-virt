@@ -199,8 +199,12 @@ func (s *Server) createNestedCluster(ctx context.Context, spec crd.NestedCluster
 	if code, err := s.checkHostNetwork(ctx, &spec); err != nil {
 		return nil, code, err
 	}
-	// The version must exist now (GenerateISO resolves it again and pins
-	// the result); an unknown one would only fail an hour into the install.
+	// The version must be one the tool supports and must exist now
+	// (GenerateISO resolves it again and pins the result); otherwise it
+	// would only fail an hour into the install.
+	if err := release.Supported(spec.OCPVersion); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
 	if _, err := release.Default.Resolve(ctx, spec.OCPVersion); err != nil {
 		return nil, http.StatusBadRequest, err
 	}
@@ -497,18 +501,11 @@ func (s *Server) listNADs(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{"items": items})
 }
 
-// listOCPVersions returns the minor versions offered in the wizard, newest
-// first, and (best effort) the release each one installs today, e.g.
-// {"items":["5.0","4.22",...],"latest":{"5.0":"5.0.1","4.22":"4.22.22"}}.
+// listOCPVersions returns the supported minors (release.SupportedMinors,
+// newest first) and, best effort, the release each one installs today:
+// {"items":["5.0","4.22"],"latest":{"5.0":"5.0.1","4.22":"4.22.22"}}.
 func (s *Server) listOCPVersions(w http.ResponseWriter, r *http.Request) {
-	versions := []string{
-		"5.0",
-		"4.22",
-		"4.21",
-		"4.20",
-		"4.19",
-		"4.18",
-	}
+	versions := release.SupportedMinors
 
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()

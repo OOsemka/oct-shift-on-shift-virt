@@ -136,3 +136,46 @@ func TestLatest(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+// Only the minors the tool is tested with are offered and accepted; older
+// ones only seemed to work while everything installed 4.22.14.
+func TestSupported(t *testing.T) {
+	for _, v := range []string{"5.0", "4.22", "4.22.14", "4.22.22", "5.0.1", "5.0.0-rc.8", " 4.22 "} {
+		if err := Supported(v); err != nil {
+			t.Errorf("Supported(%q) = %v", v, err)
+		}
+	}
+	for _, v := range []string{"4.21", "4.18", "4.21.40", "5.1", "4.23", "3.11"} {
+		err := Supported(v)
+		if err == nil {
+			t.Errorf("Supported(%q) accepted", v)
+			continue
+		}
+		for _, want := range []string{"not supported", "5.0", "4.22"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("Supported(%q) error %q lacks %q", v, err, want)
+			}
+		}
+	}
+	if err := Supported("latest"); err == nil || !strings.Contains(err.Error(), "invalid") {
+		t.Errorf("garbage: %v", err)
+	}
+	if len(SupportedMinors) != 2 || SupportedMinors[0] != "5.0" || SupportedMinors[1] != "4.22" {
+		t.Errorf("SupportedMinors = %v, want [5.0 4.22] newest first", SupportedMinors)
+	}
+}
+
+// A runaway graph response is cut off with an error instead of being read
+// into memory whole.
+func TestResolveCapsGraphResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"nodes":[{"version":"4.22.1","payload":"`))
+		_, _ = w.Write([]byte(strings.Repeat("a", maxGraphResponse+1)))
+		_, _ = w.Write([]byte(`"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	r := &Resolver{GraphURL: srv.URL, Arch: "amd64", HTTP: srv.Client(), TTL: time.Minute}
+	if _, err := r.Resolve(context.Background(), "4.22"); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("oversized response: err = %v", err)
+	}
+}

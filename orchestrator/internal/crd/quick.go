@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/release"
 )
 
 var clusterNameRe = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
@@ -131,6 +133,8 @@ func BuildQuickSpec(name string, s LabSettings, hasPullSecret bool, pool *IPPool
 	}
 	if strings.TrimSpace(s.OCPVersion) == "" {
 		problems = append(problems, "the lab defaults have no OpenShift version")
+	} else if err := release.Supported(s.OCPVersion); err != nil {
+		problems = append(problems, "lab defaults: "+err.Error())
 	}
 	if s.IPPool == "" {
 		problems = append(problems, "the lab defaults have no IP pool")
