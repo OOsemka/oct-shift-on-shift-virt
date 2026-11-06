@@ -217,6 +217,8 @@ func (c *Client) cloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapsho
 				"namespace": dstNs,
 			},
 			"spec": map[string]interface{}{
+				// CDI refuses to clone from a snapshot without a class.
+				"volumeSnapshotClassName": snapshotClassName,
 				"source": map[string]interface{}{
 					"volumeSnapshotContentName": contentName,
 				},

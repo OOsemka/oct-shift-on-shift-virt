@@ -220,6 +220,16 @@ func (s *StepExecutor) cloneVMs(ctx context.Context, nc *crd.NestedCluster) erro
 	if err != nil {
 		return err
 	}
+	// The clone's status starts from the master's (same internal layout);
+	// the bastion load balancer is built from these node addresses.
+	nc.Status.Nodes = append([]crd.NodeStatus{}, master.Status.Nodes...)
+	nc.Status.MCSRelayIP = master.Status.MCSRelayIP
+	nc.Status.DNSIPCUDN = master.Status.DNSIPCUDN
+	nc.Status.APIVIPCUDN = master.Status.APIVIPCUDN
+	nc.Status.IngressVIPCUDN = master.Status.IngressVIPCUDN
+	nc.Status.ReleaseVersion = master.Status.ReleaseVersion
+	nc.Status.ReleaseImage = master.Status.ReleaseImage
+	nc.Status.LoadBalancer = crd.LoadBalancerBastion
 	lb, err := newBastionLB(nc)
 	if err != nil {
 		return fmt.Errorf("bastion load balancer: %w", err)
@@ -311,15 +321,6 @@ func (s *StepExecutor) cloneVMs(ctx context.Context, nc *crd.NestedCluster) erro
 		}
 	}
 
-	// The clone's status starts from the master's (same internal layout).
-	nc.Status.Nodes = append([]crd.NodeStatus{}, master.Status.Nodes...)
-	nc.Status.MCSRelayIP = master.Status.MCSRelayIP
-	nc.Status.DNSIPCUDN = master.Status.DNSIPCUDN
-	nc.Status.APIVIPCUDN = master.Status.APIVIPCUDN
-	nc.Status.IngressVIPCUDN = master.Status.IngressVIPCUDN
-	nc.Status.ReleaseVersion = master.Status.ReleaseVersion
-	nc.Status.ReleaseImage = master.Status.ReleaseImage
-	nc.Status.LoadBalancer = crd.LoadBalancerBastion
 	s.updateCRStatus(ctx, nc)
 	log.Info("VMs cloned from the master", "master", master.Name, "vms", len(vms))
 	return nil
