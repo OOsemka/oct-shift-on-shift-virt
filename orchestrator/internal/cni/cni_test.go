@@ -213,6 +213,9 @@ func TestEveryImagePinnedByDigest(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		if strings.Contains(string(b), "kind: ImageSet") {
+			return nil // bare names + digest: field; TestCalicoImageSet checks it
+		}
 		for _, m := range re.FindAllStringSubmatch(string(b), -1) {
 			seen++
 			if !strings.Contains(m[1], "@sha256:") {
@@ -226,5 +229,58 @@ func TestEveryImagePinnedByDigest(t *testing.T) {
 	}
 	if seen == 0 {
 		t.Fatal("no image: lines found; the pattern no longer matches the manifests")
+	}
+}
+
+// The ImageSet pins the images the Tigera operator deploys itself. The
+// operator only uses one named calico-<CalicoRelease>, rejects images it does
+// not know (they all live under calico/) and needs a sha256 digest for each.
+func TestCalicoImageSet(t *testing.T) {
+	digest := regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	for _, v := range Versions(Calico) {
+		m, err := Manifests(Params{NetworkType: Calico, Version: v, ClusterName: "c", BaseDomain: "d",
+			ClusterNetworkCIDR: "10.128.0.0/14", DNSServerIP: "10.100.0.12"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, ok := m["cni-calico-03-imageset.yaml"]
+		if !ok {
+			t.Fatalf("%s: no ImageSet rendered", v)
+		}
+		var is struct {
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Metadata   struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Spec struct {
+				Images []struct {
+					Image  string `json:"image"`
+					Digest string `json:"digest"`
+				} `json:"images"`
+			} `json:"spec"`
+		}
+		if err := yaml.Unmarshal(b, &is); err != nil {
+			t.Fatalf("%s: %v", v, err)
+		}
+		if is.APIVersion != "operator.tigera.io/v1" || is.Kind != "ImageSet" || is.Metadata.Name != "calico-"+v {
+			t.Errorf("%s: got %s %s %q, want operator.tigera.io/v1 ImageSet calico-%s", v, is.APIVersion, is.Kind, is.Metadata.Name, v)
+		}
+		seen := map[string]bool{}
+		for _, img := range is.Spec.Images {
+			if !strings.HasPrefix(img.Image, "calico/") || strings.ContainsAny(img.Image, ":@") {
+				t.Errorf("%s: image %q must be a bare calico/<name>", v, img.Image)
+			}
+			if !digest.MatchString(img.Digest) {
+				t.Errorf("%s: %s has digest %q", v, img.Image, img.Digest)
+			}
+			if seen[img.Image] {
+				t.Errorf("%s: %s listed twice", v, img.Image)
+			}
+			seen[img.Image] = true
+		}
+		if !seen["calico/node"] {
+			t.Errorf("%s: calico/node missing from the ImageSet", v)
+		}
 	}
 }
