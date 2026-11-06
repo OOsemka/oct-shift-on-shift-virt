@@ -47,3 +47,34 @@ func TestWaitInstallJobPrintsNoCredentials(t *testing.T) {
 		}
 	}
 }
+
+// openshift-install writes auth/kubeconfig without apiVersion/kind (keys in
+// alphabetical order, "clusters:" first). 0.4.1 required "apiVersion:" and so
+// rejected every real kubeconfig: PostInstall stored none and the network
+// self-test, storage and virtualization all failed on a healthy cluster.
+func TestInstallerCredentials(t *testing.T) {
+	installerKC := "clusters:\n- cluster:\n    certificate-authority-data: Q0E=\n    server: https://api.x:6443\n  name: x\n" +
+		"contexts:\n- context:\n    cluster: x\n    user: admin\n  name: admin\ncurrent-context: admin\npreferences: {}\n" +
+		"users:\n- name: admin\n  user:\n    client-certificate-data: Q0VSVA==\n    client-key-data: S0VZ\n"
+	kc, pw := installerCredentials([]byte(installerKC), []byte("abcde-fghij-klmno-pqrst\n"))
+	if kc != installerKC || pw != "abcde-fghij-klmno-pqrst" {
+		t.Fatalf("installer kubeconfig rejected: kc=%d bytes pw=%q", len(kc), pw)
+	}
+	withHeader := "apiVersion: v1\nkind: Config\n" + installerKC
+	if kc, _ := installerCredentials([]byte(withHeader), []byte("p")); kc != withHeader {
+		t.Error("kubeconfig with apiVersion rejected")
+	}
+	for name, c := range map[string][2]string{
+		"empty kubeconfig":  {"", "p"},
+		"not yaml":          {"{{{", "p"},
+		"no clusters":       {"users:\n- name: a\n", "p"},
+		"no users":          {"clusters:\n- name: a\n", "p"},
+		"empty password":    {installerKC, ""},
+		"password w/ space": {installerKC, "a b"},
+		"multi-line pw":     {installerKC, "a\nb"},
+	} {
+		if kc, pw := installerCredentials([]byte(c[0]), []byte(c[1])); kc != "" || pw != "" {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

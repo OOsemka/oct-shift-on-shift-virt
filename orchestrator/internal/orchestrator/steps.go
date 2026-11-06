@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/yaml"
 )
 
 type StepExecutor struct {
@@ -2304,9 +2305,24 @@ func (s *StepExecutor) credentialsFromInstallerState(ctx context.Context, nc *cr
 	if err != nil {
 		return "", ""
 	}
-	kc := strings.TrimSpace(string(sec.Data["kubeconfig"]))
-	pw := strings.TrimSpace(string(sec.Data["kubeadmin-password"]))
-	if !strings.HasPrefix(kc, "apiVersion:") || pw == "" || strings.ContainsAny(pw, " \n") {
+	return installerCredentials(sec.Data["kubeconfig"], sec.Data["kubeadmin-password"])
+}
+
+// installerCredentials checks the installer's auth/kubeconfig and kubeadmin
+// password; both "" if either is unusable. openshift-install writes the
+// kubeconfig without apiVersion/kind ("clusters:" first), so it is checked
+// by parsing, not by its first line.
+func installerCredentials(kubeconfig, password []byte) (string, string) {
+	kc := strings.TrimSpace(string(kubeconfig))
+	pw := strings.TrimSpace(string(password))
+	if kc == "" || pw == "" || strings.ContainsAny(pw, " \n") {
+		return "", ""
+	}
+	var parsed struct {
+		Clusters []interface{} `json:"clusters"`
+		Users    []interface{} `json:"users"`
+	}
+	if err := yaml.Unmarshal([]byte(kc), &parsed); err != nil || len(parsed.Clusters) == 0 || len(parsed.Users) == 0 {
 		return "", ""
 	}
 	return kc + "\n", pw
@@ -2461,6 +2477,12 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 			return err
 		}
 		kubeconfigData, kubeadminData = k, a
+	}
+	if kubeconfigData == "" {
+		// Not fatal (the nested cluster is installed), but everything that
+		// talks to it afterwards needs this; say so instead of failing later.
+		log.Error("no admin kubeconfig in the installer state Secret or the wait-install log; " +
+			"network self-test, nested storage and virtualization cannot run")
 	}
 
 	if kubeconfigData != "" {
