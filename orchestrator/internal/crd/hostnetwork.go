@@ -36,10 +36,10 @@ var cudnCandidates = []string{
 	"10.230.0.0/16",
 	"10.240.0.0/16",
 	"10.250.0.0/16",
-	"172.20.0.0/16",
-	"172.21.0.0/16",
-	"172.22.0.0/16",
-	"192.168.0.0/16",
+	// No 172.16.0.0/12 or 192.168.0.0/16 candidates: labs and offices
+	// commonly use them for real networks, including the external VLAN the
+	// bastion sits on. An internal network overlapping the bastion's
+	// external subnet breaks its routing.
 }
 
 // InternalVIPs returns the internal API and Ingress VIPs of an internal
