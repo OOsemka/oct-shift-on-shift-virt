@@ -52,6 +52,8 @@ export type QuickOverrides = {
   graphical?: boolean;
   desktopUsername?: string;
   desktopPassword?: string;
+  /** Reach console/API through host-cluster routes instead of external DNS. */
+  hostRoutes?: boolean;
 };
 
 export type LabDefaults = {
