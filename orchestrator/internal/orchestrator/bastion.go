@@ -172,7 +172,7 @@ func (s *StepExecutor) configureBastionDNS(ctx context.Context, nc *crd.NestedCl
 			},
 		},
 		Data: map[string]string{
-			"dns.py":        s.generateDNSScript(apiVIP, ingressVIP, localZone),
+			"dns.py":        s.generateDNSScript(apiVIP, ingressVIP, localZone, s.hostRouteDNSRecords(ctx, nc, ingressVIP)),
 			"push-dns.sh":   bastionPushDNSScript,
 			"verify-dns.py": bastionVerifyDNSScript,
 		},

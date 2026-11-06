@@ -60,9 +60,12 @@ print(json.dumps({"spec": {"servingCerts": {"namedCertificates": named}}}))
 $N patch apiserver cluster --type=merge -p "$api_patch" >/dev/null || fatal "could not patch apiserver namedCertificates"
 echo "OK apiserver namedCertificates: $API_HOST"
 
-# The console and OAuth routes switch quickly.
+# The console keeps its default route (now a redirect) and serves the custom
+# name from a separate console-custom route; the console URL in its status is
+# the reliable signal. The OAuth route itself switches to the new name.
+console_url_is() { [ "$($N get console.config cluster -o jsonpath='{.status.consoleURL}' 2>/dev/null)" = "https://$1" ]; }
 route_is() { [ "$($N -n "$1" get route "$2" -o jsonpath='{.spec.host}' 2>/dev/null)" = "$3" ]; }
-poll 600 route_is openshift-console console "$CONSOLE_HOST" || fatal "console route did not switch to $CONSOLE_HOST"
+poll 600 console_url_is "$CONSOLE_HOST" || fatal "console did not switch to $CONSOLE_HOST"
 poll 600 route_is openshift-authentication oauth-openshift "$OAUTH_HOST" || fatal "OAuth route did not switch to $OAUTH_HOST"
 echo "OK nested console and OAuth routes use the host-side names"
 

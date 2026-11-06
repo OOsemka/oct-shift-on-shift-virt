@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -84,5 +85,27 @@ func TestHostRouteNamesAndLabels(t *testing.T) {
 	}
 	if !strings.Contains(publishRoutesScript, "HOSTROUTES_OK") {
 		t.Fatal("publish script not embedded")
+	}
+}
+
+func TestDNSScriptExtraRecords(t *testing.T) {
+	s := &StepExecutor{}
+	py := s.generateDNSScript("10.0.0.5", "10.0.0.6", "demo.example.test",
+		map[string]string{"Demo-Console-ns.apps.host.example.com": "10.0.0.6"})
+	if !strings.Contains(py, `"demo-console-ns.apps.host.example.com.": "10.0.0.6",`) {
+		t.Fatalf("extra record missing:\n%s", py[:600])
+	}
+	if py3, err := exec.LookPath("python3"); err == nil {
+		cmd := exec.Command(py3, "-c", "import sys; compile(sys.stdin.read(), 'dns.py', 'exec')")
+		cmd.Stdin = strings.NewReader(py)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("dns.py does not compile: %v\n%s", err, out)
+		}
+	}
+	if strings.Contains(py, "#SOS_EXTRA_RECORDS#") {
+		t.Fatal("placeholder left in the script")
+	}
+	if plain := s.generateDNSScript("10.0.0.5", "10.0.0.6", "demo.example.test", nil); strings.Contains(plain, "#SOS_EXTRA") || !strings.Contains(plain, `"api-int.demo.example.test.": "10.0.0.5"`) {
+		t.Fatal("script without extras is wrong")
 	}
 }

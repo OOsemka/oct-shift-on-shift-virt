@@ -24,6 +24,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
@@ -154,6 +155,15 @@ func (s *StepExecutor) doPublishRoutes(ctx context.Context, nc *crd.NestedCluste
 	if err := s.ensureExternalAccessCerts(ctx, nc, []string{consoleHost, oauthHost}, apiHost); err != nil {
 		return "", "", err
 	}
+	// Inside the nested cluster the host-side names would resolve to the
+	// host's router, which nested pods (on their own isolated network) cannot
+	// reach: the console and authentication operators then time out on their
+	// route health checks. The bastion's nested DNS answers those names with
+	// the nested ingress instead (split horizon), so re-push it now that the
+	// router has assigned the names.
+	if err := s.configureBastionDNS(ctx, nc); err != nil {
+		return "", "", fmt.Errorf("adding the host-route names to the nested DNS: %w", err)
+	}
 	if err := s.ensureHostRoutesScripts(ctx, nc); err != nil {
 		return "", "", err
 	}
@@ -189,6 +199,28 @@ func (s *StepExecutor) checkHostRoutePool(ctx context.Context, nc *crd.NestedClu
 		return fmt.Errorf("reading IP pool %q: %w", name, err)
 	}
 	return nc.Spec.CheckPool(pool)
+}
+
+// hostRouteDNSRecords returns the console and OAuth host-route names mapped to
+// the nested ingress address, for the bastion's nested DNS. Empty unless the
+// cluster uses host routes and the routes exist (the router has named them).
+func (s *StepExecutor) hostRouteDNSRecords(ctx context.Context, nc *crd.NestedCluster, ingressIP string) map[string]string {
+	if !nc.Spec.ExternalAccess.HostRoutes || ingressIP == "" {
+		return nil
+	}
+	_, console, oauth := hostRouteNames(nc.Spec.ClusterName)
+	out := map[string]string{}
+	routes := s.client.DynamicClient.Resource(hostRouteGVR).Namespace(operatorNamespace())
+	for _, name := range []string{console, oauth} {
+		r, err := routes.Get(ctx, name, metav1.GetOptions{})
+		if err != nil || r.GetLabels()["oct-shift-on-shift-virt/component"] != hostRoutesComponent {
+			continue
+		}
+		if host, _, _ := unstructured.NestedString(r.Object, "spec", "host"); host != "" {
+			out[host] = ingressIP
+		}
+	}
+	return out
 }
 
 // ensureExternalService creates a selector-less Service and its EndpointSlice
@@ -428,7 +460,7 @@ func (s *StepExecutor) runHostRoutesJob(ctx context.Context, nc *crd.NestedClust
 	cluster, ns := nc.Spec.ClusterName, nc.Spec.Namespace
 	jobName := cluster + "-publish-routes"
 	labels := hostRoutesLabels(cluster)
-	backoff := int32(1)
+	backoff := int32(0) // deterministic; a retry only doubles the wait on failure
 	deadline := int64(hostRoutesJobTimeout / time.Second)
 	env := append([]corev1.EnvVar{
 		{Name: "CLUSTER", Value: cluster},
