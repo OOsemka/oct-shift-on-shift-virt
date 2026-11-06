@@ -64,6 +64,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/clusters/{name}/nodes", s.getClusterNodes)
 	s.mux.HandleFunc("GET /api/v1/clusters/{name}/kubeconfig", s.getKubeconfig)
 	s.mux.HandleFunc("GET /api/v1/clusters/{name}/kubeadmin", s.getKubeadmin)
+	s.mux.HandleFunc("GET /api/v1/clusters/{name}/external-ca", s.getExternalCA)
 	s.mux.HandleFunc("GET /api/v1/clusters/{name}/logs", s.getClusterLogs)
 	s.mux.HandleFunc("POST /api/v1/clusters/preview-config", s.previewConfig)
 	s.mux.HandleFunc("GET /api/v1/storageclasses", s.listStorageClasses)
@@ -328,6 +329,28 @@ func (s *Server) getKubeconfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, map[string]string{"kubeconfig": string(data)})
+}
+
+// getExternalCA returns the public CA certificate that signs the host-route
+// certificates (externalAccess.hostRoutes). Only ca.crt is read; the CA key
+// stays in the Secret.
+func (s *Server) getExternalCA(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	obj, err := s.findCluster(r, name)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	cluster, _, _ := unstructured.NestedString(obj.Object, "spec", "clusterName")
+	if cluster == "" {
+		cluster = obj.GetName()
+	}
+	data, err := s.client.GetSecretData(r.Context(), clusterSecretNamespace(obj), cluster+"-external-access", "ca.crt")
+	if err != nil || len(data) == 0 {
+		s.writeError(w, http.StatusNotFound, "no host-route CA for this cluster (host routes not enabled or not published yet)")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]string{"caCert": string(data)})
 }
 
 func (s *Server) getKubeadmin(w http.ResponseWriter, r *http.Request) {

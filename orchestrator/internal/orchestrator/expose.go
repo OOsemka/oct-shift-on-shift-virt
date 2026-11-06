@@ -83,6 +83,10 @@ func edgeProxyImage() string {
 // an external API VIP, so removing a cluster drops its backend too.
 func (s *StepExecutor) exposeCluster(ctx context.Context, nc *crd.NestedCluster) error {
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("expose")
+	if nc.Spec.ExternalAccess.HostRoutes {
+		// PublishRoutes owns <cluster>-api and publishes the console too.
+		return nil
+	}
 
 	vlanIP := edgeProxyVLANIP()
 	if vlanIP == "" || edgeProxyNAD() == "" {
@@ -167,6 +171,9 @@ func (s *StepExecutor) collectEdgeBackends(ctx context.Context, current *crd.Nes
 		nc, cerr := unstructuredToNestedCluster(&item)
 		if cerr != nil {
 			continue
+		}
+		if nc.Spec.ExternalAccess.HostRoutes {
+			continue // published by PublishRoutes, not the edge proxy
 		}
 		add(nc.Spec.ClusterName, nc.Spec.ExternalAccess.APIIP)
 	}

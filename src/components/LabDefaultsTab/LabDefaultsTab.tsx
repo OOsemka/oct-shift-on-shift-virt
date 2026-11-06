@@ -274,6 +274,14 @@ const LabDefaultsTab: FC = () => {
             label={t('Install a desktop on the bastion by default (adds 2 vCPU / 4 GiB; can be changed per cluster)')}
           />
         </FormGroup>
+        <FormGroup label={t('Host routes on quick clusters')} fieldId="lab-host-routes">
+          <Checkbox
+            id="lab-host-routes"
+            isChecked={Boolean(settings.publishHostRoutes)}
+            onChange={(_e, v) => update({ publishHostRoutes: v })}
+            label={t("Publish the API and console through this cluster's routes by default (no DNS records needed; can be changed per cluster)")}
+          />
+        </FormGroup>
         <FormGroup label={t('Nested storage and virtualization on quick clusters')} fieldId="lab-nested">
           <Checkbox
             id="lab-nested-storage"

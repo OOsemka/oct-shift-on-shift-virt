@@ -30,6 +30,9 @@ const (
 	PhaseWaitBootstrap   ClusterPhase = "WaitBootstrap"
 	PhaseWaitInstall     ClusterPhase = "WaitInstall"
 	PhasePostInstall     ClusterPhase = "PostInstall"
+	// PhasePublishRoutes publishes the API and console through host-cluster
+	// Routes (opt-in, externalAccess.hostRoutes); non-fatal.
+	PhasePublishRoutes ClusterPhase = "PublishRoutes"
 	// ConfigureStorage exposes a host StorageClass inside the nested cluster
 	// (kubevirt csi-driver, split mode). ConfigureVirtualization installs
 	// OpenShift Virtualization in the nested cluster and points CDI at that
@@ -62,6 +65,7 @@ var PhaseOrder = []ClusterPhase{
 	PhaseWaitBootstrap,
 	PhaseWaitInstall,
 	PhasePostInstall,
+	PhasePublishRoutes,
 	PhaseConfigureStorage,
 	PhaseConfigureVirtualization,
 	PhaseReady,
@@ -208,6 +212,11 @@ type ExternalAccessConfig struct {
 	// above were picked from. Optional; when set, the API checks that NADName,
 	// PrefixLength and the addresses match the pool.
 	IPPool string `json:"ipPool,omitempty"`
+	// HostRoutes publishes the nested API and console through Routes on the
+	// host cluster (names under the host's *.apps domain), so they work
+	// without DNS records for the nested domain. Needs the bastion load
+	// balancer and external addresses the host nodes can reach.
+	HostRoutes bool `json:"hostRoutes,omitempty"`
 }
 
 // DefaultExternalPrefixLength is used when ExternalAccessConfig.PrefixLength is 0.
@@ -234,20 +243,24 @@ type NestedClusterStatus struct {
 	Phase ClusterPhase `json:"phase,omitempty"`
 	// LoadBalancer is "bastion" for clusters created since the bastion
 	// load balancer; empty means the older HAProxy pods.
-	LoadBalancer  string             `json:"loadBalancer,omitempty"`
-	Message       string             `json:"message,omitempty"`
-	StartedAt     *metav1.Time       `json:"startedAt,omitempty"`
-	CompletedAt   *metav1.Time       `json:"completedAt,omitempty"`
-	APIEndpoint   string             `json:"apiEndpoint,omitempty"`
-	ConsoleURL    string             `json:"consoleURL,omitempty"`
-	IngressDomain string             `json:"ingressDomain,omitempty"`
-	KubeconfigRef string             `json:"kubeconfigSecretRef,omitempty"`
-	KubeadminRef  string             `json:"kubeadminSecretRef,omitempty"`
-	InstallConfig string             `json:"installConfig,omitempty"`
-	AgentConfig   string             `json:"agentConfig,omitempty"`
-	Nodes         []NodeStatus       `json:"nodes,omitempty"`
-	PhaseHistory  []PhaseTransition  `json:"phaseHistory,omitempty"`
-	Conditions    []metav1.Condition `json:"conditions,omitempty"`
+	LoadBalancer string `json:"loadBalancer,omitempty"`
+	// HostConsoleURL / HostAPIURL: the nested console and API through host
+	// Routes (externalAccess.hostRoutes); set by PublishRoutes.
+	HostConsoleURL string             `json:"hostConsoleURL,omitempty"`
+	HostAPIURL     string             `json:"hostAPIURL,omitempty"`
+	Message        string             `json:"message,omitempty"`
+	StartedAt      *metav1.Time       `json:"startedAt,omitempty"`
+	CompletedAt    *metav1.Time       `json:"completedAt,omitempty"`
+	APIEndpoint    string             `json:"apiEndpoint,omitempty"`
+	ConsoleURL     string             `json:"consoleURL,omitempty"`
+	IngressDomain  string             `json:"ingressDomain,omitempty"`
+	KubeconfigRef  string             `json:"kubeconfigSecretRef,omitempty"`
+	KubeadminRef   string             `json:"kubeadminSecretRef,omitempty"`
+	InstallConfig  string             `json:"installConfig,omitempty"`
+	AgentConfig    string             `json:"agentConfig,omitempty"`
+	Nodes          []NodeStatus       `json:"nodes,omitempty"`
+	PhaseHistory   []PhaseTransition  `json:"phaseHistory,omitempty"`
+	Conditions     []metav1.Condition `json:"conditions,omitempty"`
 	// Actual cUDN IPs collected at runtime. spec.network.apiVIP/ingressVIP are
 	// wizard-supplied wishes; the cUDN DHCP assigns the real ones to the
 	// HAProxy pods, and those (not the wishes) are what DNS must serve. Spec

@@ -29,6 +29,12 @@ func TestBuildQuickSpec(t *testing.T) {
 			t.Errorf("zero-count pools still need valid sizes (CRD minimums): %+v", p)
 		}
 	}
+	if ea.HostRoutes {
+		t.Error("host routes are opt-in (publishHostRoutes)")
+	}
+	if s2, _ := BuildQuickSpec("quick-1", LabSettings{BaseDomain: "example.test", OCPVersion: "4.22", IPPool: "lab", PublishHostRoutes: true}, true, pool, free); !s2.ExternalAccess.HostRoutes {
+		t.Error("publishHostRoutes must set externalAccess.hostRoutes")
+	}
 	if s.PullSecret != "" || s.SSHKey != "" {
 		t.Error("credentials must come from the lab defaults server-side, never in the spec")
 	}
@@ -80,6 +86,12 @@ func TestQuickOverrides(t *testing.T) {
 		t.Fatalf("bad key must be a problem: %v", p)
 	}
 	yes := true
+	if ApplyQuickOverrides(&s, QuickOverrides{HostRoutes: &yes}); !s.ExternalAccess.HostRoutes {
+		t.Fatal("hostRoutes override not applied")
+	}
+	if ApplyQuickOverrides(&s, QuickOverrides{HostRoutes: &no}); s.ExternalAccess.HostRoutes {
+		t.Fatal("hostRoutes=false must turn the lab default off")
+	}
 	s2, _ := BuildQuickSpec("quick-2", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab"}, true, pool, []string{"192.0.2.12", "192.0.2.13"})
 	if p := ApplyQuickOverrides(&s2, QuickOverrides{Graphical: &yes, DesktopUsername: "chris", DesktopPassword: "correct-horse"}); len(p) != 0 {
 		t.Fatalf("valid desktop overrides: %v", p)

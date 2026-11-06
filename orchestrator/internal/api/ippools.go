@@ -73,6 +73,9 @@ func (s *Server) checkAddressAvailability(ctx context.Context, spec *crd.NestedC
 	if err := spec.CheckAddressesFree(others); err != nil {
 		return http.StatusConflict, err
 	}
+	if spec.ExternalAccess.HostRoutes && spec.ExternalAccess.IPPool == "" {
+		return http.StatusBadRequest, fmt.Errorf("host routes need the external addresses to come from an IP pool")
+	}
 	if spec.ExternalAccess.IPPool != "" {
 		pool, err := s.getIPPool(ctx, spec.ExternalAccess.IPPool)
 		if err != nil {

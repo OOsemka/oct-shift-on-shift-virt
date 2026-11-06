@@ -236,6 +236,9 @@ spec:
                     gateway:
                       type: string
                       description: Gateway of the external VLAN. The bastion answers clients outside the VLAN through it (replies from the API/Ingress addresses use it). Required for new clusters.
+                    hostRoutes:
+                      type: boolean
+                      description: Publish the nested API and console through Routes on the host cluster (host *.apps names), so they work without DNS records for the nested domain. Needs the bastion load balancer and external addresses reachable from the host nodes.
                     ipPool:
                       type: string
                       description: Optional IPPool (same namespace) the external addresses were picked from; the API checks they match it.
@@ -325,6 +328,12 @@ spec:
             status:
               type: object
               properties:
+                hostConsoleURL:
+                  type: string
+                  description: Nested console through a host Route (externalAccess.hostRoutes).
+                hostAPIURL:
+                  type: string
+                  description: Nested API through a host Route (externalAccess.hostRoutes).
                 loadBalancer:
                   type: string
                   description: '"bastion" when the API/Ingress load balancer runs on the bastion VM; empty for clusters that use HAProxy pods.'
@@ -350,6 +359,7 @@ spec:
                     - WaitBootstrap
                     - WaitInstall
                     - PostInstall
+                    - PublishRoutes
                     - ConfigureStorage
                     - ConfigureVirtualization
                     - Ready

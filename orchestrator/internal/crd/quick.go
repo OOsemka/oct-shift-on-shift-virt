@@ -61,6 +61,10 @@ type QuickOverrides struct {
 	// empty means one is generated.
 	DesktopUsername string `json:"desktopUsername,omitempty"`
 	DesktopPassword string `json:"desktopPassword,omitempty"`
+	// HostRoutes overrides the lab default (publishHostRoutes) when set:
+	// reach the console and API through host-cluster routes instead of
+	// external DNS records. Quick clusters always use pool addresses.
+	HostRoutes *bool `json:"hostRoutes,omitempty"`
 }
 
 var linuxUserRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
@@ -78,6 +82,9 @@ func ApplyQuickOverrides(spec *NestedClusterSpec, o QuickOverrides) []string {
 	}
 	if o.Graphical != nil {
 		spec.Bastion.Graphical = *o.Graphical
+	}
+	if o.HostRoutes != nil {
+		spec.ExternalAccess.HostRoutes = *o.HostRoutes
 	}
 	if spec.Bastion.Graphical {
 		if u := strings.TrimSpace(o.DesktopUsername); u != "" {
@@ -171,6 +178,7 @@ func BuildQuickSpec(name string, s LabSettings, hasPullSecret bool, pool *IPPool
 			PrefixLength: pool.Spec.PrefixLength,
 			Gateway:      pool.Spec.Gateway,
 			IPPool:       pool.Name,
+			HostRoutes:   s.PublishHostRoutes,
 		}
 		if len(free) >= 2 {
 			spec.ExternalAccess.APIIP, spec.ExternalAccess.IngressIP = free[0], free[1]

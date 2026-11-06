@@ -45,6 +45,8 @@ export interface ExternalAccessConfig {
   gateway: string;
   /** IP pool the addresses were picked from; empty when entered by hand. */
   ipPool: string;
+  /** Publish the API and console through host-cluster Routes (no DNS needed). */
+  hostRoutes?: boolean;
 }
 
 /**
@@ -128,6 +130,9 @@ export interface NestedClusterStatus {
   conditions?: ClusterCondition[];
   installConfig?: string;
   agentConfig?: string;
+  /** Host-side URLs when externalAccess.hostRoutes is on. */
+  hostConsoleURL?: string;
+  hostAPIURL?: string;
 }
 
 /** Build node name entries for a given topology and sizing. */
@@ -181,6 +186,7 @@ export const DEFAULT_CLUSTER_CONFIG: ClusterConfig = {
     prefixLength: 24,
     gateway: '',
     ipPool: '',
+    hostRoutes: false,
   },
   storageClassName: '',
   storage: { enabled: false, infraStorageClassName: '', allowanceGi: 100 },

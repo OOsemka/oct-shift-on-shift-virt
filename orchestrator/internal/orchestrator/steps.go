@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -103,6 +104,8 @@ func (s *StepExecutor) Execute(ctx context.Context, nc *crd.NestedCluster, phase
 		return s.waitInstall(ctx, nc)
 	case crd.PhasePostInstall:
 		return s.postInstall(ctx, nc)
+	case crd.PhasePublishRoutes:
+		return s.publishRoutes(ctx, nc)
 	case crd.PhaseConfigureStorage:
 		return s.configureStorage(ctx, nc)
 	case crd.PhaseConfigureVirtualization:
@@ -822,7 +825,7 @@ func (s *StepExecutor) deployDNS(ctx context.Context, nc *crd.NestedCluster) err
 	nc.Status.APIVIPCUDN = apiVIP
 	nc.Status.IngressVIPCUDN = ingressVIP
 
-	dnsScript := s.generateDNSScript(apiVIP, ingressVIP, localZone)
+	dnsScript := s.generateDNSScript(apiVIP, ingressVIP, localZone, nil)
 
 	configMapName := clusterName + "-dns-script"
 	cm := &corev1.ConfigMap{
@@ -1071,7 +1074,22 @@ func (s *StepExecutor) podWithWrongSCC(ctx context.Context, namespace, selector,
 	return "", ""
 }
 
-func (s *StepExecutor) generateDNSScript(apiVIP, ingressVIP, localZone string) string {
+// generateDNSScript renders dns.py. extra adds A records outside the nested
+// zone (host-route names -> nested ingress, see hostRouteDNSRecords).
+func (s *StepExecutor) generateDNSScript(apiVIP, ingressVIP, localZone string, extra map[string]string) string {
+	var extraLines strings.Builder
+	names := make([]string, 0, len(extra))
+	for n := range extra {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		fmt.Fprintf(&extraLines, "    %q: %q,\n", strings.ToLower(strings.TrimSuffix(n, "."))+".", extra[n])
+	}
+	return strings.Replace(s.renderDNSScript(apiVIP, ingressVIP, localZone), "#SOS_EXTRA_RECORDS#\n", extraLines.String(), 1)
+}
+
+func (s *StepExecutor) renderDNSScript(apiVIP, ingressVIP, localZone string) string {
 	return fmt.Sprintf(`#!/usr/bin/env python3
 """Authoritative DNS for a nested OCP cluster (SOS).
 Listens on :53 AND :5353 (UDP+TCP). OCP installer hosts' stub resolver can
@@ -1086,6 +1104,7 @@ import socketserver, struct, sys, traceback
 RECORDS = {
     "api.%[3]s.":     "%[1]s",
     "api-int.%[3]s.": "%[1]s",
+#SOS_EXTRA_RECORDS#
 }
 
 WILDCARD_SUFFIX = ".apps.%[3]s."
@@ -2498,6 +2517,8 @@ func (s *StepExecutor) DeleteCluster(ctx context.Context, nc *crd.NestedCluster)
 		Delete(ctx, nc.Spec.ClusterName+"-api", metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		log.Info("could not delete the api route (non-fatal)", "error", err.Error())
 	}
+	// Host routes (externalAccess.hostRoutes) also live in the operator namespace.
+	s.deleteHostRoutes(ctx, nc.Spec.ClusterName)
 
 	// Clean up DNS resources (deployed in the target namespace alongside VMs)
 	s.client.DynamicClient.Resource(deployGVR).Namespace(clusterNs).Delete(ctx, nc.Spec.ClusterName+"-dns", metav1.DeleteOptions{})

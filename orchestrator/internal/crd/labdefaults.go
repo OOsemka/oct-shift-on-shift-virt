@@ -43,6 +43,8 @@ type LabSettings struct {
 	NestedStorageClass       string `json:"nestedStorageClass,omitempty"`
 	NestedStorageAllowanceGi int    `json:"nestedStorageAllowanceGi,omitempty"`
 	NestedVirtualization     bool   `json:"nestedVirtualization,omitempty"`
+	// PublishHostRoutes: quick clusters get externalAccess.hostRoutes.
+	PublishHostRoutes bool `json:"publishHostRoutes,omitempty"`
 }
 
 // WithDefaults fills unset compact-node sizes with the wizard's defaults.

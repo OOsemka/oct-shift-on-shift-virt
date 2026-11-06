@@ -9,6 +9,7 @@ import {
   CardFooter,
   CardTitle,
   Checkbox,
+  Radio,
   Flex,
   FlexItem,
   FormGroup,
@@ -51,11 +52,14 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
   const [sshKey, setSshKey] = useState('');
   const [desktopUser, setDesktopUser] = useState('core');
   const [desktopPassword, setDesktopPassword] = useState('');
+  // Access path; starts from the lab default (publishHostRoutes).
+  const [hostRoutes, setHostRoutes] = useState<boolean | undefined>(undefined);
   useEffect(() => {
     fetchLabDefaults()
       .then((d) => {
         setDefaults(d);
         setGraphical(Boolean(d.settings?.bastionGraphical));
+        setHostRoutes(Boolean(d.settings?.publishHostRoutes));
         // Pre-filled with the profile key; edit it to use another key for this cluster.
         setSshKey(d.sshPublicKey || '');
       })
@@ -88,6 +92,7 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
         // Only an edited key is sent; otherwise the server uses the profile key.
         ...(keyChanged && sshKey.trim() ? { sshPublicKey: sshKey.trim() } : {}),
         ...(graphical !== undefined ? { graphical } : {}),
+        ...(hostRoutes !== undefined ? { hostRoutes } : {}),
         ...(graphical ? { desktopUsername: desktopUser.trim(), desktopPassword } : {}),
       });
       navigate(`/community-tools/compute/shift-on-shift-virt/cluster/${encodeURIComponent(name.trim())}`);
@@ -155,6 +160,32 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
               </HelperTextItem>
             </HelperText>
           </FormHelperText>
+        </FormGroup>
+        <FormGroup role="radiogroup" isInline={false} label={t('How people reach the console and API')} fieldId="quick-access">
+          <Radio
+            id="quick-access-dns"
+            name="quick-access"
+            isChecked={hostRoutes === false}
+            onChange={() => setHostRoutes(false)}
+            label={t('External DNS')}
+            description={
+              s
+                ? t('You add two DNS records: api.{{fqdn}} → {{api}} and *.apps.{{fqdn}} → {{ingress}}. Everything works natively with the cluster\'s own certificates: console, login, API and all applications.', {
+                    fqdn: `${s.clusterName}.${s.baseDomain}`,
+                    api: s.externalAccess?.apiIP,
+                    ingress: s.externalAccess?.ingressIP,
+                  })
+                : t('You add DNS records for the cluster\'s API and *.apps names. Everything works natively with the cluster\'s own certificates.')
+            }
+          />
+          <Radio
+            id="quick-access-routes"
+            name="quick-access"
+            isChecked={hostRoutes === true}
+            onChange={() => setHostRoutes(true)}
+            label={t('Hosting cluster routes (no DNS needed)')}
+            description={t('Console, login and API are published as routes on this cluster, under its *.apps domain, so they work right away. Certificates come from a per-cluster CA you download from the cluster page (browsers warn until you trust it). Console and login then always use these names; your own applications in the nested cluster still need DNS. The API also keeps working through DNS if you add it later.')}
+          />
         </FormGroup>
         <Checkbox
           id="quick-graphical"
