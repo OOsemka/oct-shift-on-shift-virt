@@ -182,6 +182,10 @@ func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) 
 	e.mu.Unlock()
 
 	if phase == crd.PhaseReady || phase == crd.PhaseFailed || phase == crd.PhaseMaster {
+		// Express clones finish isolating after Ready (a Job); record it.
+		if phase == crd.PhaseReady && nc.IsClone() {
+			go e.steps.CheckIsolation(ctx, nc)
+		}
 		return
 	}
 

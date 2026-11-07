@@ -60,15 +60,15 @@ $N patch clusterversion version --type=merge \
   -p "{\"spec\":{\"clusterID\":\"$(python3 -c 'import uuid; print(uuid.uuid4())')\"}}" >/dev/null || fatal "could not set a new cluster ID"
 echo "OK OAuth tokens deleted, new cluster ID"
 
-# Service-account tokens: a unique issuer, and no grace period for the old one
-# (OpenShift keeps the previous issuer trusted for 24 h unless pruned).
+# Service-account tokens: a unique issuer. The old one stays trusted until
+# finish-isolation.sh drops it: pods hold tokens with the old issuer until
+# the kubelet refreshes them, and dropping it during the rollout locks out
+# the operators that roll out the API servers (seen in testing).
 ISS=$(cat /creds/issuer)
 $N patch authentication.config cluster --type=merge -p "{\"spec\":{\"serviceAccountIssuer\":\"$ISS\"}}" >/dev/null || fatal "could not set the issuer"
 first_issuer() { [ "$($N get kubeapiserver cluster -o jsonpath='{.status.serviceAccountIssuers[0].name}')" = "$ISS" ]; }
 poll 300 first_issuer || fatal "kube-apiserver operator did not pick up the new issuer"
-$N patch kubeapiserver cluster --subresource=status --type=json \
-  -p "[{\"op\":\"replace\",\"path\":\"/status/serviceAccountIssuers\",\"value\":[{\"name\":\"$ISS\"}]}]" >/dev/null || fatal "could not drop the old issuer"
-echo "OK service-account issuer $ISS (old issuer dropped)"
+echo "OK service-account issuer $ISS"
 
 # New client-auth signers the API server trusts (controller manager and
 # scheduler identities, front-proxy, node-system-admin): with the master's

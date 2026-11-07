@@ -15,8 +15,22 @@ sys.exit(0 if all(n.get("currentRevision") == l for n in s["nodeStatuses"]) else
   [ "$($N get co --no-headers | awk '$3!="True"||$4!="False"||$5!="False"' | wc -l)" -eq 0 ]
 }
 sleep 60
-poll 2400 rolled_out || fatal "the control plane did not finish rolling out within 40 minutes"
-echo "OK control plane rolled out"
+poll 3600 rolled_out || fatal "the control plane did not finish rolling out the new issuer within an hour"
+echo "OK control plane rolled out (new issuer)"
+
+# Pods refresh their service-account tokens within about an hour (bound
+# token lifetime); only then can the old, shared issuer be dropped.
+WAIT_UNTIL=$((ISSUER_AT + 65 * 60))
+while [ "$(date +%s)" -lt $WAIT_UNTIL ]; do sleep 60; done
+ISS=$($N get authentication.config cluster -o jsonpath='{.spec.serviceAccountIssuer}')
+if [ "$($N get kubeapiserver cluster -o jsonpath='{.status.serviceAccountIssuers[*].name}')" != "$ISS" ]; then
+  $N patch kubeapiserver cluster --subresource=status --type=json \
+    -p "[{\"op\":\"replace\",\"path\":\"/status/serviceAccountIssuers\",\"value\":[{\"name\":\"$ISS\"}]}]" >/dev/null || fatal "could not drop the old issuer"
+  echo "OK old service-account issuer dropped"
+  sleep 120
+  poll 3600 rolled_out || fatal "the control plane did not finish rolling out without the old issuer"
+fi
+echo "OK control plane rolled out (old issuer dropped)"
 for cm in openshift-config-managed/kube-apiserver-aggregator-client-ca \
           openshift-kube-apiserver-operator/kube-control-plane-signer-ca \
           openshift-kube-apiserver-operator/node-system-admin-ca; do

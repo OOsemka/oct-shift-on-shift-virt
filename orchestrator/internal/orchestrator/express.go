@@ -510,11 +510,31 @@ func (s *StepExecutor) ensureExpressScripts(ctx context.Context, nc *crd.NestedC
 // runExpressJob runs one Express script in the clone's namespace with a
 // nested kubeconfig (and optionally the sanitize credentials) mounted.
 func (s *StepExecutor) runExpressJob(ctx context.Context, nc *crd.NestedCluster, step, script, kubeconfigSecret string, withCreds bool, extra []corev1.EnvVar, timeout time.Duration) (string, error) {
+	jobName, err := s.startExpressJob(ctx, nc, step, script, kubeconfigSecret, withCreds, extra, timeout)
+	if err != nil {
+		return "", err
+	}
+	ns := nc.Spec.Namespace
+	werr := s.client.WaitForJobCompletion(ctx, ns, jobName, timeout+time.Minute)
+	logs, _ := s.client.JobPodLogs(ctx, ns, jobName)
+	if werr != nil {
+		if f := lastFatal(logs); f != "" {
+			return logs, fmt.Errorf("%s", f)
+		}
+		return logs, werr
+	}
+	return logs, nil
+}
+
+func expressJobName(cluster, step string) string { return cluster + "-express-" + step }
+
+// startExpressJob creates the Job (replacing an earlier one) and returns its name.
+func (s *StepExecutor) startExpressJob(ctx context.Context, nc *crd.NestedCluster, step, script, kubeconfigSecret string, withCreds bool, extra []corev1.EnvVar, timeout time.Duration) (string, error) {
 	if err := s.ensureExpressScripts(ctx, nc); err != nil {
 		return "", err
 	}
 	cluster, ns := nc.Spec.ClusterName, nc.Spec.Namespace
-	jobName := cluster + "-express-" + step
+	jobName := expressJobName(cluster, step)
 	labels := map[string]string{"oct-shift-on-shift-virt/cluster": cluster, "oct-shift-on-shift-virt/component": "express-" + step}
 	backoff := int32(0)
 	deadline := int64(timeout / time.Second)
@@ -562,15 +582,7 @@ func (s *StepExecutor) runExpressJob(ctx context.Context, nc *crd.NestedCluster,
 	if err := s.client.CreateJob(ctx, job); err != nil {
 		return "", err
 	}
-	werr := s.client.WaitForJobCompletion(ctx, ns, jobName, timeout+time.Minute)
-	logs, _ := s.client.JobPodLogs(ctx, ns, jobName)
-	if werr != nil {
-		if f := lastFatal(logs); f != "" {
-			return logs, fmt.Errorf("%s", f)
-		}
-		return logs, werr
-	}
-	return logs, nil
+	return jobName, nil
 }
 
 // waitCloneAPI waits for the cloned API and operators (master credentials).
@@ -746,37 +758,72 @@ func (s *StepExecutor) cloneCredentials(ctx context.Context, nc *crd.NestedClust
 	return nil
 }
 
-// finishIsolation waits for the API server rollout and removes trust in the
-// master's API-facing CAs. Non-fatal: the clone is usable meanwhile; the
-// Isolated condition says how far it got.
+// finishIsolation starts the isolation Job and returns: dropping the old
+// issuer has to wait until the pods have refreshed their tokens (about an
+// hour), so the clone goes Ready meanwhile with Isolated=False/Isolating.
+// CheckIsolation (engine resync) records the outcome.
 func (s *StepExecutor) finishIsolation(ctx context.Context, nc *crd.NestedCluster) error {
-	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("express")
-	cutoff := ""
+	issuerAt := time.Now()
 	for _, c := range nc.Status.Conditions {
 		if c.Type == conditionIsolated {
-			cutoff = c.LastTransitionTime.Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+			issuerAt = c.LastTransitionTime.Time
 		}
 	}
-	if cutoff == "" {
-		cutoff = time.Now().Add(-30 * time.Minute).UTC().Format(time.RFC3339)
-	}
-	logs, err := s.runExpressJob(ctx, nc, "isolate", "finish-isolation.sh", nc.Status.KubeconfigRef, false,
-		[]corev1.EnvVar{{Name: "CUTOFF", Value: cutoff}}, 45*time.Minute)
-	if err != nil || !strings.Contains(logs, "ISOLATED_OK") {
-		msg := "isolation did not finish"
-		if err != nil {
-			msg += ": " + err.Error()
-		}
-		log.Error(msg + " (non-fatal)")
-		setCondition(nc, conditionIsolated, metav1.ConditionFalse, "IsolationIncomplete", msg)
+	cutoff := issuerAt.Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+	if _, err := s.startExpressJob(ctx, nc, "isolate", "finish-isolation.sh", nc.Status.KubeconfigRef, false,
+		[]corev1.EnvVar{{Name: "CUTOFF", Value: cutoff}, {Name: "ISSUER_AT", Value: fmt.Sprint(issuerAt.Unix())}}, 4*time.Hour); err != nil {
+		setCondition(nc, conditionIsolated, metav1.ConditionFalse, "IsolationIncomplete", "could not start the isolation job: "+err.Error())
 		s.updateCRStatus(ctx, nc)
 		return nil
 	}
-	setCondition(nc, conditionIsolated, metav1.ConditionTrue, "Isolated",
-		"own admin credentials, service-account issuer and API CAs; the master's are rejected")
+	setCondition(nc, conditionIsolated, metav1.ConditionFalse, "Isolating",
+		"usable; removing the last trust shared with the master (about 1.5 hours)")
 	s.updateCRStatus(ctx, nc)
-	log.Info("clone isolated from its master")
 	return nil
+}
+
+// CheckIsolation updates the Isolated condition of a Ready clone from its
+// isolation Job. Called on resync; cheap when there is nothing to do.
+func (s *StepExecutor) CheckIsolation(ctx context.Context, nc *crd.NestedCluster) {
+	if !nc.IsClone() {
+		return
+	}
+	isolating := false
+	for _, c := range nc.Status.Conditions {
+		if c.Type == conditionIsolated && c.Reason == "Isolating" {
+			isolating = true
+		}
+	}
+	if !isolating {
+		return
+	}
+	ns, name := nc.Spec.Namespace, expressJobName(nc.Spec.ClusterName, "isolate")
+	job, err := s.client.Clientset.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	switch {
+	case job.Status.Succeeded > 0:
+		logs, _ := s.client.JobPodLogs(ctx, ns, name)
+		if strings.Contains(logs, "ISOLATED_OK") {
+			setCondition(nc, conditionIsolated, metav1.ConditionTrue, "Isolated",
+				"own admin credentials, service-account issuer and client-auth CAs; the master's are rejected")
+		} else {
+			setCondition(nc, conditionIsolated, metav1.ConditionFalse, "IsolationIncomplete", "isolation job ended without ISOLATED_OK")
+		}
+	case job.Status.Failed > 0:
+		logs, _ := s.client.JobPodLogs(ctx, ns, name)
+		msg := "isolation job failed"
+		if f := lastFatal(logs); f != "" {
+			msg += ": " + f
+		}
+		setCondition(nc, conditionIsolated, metav1.ConditionFalse, "IsolationIncomplete", msg)
+	default:
+		return
+	}
+	s.updateCRStatus(ctx, nc)
+	s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("express").Info("isolation finished",
+		"succeeded", job.Status.Succeeded > 0)
 }
 
 // deleteSharedSnapshotContents removes a clone's Retain VolumeSnapshotContents
