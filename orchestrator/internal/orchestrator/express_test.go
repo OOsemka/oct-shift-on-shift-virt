@@ -131,13 +131,19 @@ func TestBuildAdminKubeconfig(t *testing.T) {
 }
 
 func TestExpressScriptsEmbedded(t *testing.T) {
-	for name, s := range map[string]string{"wait": expressWaitAPIScript, "sanitize": expressSanitizeScript, "finish": expressFinishScript} {
+	for name, s := range map[string]string{"wait": expressWaitAPIScript, "finish": expressFinishScript} {
 		if !strings.Contains(s, "source /m/lib.sh") {
 			t.Errorf("%s script not embedded", name)
 		}
 	}
-	// The kubelet client CA must never be purged (cuts the API server off from the kubelets).
-	if strings.Contains(expressFinishScript, "kube-apiserver-to-kubelet-client-ca") {
-		t.Error("finish-isolation must not purge the kubelet client CA")
+	if !strings.Contains(expressSanitizeScript, "SANITIZE_OK") {
+		t.Error("sanitize script not embedded")
+	}
+	// Serving and kubelet CAs must never be rotated or purged on a running
+	// clone: the nodes need them re-delivered first (nodes went NotReady).
+	for _, bad := range []string{"kube-apiserver-to-kubelet", "loadbalancer-serving", "localhost-serving", "service-network-serving", "regenerate-top-level -A"} {
+		if strings.Contains(expressFinishScript+expressSanitizeScript, bad) {
+			t.Errorf("Express scripts must not touch %s", bad)
+		}
 	}
 }
