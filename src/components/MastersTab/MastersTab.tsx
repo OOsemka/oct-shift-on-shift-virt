@@ -30,6 +30,7 @@ import {
   fetchMasters,
   makeMaster,
   masterCandidates,
+  refreshMaster,
   MasterItem,
 } from '../../utils/masters';
 
@@ -65,6 +66,14 @@ const MastersTab: FC = () => {
   }, [load]);
 
   const candidates = masterCandidates(clusters);
+  const doRefresh = async (name: string) => {
+    try {
+      await refreshMaster(name);
+      load();
+    } catch (e) {
+      setError(errText(e));
+    }
+  };
   const inProgress = clusters.filter((c) => c.phase === 'MakeMaster');
   const doMake = async () => {
     setBusy(true);
@@ -122,6 +131,8 @@ const MastersTab: FC = () => {
                     <Th>{t('Internal name')}</Th>
                     <Th>{t('Created')}</Th>
                     <Th>{t('Clones')}</Th>
+                    <Th>{t('Snapshots taken')}</Th>
+                    <Th />
                   </Tr>
                 </Thead>
                 <Tbody>
@@ -133,6 +144,16 @@ const MastersTab: FC = () => {
                       <Td>{m.internalDomain}</Td>
                       <Td>{m.createdAt ? new Date(m.createdAt).toLocaleString() : ''}</Td>
                       <Td>{m.clones}</Td>
+                      <Td>{new Date(m.refreshedAt || m.createdAt || '').toLocaleString()}</Td>
+                      <Td>
+                        {m.refreshing ? (
+                          <Spinner size="sm" aria-label={t('Refreshing')} />
+                        ) : (
+                          <Button variant="link" isInline isDisabled={m.clones > 0} onClick={() => doRefresh(m.name)}>
+                            {t('Refresh')}
+                          </Button>
+                        )}
+                      </Td>
                     </Tr>
                   ))}
                 </Tbody>
@@ -140,7 +161,8 @@ const MastersTab: FC = () => {
             )}
             <HelperText>
               <HelperTextItem>
-                {t('Clone from a master with the quick cluster card on the Install tab. A master cannot be deleted while it has clones.')}
+                {t('Clone from a master with the quick cluster card on the Install tab. A master cannot be deleted while it has clones.')}{' '}
+                {t('Refresh a master every few days: it boots, renews its certificates and takes new snapshots (about 20 minutes), so its clones start faster. Only possible while it has no clones.')}
               </HelperTextItem>
             </HelperText>
           </CardBody>

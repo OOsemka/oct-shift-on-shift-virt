@@ -380,5 +380,8 @@
   "Make master": "Make master",
   "Eligible: Ready clusters installed with this tool, with the bastion load balancer and without nested storage or virtualization (support for those comes later). Clones are not eligible.": "Eligible: Ready clusters installed with this tool, with the bastion load balancer and without nested storage or virtualization (support for those comes later). Clones are not eligible.",
   "Make {{name}} a master?": "Make {{name}} a master?",
-  "The cluster is shut down for good and its disks are snapshotted. It stops being a usable cluster: it becomes the template for clones. Clones keep its internal name and current state, so prepare it (operators, content) before making it a master.": "The cluster is shut down for good and its disks are snapshotted. It stops being a usable cluster: it becomes the template for clones. Clones keep its internal name and current state, so prepare it (operators, content) before making it a master."
+  "The cluster is shut down for good and its disks are snapshotted. It stops being a usable cluster: it becomes the template for clones. Clones keep its internal name and current state, so prepare it (operators, content) before making it a master.": "The cluster is shut down for good and its disks are snapshotted. It stops being a usable cluster: it becomes the template for clones. Clones keep its internal name and current state, so prepare it (operators, content) before making it a master.",
+  "Snapshots taken": "Snapshots taken",
+  "Refreshing": "Refreshing",
+  "Refresh a master every few days: it boots, renews its certificates and takes new snapshots (about 20 minutes), so its clones start faster. Only possible while it has no clones.": "Refresh a master every few days: it boots, renews its certificates and takes new snapshots (about 20 minutes), so its clones start faster. Only possible while it has no clones."
 }

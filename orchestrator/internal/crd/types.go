@@ -44,8 +44,11 @@ const (
 	// Express (clone from a master). MakeMaster shuts a Ready cluster down
 	// and snapshots its disks; Master is its terminal state. A clone runs
 	// ClonePhaseOrder instead of PhaseOrder.
-	PhaseMakeMaster    ClusterPhase = "MakeMaster"
-	PhaseMaster        ClusterPhase = "Master"
+	PhaseMakeMaster ClusterPhase = "MakeMaster"
+	PhaseMaster     ClusterPhase = "Master"
+	// RefreshMaster boots a master, lets its certificates renew, and takes
+	// new snapshots, so clones do not have to renew them on first boot.
+	PhaseRefreshMaster ClusterPhase = "RefreshMaster"
 	PhaseCloneVMs      ClusterPhase = "CloneVMs"
 	PhaseWaitCloneAPI  ClusterPhase = "WaitCloneAPI"
 	PhaseSanitize      ClusterPhase = "Sanitize"
@@ -342,6 +345,8 @@ type MasterStatus struct {
 	Snapshots      map[string]string `json:"snapshots,omitempty"`
 	ReleaseVersion string            `json:"releaseVersion,omitempty"`
 	CreatedAt      *metav1.Time      `json:"createdAt,omitempty"`
+	// RefreshedAt is when the snapshots were last retaken (refresh master).
+	RefreshedAt *metav1.Time `json:"refreshedAt,omitempty"`
 }
 
 type NodeStatus struct {

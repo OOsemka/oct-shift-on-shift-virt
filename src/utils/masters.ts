@@ -13,6 +13,8 @@ export type MasterItem = {
   masters: { count: number; cpuCores: number; memoryGi: number; diskGi: number };
   internalDomain: string;
   createdAt?: string;
+  refreshedAt?: string;
+  refreshing?: boolean;
   clones: number;
 };
 
@@ -36,6 +38,9 @@ export const fetchClusterList = async (): Promise<ClusterListItem[]> => {
 
 export const makeMaster = (name: string): Promise<unknown> =>
   consoleFetchJSON.post(`${PROXY_BASE}/api/v1/clusters/${encodeURIComponent(name)}/make-master`, {});
+
+export const refreshMaster = (name: string): Promise<unknown> =>
+  consoleFetchJSON.post(`${PROXY_BASE}/api/v1/clusters/${encodeURIComponent(name)}/refresh-master`, {});
 
 /** Clusters that can become a master now: Ready, installed (not a clone), no refusal. */
 export const masterCandidates = (clusters: ClusterListItem[]): ClusterListItem[] =>

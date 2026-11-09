@@ -72,6 +72,47 @@ func (s *Server) makeMaster(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusAccepted, map[string]string{"status": "making master"})
 }
 
+// refreshMaster: POST /api/v1/clusters/{name}/refresh-master. Boots the
+// master, lets its certificates renew and retakes its snapshots. Only for a
+// master without clones (their disks came from the current snapshots).
+func (s *Server) refreshMaster(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	items, err := s.masters(r.Context())
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	found := false
+	for _, m := range items {
+		if m.Name == name {
+			found = true
+			if m.Clones > 0 {
+				s.writeError(w, http.StatusConflict, fmt.Sprintf("%s has %d clone(s); delete them before refreshing the master", name, m.Clones))
+				return
+			}
+		}
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, name+" is not a master")
+		return
+	}
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		cur, gerr := s.client.DynamicClient.Resource(nestedClusterGVR).Namespace(clusterNamespace).Get(r.Context(), name, metav1.GetOptions{})
+		if gerr != nil {
+			return gerr
+		}
+		_ = unstructured.SetNestedField(cur.Object, string(crd.PhaseRefreshMaster), "status", "phase")
+		_ = unstructured.SetNestedField(cur.Object, "Booting to renew certificates, then new snapshots", "status", "message")
+		_, uerr := s.client.DynamicClient.Resource(nestedClusterGVR).Namespace(clusterNamespace).UpdateStatus(r.Context(), cur, metav1.UpdateOptions{})
+		return uerr
+	}); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "could not start the refresh: "+err.Error())
+		return
+	}
+	s.logger.Info("refresh master requested", "master", name)
+	s.writeJSON(w, http.StatusAccepted, map[string]string{"status": "refreshing"})
+}
+
 type masterItem struct {
 	Name           string         `json:"name"`
 	OCPVersion     string         `json:"ocpVersion"`
@@ -79,6 +120,8 @@ type masterItem struct {
 	Masters        crd.NodeSizing `json:"masters"`
 	InternalDomain string         `json:"internalDomain"`
 	CreatedAt      *metav1.Time   `json:"createdAt,omitempty"`
+	RefreshedAt    *metav1.Time   `json:"refreshedAt,omitempty"`
+	Refreshing     bool           `json:"refreshing,omitempty"`
 	Clones         int            `json:"clones"`
 }
 
@@ -111,13 +154,14 @@ func (s *Server) masters(ctx context.Context) ([]masterItem, error) {
 	}
 	items := []masterItem{}
 	for _, nc := range all {
-		if nc.Status.Phase != crd.PhaseMaster || nc.Status.Master == nil {
+		if (nc.Status.Phase != crd.PhaseMaster && nc.Status.Phase != crd.PhaseRefreshMaster) || nc.Status.Master == nil {
 			continue
 		}
 		items = append(items, masterItem{
 			Name: nc.Name, OCPVersion: nc.Spec.OCPVersion, ReleaseVersion: nc.Status.Master.ReleaseVersion,
-			Masters: nc.Spec.Masters, InternalDomain: nc.FQDN(), CreatedAt: nc.Status.Master.CreatedAt,
-			Clones: clones[nc.Name],
+			Masters: nc.Spec.Masters, InternalDomain: nc.FQDN(), CreatedAt: nc.Status.Master.CreatedAt, RefreshedAt: nc.Status.Master.RefreshedAt,
+			Refreshing: nc.Status.Phase == crd.PhaseRefreshMaster,
+			Clones:     clones[nc.Name],
 		})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })

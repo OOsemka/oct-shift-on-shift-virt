@@ -359,6 +359,9 @@ spec:
                     createdAt:
                       type: string
                       format: date-time
+                    refreshedAt:
+                      type: string
+                      format: date-time
                 hostConsoleURL:
                   type: string
                   description: Nested console through a host Route (externalAccess.hostRoutes).
@@ -404,6 +407,7 @@ spec:
                     - ConfigureVirtualization
                     - MakeMaster
                     - Master
+                    - RefreshMaster
                     - CloneVMs
                     - WaitCloneAPI
                     - Sanitize

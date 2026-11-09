@@ -119,24 +119,77 @@ func (s *StepExecutor) clusterVMs(ctx context.Context, ns, cluster string) ([]un
 // MakeMaster shuts the cluster's VMs down cleanly and snapshots their root
 // disks. Idempotent: existing snapshots are reused.
 func (s *StepExecutor) MakeMaster(ctx context.Context, nc *crd.NestedCluster) error {
-	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("express")
 	if why := nc.MasterRefusal(); why != "" {
 		return fmt.Errorf("%s", why)
+	}
+	snaps, err := s.shutdownAndSnapshot(ctx, nc, false)
+	if err != nil {
+		return err
+	}
+	now := metav1.Now()
+	nc.Status.Master = &crd.MasterStatus{Snapshots: snaps, ReleaseVersion: nc.Status.ReleaseVersion, CreatedAt: &now}
+	s.updateCRStatus(ctx, nc)
+	s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("express").Info("master ready", "snapshots", len(snaps))
+	return nil
+}
+
+// RefreshMaster boots the master, waits until its certificates have renewed
+// (approving its nodes' requests) and it is healthy, then retakes the
+// snapshots. Clones of a fresh master skip that renewal on first boot.
+func (s *StepExecutor) RefreshMaster(ctx context.Context, nc *crd.NestedCluster) error {
+	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("express")
+	if nc.Status.Master == nil || nc.Status.KubeconfigRef == "" {
+		return fmt.Errorf("not a master")
 	}
 	ns := nc.Spec.Namespace
 	vms, err := s.clusterVMs(ctx, ns, nc.Spec.ClusterName)
 	if err != nil || len(vms) == 0 {
-		return fmt.Errorf("listing the cluster's VMs: %v (found %d)", err, len(vms))
+		return fmt.Errorf("listing the master's VMs: %v (found %d)", err, len(vms))
 	}
-	snapClass, err := s.isoSnapshotClass(ctx, nc.Spec.StorageClassName)
+	for _, vm := range vms {
+		if _, err := s.client.DynamicClient.Resource(expressVMGVR).Namespace(ns).Patch(ctx, vm.GetName(),
+			types.MergePatchType, []byte(`{"spec":{"runStrategy":"Always"}}`), metav1.PatchOptions{}); err != nil {
+			return fmt.Errorf("starting %s: %w", vm.GetName(), err)
+		}
+	}
+	log.Info("master booted for a refresh; waiting for its certificates to renew")
+	logs, err := s.runExpressJob(ctx, nc, "refresh", "wait-api.sh", nc.Status.KubeconfigRef, false,
+		[]corev1.EnvVar{{Name: "SETTLE_SECONDS", Value: "300"}}, 45*time.Minute)
+	if err != nil {
+		return fmt.Errorf("master did not become healthy: %w", err)
+	}
+	if !strings.Contains(logs, "CLONE_API_READY") {
+		return fmt.Errorf("refresh job ended without CLONE_API_READY")
+	}
+	snaps, err := s.shutdownAndSnapshot(ctx, nc, true)
 	if err != nil {
 		return err
 	}
-	// Clean shutdown: runStrategy Halted sends an ACPI shutdown.
+	now := metav1.Now()
+	nc.Status.Master.Snapshots = snaps
+	nc.Status.Master.RefreshedAt = &now
+	s.updateCRStatus(ctx, nc)
+	log.Info("master refreshed", "snapshots", len(snaps))
+	return nil
+}
+
+// shutdownAndSnapshot stops every VM of the cluster (ACPI) and takes a
+// VolumeSnapshot of each root disk; replace deletes existing ones first.
+func (s *StepExecutor) shutdownAndSnapshot(ctx context.Context, nc *crd.NestedCluster, replace bool) (map[string]string, error) {
+	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("express")
+	ns := nc.Spec.Namespace
+	vms, err := s.clusterVMs(ctx, ns, nc.Spec.ClusterName)
+	if err != nil || len(vms) == 0 {
+		return nil, fmt.Errorf("listing the cluster's VMs: %v (found %d)", err, len(vms))
+	}
+	snapClass, err := s.isoSnapshotClass(ctx, nc.Spec.StorageClassName)
+	if err != nil {
+		return nil, err
+	}
 	for _, vm := range vms {
 		if _, err := s.client.DynamicClient.Resource(expressVMGVR).Namespace(ns).Patch(ctx, vm.GetName(),
 			types.MergePatchType, []byte(`{"spec":{"runStrategy":"Halted"}}`), metav1.PatchOptions{}); err != nil {
-			return fmt.Errorf("stopping %s: %w", vm.GetName(), err)
+			return nil, fmt.Errorf("stopping %s: %w", vm.GetName(), err)
 		}
 	}
 	log.Info("shutting the cluster down for its master snapshots", "vms", len(vms))
@@ -148,11 +201,11 @@ func (s *StepExecutor) MakeMaster(ctx context.Context, nc *crd.NestedCluster) er
 			break
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("VMs did not shut down within 15 minutes")
+			return nil, fmt.Errorf("VMs did not shut down within 15 minutes")
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(5 * time.Second):
 		}
 	}
@@ -160,24 +213,25 @@ func (s *StepExecutor) MakeMaster(ctx context.Context, nc *crd.NestedCluster) er
 	for _, vm := range vms {
 		pvc := rootDiskPVC(&vm)
 		if pvc == "" {
-			return fmt.Errorf("VM %s has no rootdisk volume", vm.GetName())
+			return nil, fmt.Errorf("VM %s has no rootdisk volume", vm.GetName())
 		}
 		name := goldenSnapshotName(pvc)
+		if replace {
+			if err := s.client.DeleteVolumeSnapshot(ctx, ns, name); err != nil && !apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("deleting old snapshot %s: %w", name, err)
+			}
+		}
 		if err := s.client.CreateVolumeSnapshot(ctx, ns, name, pvc, snapClass); err != nil {
-			return fmt.Errorf("snapshot of %s: %w", pvc, err)
+			return nil, fmt.Errorf("snapshot of %s: %w", pvc, err)
 		}
 		snaps[pvc] = name
 	}
 	for _, name := range snaps {
 		if _, _, _, err := s.client.WaitForVolumeSnapshot(ctx, ns, name, 10*time.Minute); err != nil {
-			return fmt.Errorf("snapshot %s: %w", name, err)
+			return nil, fmt.Errorf("snapshot %s: %w", name, err)
 		}
 	}
-	now := metav1.Now()
-	nc.Status.Master = &crd.MasterStatus{Snapshots: snaps, ReleaseVersion: nc.Status.ReleaseVersion, CreatedAt: &now}
-	s.updateCRStatus(ctx, nc)
-	log.Info("master ready", "snapshots", len(snaps))
-	return nil
+	return snaps, nil
 }
 
 // loadMaster returns the clone's master; it must be in phase Master.

@@ -69,6 +69,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/clusters/{name}/external-ca", s.getExternalCA)
 	s.mux.HandleFunc("POST /api/v1/clusters/{name}/make-master", s.makeMaster)
 	s.mux.HandleFunc("GET /api/v1/masters", s.listMasters)
+	s.mux.HandleFunc("POST /api/v1/clusters/{name}/refresh-master", s.refreshMaster)
 	s.mux.HandleFunc("GET /api/v1/clusters/{name}/logs", s.getClusterLogs)
 	s.mux.HandleFunc("POST /api/v1/clusters/preview-config", s.previewConfig)
 	s.mux.HandleFunc("GET /api/v1/storageclasses", s.listStorageClasses)

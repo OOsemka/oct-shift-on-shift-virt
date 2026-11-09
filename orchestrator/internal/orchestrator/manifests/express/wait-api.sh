@@ -36,5 +36,14 @@ kubelets_ok() {
 }
 poll 900 kubelets_ok || fatal "the kubelets of the clone did not get working certificates within 15 minutes"
 echo "OK all kubelets reachable"
+# Refresh master: keep approving for a while so the certificate rotations
+# that follow the first ones finish before the snapshots are taken.
+if [ "${SETTLE_SECONDS:-0}" -gt 0 ]; then
+  end=$((SECONDS + SETTLE_SECONDS))
+  while [ $SECONDS -lt $end ]; do approve_csrs; sleep 15; done
+  poll 600 kubelets_ok || fatal "kubelets unhealthy after settling"
+  poll 600 settled || fatal "operators unhealthy after settling"
+  echo "OK settled"
+fi
 $N get nodes --no-headers | awk '{print "node", $1, $2}'
 echo CLONE_API_READY

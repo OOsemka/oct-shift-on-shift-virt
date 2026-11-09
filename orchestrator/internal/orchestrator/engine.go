@@ -312,6 +312,18 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 		e.updateStatus(ctx, nc, crd.PhaseMaster, "Master: clones are created from its snapshots")
 		return
 	}
+	if currentPhase == crd.PhaseRefreshMaster {
+		if err := e.steps.RefreshMaster(ctx, nc); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Error("refresh master failed", "error", err.Error())
+			e.updateStatus(ctx, nc, crd.PhaseFailed, "Refresh master failed: "+err.Error())
+			return
+		}
+		e.updateStatus(ctx, nc, crd.PhaseMaster, "Master: snapshots refreshed")
+		return
+	}
 	order := crd.PhasesFor(nc)
 	if currentPhase == crd.PhaseEmpty {
 		// A new cluster (also one applied with oc, bypassing the API): fail
