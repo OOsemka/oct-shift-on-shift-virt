@@ -74,9 +74,14 @@ co_settled() {
   s=$($N get clusteroperator "$1" -o jsonpath='{range .status.conditions[*]}{.type}={.status} {end}')
   [[ "$s" == *"Available=True"* && "$s" == *"Progressing=False"* && "$s" == *"Degraded=False"* ]]
 }
-poll 900 co_settled console || fatal "console operator did not settle"
-poll 900 co_settled authentication || fatal "authentication operator did not settle"
-echo "OK console and authentication operators settled"
+# Express clones (WAIT_API_CERT=false) do not wait for the operators to
+# settle either: the routes already point at the new names, and the console
+# and OAuth pods pick up their new certificate within a few minutes.
+if [ "${WAIT_API_CERT:-true}" = "true" ]; then
+  poll 900 co_settled console || fatal "console operator did not settle"
+  poll 900 co_settled authentication || fatal "authentication operator did not settle"
+  echo "OK console and authentication operators settled"
+fi
 
 # The API certificate needs a kube-apiserver rollout (a new revision on every
 # control-plane node, ~10-15 min). The routes already work, so a slow rollout

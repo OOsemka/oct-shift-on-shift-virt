@@ -106,7 +106,7 @@ func (s *StepExecutor) publishRoutes(ctx context.Context, nc *crd.NestedCluster)
 	nc.Status.HostConsoleURL, nc.Status.HostAPIURL = consoleURL, apiURL
 	msg := fmt.Sprintf("console %s, API %s", consoleURL, apiURL)
 	if nc.IsClone() {
-		msg += " (the API certificate for this name is rolling out; oc login with the CA works in a few minutes)"
+		msg += " (the console, login and API certificate for these names finish rolling out within a few minutes)"
 	}
 	setCondition(nc, conditionHostRoutesReady, metav1.ConditionTrue, "Published", msg)
 	s.updateCRStatus(ctx, nc)
