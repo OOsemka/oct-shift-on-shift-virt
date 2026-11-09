@@ -6,7 +6,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 imgs=$( { grep -rhoE '"(quay\.io|docker\.io|registry\.[a-z.]+|ghcr\.io)/[a-z0-9._/-]+(:[A-Za-z0-9._-]+)?"' orchestrator/internal orchestrator/cmd --include=*.go | grep -v '_test.go' ;
-          grep -hoE 'image: *[^ ]+' deploy/install.yaml | sed 's/image: *//' ; } | tr -d '"' | grep -vE '^quay\.io/x/' | sort -u)
+          grep -hoE 'image: *[^ ]+' deploy/install.yaml | sed 's/image: *//' ; } | tr -d '"' | grep -vE '^quay\.io/x([:/]|$)' | grep -E ':[A-Za-z0-9._-]+$|@sha256:' | sort -u)
+# (bare repository names without a tag, e.g. the release repo the release
+# resolver pins by digest at runtime, are not pullable references: skipped)
 fail=0
 for i in $imgs; do
   if timeout 60 skopeo inspect --no-creds "docker://$i" >/dev/null 2>&1; then echo "OK      $i"

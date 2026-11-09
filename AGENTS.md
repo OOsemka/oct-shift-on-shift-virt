@@ -18,7 +18,7 @@ This repository is the **Shift-on-Shift Virt** ConsolePlugin — deploy standalo
 
 Display name is **Shift-on-Shift Virt**.
 
-**Current version:** `0.4.4` (package.json / consolePlugin.version).
+**Current version:** `0.5.0` (package.json / consolePlugin.version).
 
 ## Architecture
 
@@ -216,7 +216,7 @@ Import from `@patternfly/react-core` ^6. Do **not** import PatternFly CSS. Prefi
 
 | Image | Current version | Quay repo |
 | --- | --- | --- |
-| `oct-shift-on-shift-virt-orchestrator` | **0.4.4** | `quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator` |
+| `oct-shift-on-shift-virt-orchestrator` | **0.5.0** | `quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator` |
 | `sos-installer-helper` | **4.22** | `quay.io/cjanisze/sos-installer-helper` (Jobs: `oc`, `openshift-install`, `python3`) |
 | `sos-ssh-helper` | **1.0.0** | `quay.io/cjanisze/sos-ssh-helper` (SSH Jobs; override `SSH_HELPER_IMAGE`). Must stay public: run `hack/check-images-public.sh` before releases. |
 
