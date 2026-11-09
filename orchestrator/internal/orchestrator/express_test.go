@@ -136,6 +136,9 @@ func TestExpressScriptsEmbedded(t *testing.T) {
 			t.Errorf("%s script not embedded", name)
 		}
 	}
+	if !strings.Contains(expressWaitAPIScript, "approve_csrs") || !strings.Contains(expressWaitAPIScript, "system:ovn-node:") {
+		t.Error("wait-api must approve the clone nodes' certificate requests")
+	}
 	if !strings.Contains(expressSanitizeScript, "SANITIZE_OK") {
 		t.Error("sanitize script not embedded")
 	}
