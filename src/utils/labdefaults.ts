@@ -54,6 +54,8 @@ export type QuickOverrides = {
   desktopPassword?: string;
   /** Reach console/API through host-cluster routes instead of external DNS. */
   hostRoutes?: boolean;
+  /** Clone from this master (Express) instead of installing. */
+  master?: string;
 };
 
 export type LabDefaults = {
@@ -71,8 +73,10 @@ export type QuickPlan = { spec: ClusterConfig; problems: string[] };
 export const fetchLabDefaults = (): Promise<LabDefaults> =>
   consoleFetchJSON(`${PROXY_BASE}/api/v1/defaults`) as Promise<LabDefaults>;
 
-export const fetchQuickPlan = (name: string): Promise<QuickPlan> =>
-  consoleFetchJSON(`${PROXY_BASE}/api/v1/quick-clusters/preview?name=${encodeURIComponent(name)}`) as Promise<QuickPlan>;
+export const fetchQuickPlan = (name: string, master = ''): Promise<QuickPlan> =>
+  consoleFetchJSON(
+    `${PROXY_BASE}/api/v1/quick-clusters/preview?name=${encodeURIComponent(name)}${master ? `&master=${encodeURIComponent(master)}` : ''}`,
+  ) as Promise<QuickPlan>;
 
 export const createQuickCluster = (clusterName: string, overrides: QuickOverrides = {}): Promise<unknown> =>
   consoleFetchJSON.post(`${PROXY_BASE}/api/v1/quick-clusters`, { clusterName, ...overrides });

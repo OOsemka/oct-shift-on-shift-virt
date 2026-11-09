@@ -11,7 +11,12 @@ CL=$(oc --kubeconfig "$NKC" config view -o jsonpath='{.clusters[0].name}')
 oc --kubeconfig "$NKC" config set-cluster "$CL" --server="https://${VIP}:6443" >/dev/null
 oc --kubeconfig "$NKC" config set "clusters.${CL}.tls-server-name" "api.${DOMAIN}" >/dev/null
 N="oc --kubeconfig $NKC"
-$N get --raw /readyz >/dev/null || fatal "nested API not reachable at ${VIP}:6443"
+# Retry: a job can start while the API servers restart (e.g. a revision rollout).
+_end=$((SECONDS + 300))
+until $N get --raw /readyz >/dev/null 2>&1; do
+  [ $SECONDS -ge $_end ] && fatal "nested API not reachable at ${VIP}:6443"
+  sleep 10
+done
 echo "OK nested API reachable (TLS verified as api.${DOMAIN})"
 
 # poll CMD... until it succeeds or SECS elapse: poll SECS cmd args

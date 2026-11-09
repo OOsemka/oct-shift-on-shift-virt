@@ -110,6 +110,16 @@ func (s *StepExecutor) Execute(ctx context.Context, nc *crd.NestedCluster, phase
 		return s.postInstall(ctx, nc)
 	case crd.PhasePublishRoutes:
 		return s.publishRoutes(ctx, nc)
+	case crd.PhaseCloneVMs:
+		return s.cloneVMs(ctx, nc)
+	case crd.PhaseWaitCloneAPI:
+		return s.waitCloneAPI(ctx, nc)
+	case crd.PhaseSanitize:
+		return s.sanitize(ctx, nc)
+	case crd.PhaseCloneCreds:
+		return s.cloneCredentials(ctx, nc)
+	case crd.PhaseFinishIsolate:
+		return s.finishIsolation(ctx, nc)
 	case crd.PhaseConfigureStorage:
 		return s.configureStorage(ctx, nc)
 	case crd.PhaseConfigureVirtualization:
@@ -2716,6 +2726,9 @@ func (s *StepExecutor) DeleteCluster(ctx context.Context, nc *crd.NestedCluster)
 	}
 	// Host routes (externalAccess.hostRoutes) also live in the operator namespace.
 	s.deleteHostRoutes(ctx, nc.Spec.ClusterName)
+	if nc.IsClone() {
+		s.deleteSharedSnapshotContents(ctx, clusterNs)
+	}
 
 	// Clean up DNS resources (deployed in the target namespace alongside VMs)
 	s.client.DynamicClient.Resource(deployGVR).Namespace(clusterNs).Delete(ctx, nc.Spec.ClusterName+"-dns", metav1.DeleteOptions{})

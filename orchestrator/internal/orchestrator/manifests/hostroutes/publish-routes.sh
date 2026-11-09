@@ -74,9 +74,14 @@ co_settled() {
   s=$($N get clusteroperator "$1" -o jsonpath='{range .status.conditions[*]}{.type}={.status} {end}')
   [[ "$s" == *"Available=True"* && "$s" == *"Progressing=False"* && "$s" == *"Degraded=False"* ]]
 }
-poll 900 co_settled console || fatal "console operator did not settle"
-poll 900 co_settled authentication || fatal "authentication operator did not settle"
-echo "OK console and authentication operators settled"
+# Express clones (WAIT_API_CERT=false) do not wait for the operators to
+# settle either: the routes already point at the new names, and the console
+# and OAuth pods pick up their new certificate within a few minutes.
+if [ "${WAIT_API_CERT:-true}" = "true" ]; then
+  poll 900 co_settled console || fatal "console operator did not settle"
+  poll 900 co_settled authentication || fatal "authentication operator did not settle"
+  echo "OK console and authentication operators settled"
+fi
 
 # The API certificate needs a kube-apiserver rollout (a new revision on every
 # control-plane node, ~10-15 min). The routes already work, so a slow rollout
@@ -89,12 +94,18 @@ st = json.load(sys.stdin)["status"]
 latest = st.get("latestAvailableRevision")
 sys.exit(0 if all(n.get("currentRevision") == latest for n in st.get("nodeStatuses", [])) else 1)'
 }
-if poll 180 new_revision; then
-  echo "kube-apiserver rolling out the API certificate..."
-fi
-if poll 1080 rolled_out && poll 300 co_settled kube-apiserver; then
-  echo "OK kube-apiserver serves the host-side API certificate"
+# Express clones skip this wait (WAIT_API_CERT=false): the console and login
+# already work, and the API certificate follows when the rollout ends.
+if [ "${WAIT_API_CERT:-true}" = "true" ]; then
+  if poll 180 new_revision; then
+    echo "kube-apiserver rolling out the API certificate..."
+  fi
+  if poll 1080 rolled_out && poll 300 co_settled kube-apiserver; then
+    echo "OK kube-apiserver serves the host-side API certificate"
+  else
+    echo "WARN kube-apiserver rollout still in progress; the API route works, its certificate follows when the rollout ends"
+  fi
 else
-  echo "WARN kube-apiserver rollout still in progress; the API route works, its certificate follows when the rollout ends"
+  echo "NOTE kube-apiserver rolls out the API certificate in the background"
 fi
 echo HOSTROUTES_OK

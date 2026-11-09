@@ -67,6 +67,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/clusters/{name}/kubeconfig", s.getKubeconfig)
 	s.mux.HandleFunc("GET /api/v1/clusters/{name}/kubeadmin", s.getKubeadmin)
 	s.mux.HandleFunc("GET /api/v1/clusters/{name}/external-ca", s.getExternalCA)
+	s.mux.HandleFunc("POST /api/v1/clusters/{name}/make-master", s.makeMaster)
+	s.mux.HandleFunc("GET /api/v1/masters", s.listMasters)
+	s.mux.HandleFunc("POST /api/v1/clusters/{name}/refresh-master", s.refreshMaster)
 	s.mux.HandleFunc("GET /api/v1/clusters/{name}/logs", s.getClusterLogs)
 	s.mux.HandleFunc("POST /api/v1/clusters/preview-config", s.previewConfig)
 	s.mux.HandleFunc("GET /api/v1/storageclasses", s.listStorageClasses)
@@ -117,6 +120,10 @@ func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
 		OCPVersion  string `json:"ocpVersion"`
 		Topology    string `json:"topology"`
 		CreatedAt   string `json:"createdAt"`
+		// Express: the master a clone came from, and why a cluster cannot
+		// become a master ("" if it can).
+		CloneOf       string `json:"cloneOf,omitempty"`
+		MasterRefusal string `json:"masterRefusal,omitempty"`
 	}
 
 	var items []clusterItem
@@ -137,6 +144,13 @@ func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
 			Topology:    topology,
 			CreatedAt:   item.GetCreationTimestamp().Format("2006-01-02T15:04:05Z"),
 		})
+		if nc, err := toNestedCluster(&item); err == nil {
+			last := &items[len(items)-1]
+			if nc.IsClone() {
+				last.CloneOf = nc.Spec.Source.Master
+			}
+			last.MasterRefusal = nc.MasterRefusal()
+		}
 	}
 
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{"items": items})
@@ -183,6 +197,22 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createNestedCluster(ctx context.Context, spec crd.NestedClusterSpec) (*unstructured.Unstructured, int, error) {
 	if err := crd.ValidateClusterNamespace(spec.Namespace); err != nil {
 		return nil, http.StatusBadRequest, err
+	}
+	// A clone must name a real master and keep its internal layout; the
+	// orchestrator would otherwise clone disks that do not fit the spec.
+	if spec.Source != nil {
+		m, err := s.getMaster(ctx, spec.Source.Master)
+		if err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		want := spec
+		if err := crd.ApplyMaster(&want, m); err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		if want.Network != spec.Network || want.Masters != spec.Masters || want.StorageClassName != spec.StorageClassName ||
+			*want.Source != *spec.Source || !spec.ExternalAccess.HostRoutes || spec.Storage.Enabled || spec.Virtualization.Enabled {
+			return nil, http.StatusBadRequest, fmt.Errorf("a clone must keep the master's network, sizing and storage class, use host routes, and have no nested storage")
+		}
 	}
 	// The cluster gets its own namespace: refuse one that already exists
 	// unless this cluster created it, so a later delete cannot wipe it.
@@ -262,6 +292,15 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, "cluster not found")
 		return
+	}
+	// A master's snapshots back its clones: delete the clones first.
+	if items, merr := s.masters(r.Context()); merr == nil {
+		for _, m := range items {
+			if m.Name == name && m.Clones > 0 {
+				s.writeError(w, http.StatusConflict, fmt.Sprintf("%s is a master with %d clone(s); delete them first", name, m.Clones))
+				return
+			}
+		}
 	}
 
 	// Status first, so the UI reflects the request immediately. This is

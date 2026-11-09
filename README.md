@@ -83,6 +83,17 @@ What it does on the host, and nothing more:
 
 Results appear on the cluster page (`StorageReady`, `VirtualizationReady`). A failure there never fails the cluster install.
 
+## Shift-on-Shift Express (clone from a master)
+
+Cloning skips the install: a clone's console is up in about 8 minutes and `oc login` is reliable after about 15, versus about 60 minutes for a normal install (measured on a 3-node compact cluster with ODF RBD storage).
+
+- **Make a master** (Masters tab): pick a Ready cluster. It is shut down and its disks are snapshotted; it stays as a template and is no longer usable as a cluster. Prepare it first (operators, content): clones start from its current state. Version 1 accepts clusters without nested storage or virtualization.
+- **Clone** (quick cluster card on the Install tab, "How to create it"): the clone gets its own namespace, external addresses from the IP pool, host routes, admin certificate, kubeadmin password, cluster ID and service-account issuer. Clones always use host routes and keep the master's internal name, sizing and OpenShift release.
+- **Isolation**: a clone is usable at Ready. A background job then removes the last trust it shares with the master and its sibling clones (the old service-account issuer and the master's client-auth CAs); the `Isolated` condition turns True about 1.5 hours later. Serving and kubelet CAs stay shared with the master for now (copies of them allow posing as a server, not logging in).
+- **Refresh a master** every few days (Masters tab, possible while it has no clones): it boots, renews its certificates and takes new snapshots (about 20 minutes). Clones of an old master spend about 15 extra minutes renewing certificates on first boot.
+- A master cannot be deleted while it has clones. Deleting a clone never deletes the master's snapshots.
+- Needs a StorageClass with a VolumeSnapshotClass (snapshots are shared into the clone's namespace through a `Retain` VolumeSnapshotContent, so cloning needs no cross-namespace permissions).
+
 ## Accessing a nested cluster
 
 The cluster page shows the options that apply once the cluster is Ready.

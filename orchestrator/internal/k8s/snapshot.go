@@ -126,6 +126,18 @@ func (c *Client) WaitForVolumeSnapshot(ctx context.Context, namespace, name stri
 // underlying CSI snapshot handle. This is the standard cross-namespace snapshot
 // restore pattern — no pods or network access required.
 func (c *Client) CloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapshotName, driver, snapshotHandle, snapshotClassName string) error {
+	return c.cloneSnapshotToNamespace(ctx, dstNs, dstSnapshotName, driver, snapshotHandle, snapshotClassName, "Delete")
+}
+
+// ShareSnapshotToNamespace is CloneSnapshotToNamespace for a snapshot that
+// stays owned by its source (an Express master's golden snapshot): the
+// content is Retain, so deleting the destination never deletes the CSI
+// snapshot the source and other clones still use.
+func (c *Client) ShareSnapshotToNamespace(ctx context.Context, dstNs, dstSnapshotName, driver, snapshotHandle, snapshotClassName string) error {
+	return c.cloneSnapshotToNamespace(ctx, dstNs, dstSnapshotName, driver, snapshotHandle, snapshotClassName, "Retain")
+}
+
+func (c *Client) cloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapshotName, driver, snapshotHandle, snapshotClassName, deletionPolicy string) error {
 	contentName := dstSnapshotName + "-content"
 
 	// Re-entrancy sweep: the content name is deterministic, so a phase retry
@@ -177,7 +189,7 @@ func (c *Client) CloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapsho
 				// the pair is swept+recreated on every retry, so the CSI
 				// snapshot must share its lifecycle — Retain leaked an rbd
 				// snapshot per retry attempt.
-				"deletionPolicy": "Delete",
+				"deletionPolicy": deletionPolicy,
 				"driver":         driver,
 				"source": map[string]interface{}{
 					"snapshotHandle": snapshotHandle,
@@ -205,6 +217,8 @@ func (c *Client) CloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapsho
 				"namespace": dstNs,
 			},
 			"spec": map[string]interface{}{
+				// CDI refuses to clone from a snapshot without a class.
+				"volumeSnapshotClassName": snapshotClassName,
 				"source": map[string]interface{}{
 					"volumeSnapshotContentName": contentName,
 				},
@@ -228,6 +242,20 @@ func (c *Client) CloneSnapshotToNamespace(ctx context.Context, dstNs, dstSnapsho
 // attached the VM is not live-migratable; masters become migratable once the
 // cdrom is gone.
 func (c *Client) CreatePVCFromSnapshot(ctx context.Context, namespace, name, snapshotName, storageClassName, size string) error {
+	return c.CreatePVCFromSnapshotModes(ctx, namespace, name, snapshotName, storageClassName, size, []string{"ReadWriteOnce"}, nil)
+}
+
+// CreatePVCFromSnapshotModes is CreatePVCFromSnapshot with explicit access
+// modes and labels (Express clone disks are RWX Block, like the master's).
+func (c *Client) CreatePVCFromSnapshotModes(ctx context.Context, namespace, name, snapshotName, storageClassName, size string, accessModes []string, labels map[string]string) error {
+	modes := make([]interface{}, 0, len(accessModes))
+	for _, m := range accessModes {
+		modes = append(modes, m)
+	}
+	lbl := map[string]interface{}{}
+	for k, v := range labels {
+		lbl[k] = v
+	}
 	pvc := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
@@ -235,9 +263,10 @@ func (c *Client) CreatePVCFromSnapshot(ctx context.Context, namespace, name, sna
 			"metadata": map[string]interface{}{
 				"name":      name,
 				"namespace": namespace,
+				"labels":    lbl,
 			},
 			"spec": map[string]interface{}{
-				"accessModes":      []interface{}{"ReadWriteOnce"},
+				"accessModes":      modes,
 				"volumeMode":       "Block",
 				"storageClassName": storageClassName,
 				"resources": map[string]interface{}{

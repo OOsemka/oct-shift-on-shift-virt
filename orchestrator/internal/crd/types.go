@@ -41,8 +41,21 @@ const (
 	PhaseConfigureStorage        ClusterPhase = "ConfigureStorage"
 	PhaseConfigureVirtualization ClusterPhase = "ConfigureVirtualization"
 	PhaseReady                   ClusterPhase = "Ready"
-	PhaseFailed                  ClusterPhase = "Failed"
-	PhaseDeleting                ClusterPhase = "Deleting"
+	// Express (clone from a master). MakeMaster shuts a Ready cluster down
+	// and snapshots its disks; Master is its terminal state. A clone runs
+	// ClonePhaseOrder instead of PhaseOrder.
+	PhaseMakeMaster ClusterPhase = "MakeMaster"
+	PhaseMaster     ClusterPhase = "Master"
+	// RefreshMaster boots a master, lets its certificates renew, and takes
+	// new snapshots, so clones do not have to renew them on first boot.
+	PhaseRefreshMaster ClusterPhase = "RefreshMaster"
+	PhaseCloneVMs      ClusterPhase = "CloneVMs"
+	PhaseWaitCloneAPI  ClusterPhase = "WaitCloneAPI"
+	PhaseSanitize      ClusterPhase = "Sanitize"
+	PhaseCloneCreds    ClusterPhase = "CloneCredentials"
+	PhaseFinishIsolate ClusterPhase = "FinishIsolation"
+	PhaseFailed        ClusterPhase = "Failed"
+	PhaseDeleting      ClusterPhase = "Deleting"
 )
 
 var PhaseOrder = []ClusterPhase{
@@ -69,6 +82,33 @@ var PhaseOrder = []ClusterPhase{
 	PhaseConfigureStorage,
 	PhaseConfigureVirtualization,
 	PhaseReady,
+}
+
+// ClonePhaseOrder is the install path of a clone (spec.source.master): the
+// disks come from the master's snapshots, so ISO, bootstrap and install are
+// replaced by clone, wait and sanitize. DeployDNS runs inside PublishRoutes.
+var ClonePhaseOrder = []ClusterPhase{
+	PhaseCreateNamespace,
+	PhaseCreateNetwork,
+	PhaseCreateSecrets,
+	PhaseCloneVMs,
+	PhaseWaitCloneAPI,
+	// PublishRoutes before Sanitize: the named certificate and the new
+	// service-account issuer then land together and the API servers roll
+	// out once instead of twice.
+	PhasePublishRoutes,
+	PhaseSanitize,
+	PhaseCloneCreds,
+	PhaseFinishIsolate,
+	PhaseReady,
+}
+
+// PhasesFor returns the phase order for a cluster: clones skip the install.
+func PhasesFor(nc *NestedCluster) []ClusterPhase {
+	if nc.Spec.Source != nil && nc.Spec.Source.Master != "" {
+		return ClonePhaseOrder
+	}
+	return PhaseOrder
 }
 
 type NestedCluster struct {
@@ -98,7 +138,9 @@ type NestedClusterSpec struct {
 	ExternalAccess   ExternalAccessConfig `json:"externalAccess"`
 	StorageClassName string               `json:"storageClassName"`
 	PullSecret       string               `json:"pullSecret,omitempty"`
-	SSHKey           string               `json:"sshKey,omitempty"`
+	// Source makes this cluster a clone of a master (Express).
+	Source *ClusterSource `json:"source,omitempty"`
+	SSHKey string         `json:"sshKey,omitempty"`
 	// SSHPrivateKey is the optional private half of SSHKey. Required for the
 	// ConfigureNodes phase (in-cluster SSH into VMs to fix DNS after boot —
 	// the primary-UDN DHCP hands VMs the host cluster's CoreDNS, which is
@@ -286,6 +328,28 @@ type NestedClusterStatus struct {
 	// host cluster so the nested cluster is reachable without /etc/hosts.
 	HostAPIRoute     string `json:"hostAPIRoute,omitempty"`
 	HostConsoleRoute string `json:"hostConsoleRoute,omitempty"`
+	// Master is set once this cluster has been turned into a master.
+	Master *MasterStatus `json:"master,omitempty"`
+}
+
+// ClusterSource: clone from a master (a NestedCluster in phase Master).
+// InternalName/InternalBaseDomain are the master's: the cloned nodes keep
+// the master's internal identity (DNS zone, certificates), while namespaces,
+// routes and URLs use this cluster's own name.
+type ClusterSource struct {
+	Master             string `json:"master"`
+	InternalName       string `json:"internalName,omitempty"`
+	InternalBaseDomain string `json:"internalBaseDomain,omitempty"`
+}
+
+// MasterStatus is set on a cluster that was turned into a master.
+type MasterStatus struct {
+	// Snapshots maps each VM's root disk PVC to its VolumeSnapshot.
+	Snapshots      map[string]string `json:"snapshots,omitempty"`
+	ReleaseVersion string            `json:"releaseVersion,omitempty"`
+	CreatedAt      *metav1.Time      `json:"createdAt,omitempty"`
+	// RefreshedAt is when the snapshots were last retaken (refresh master).
+	RefreshedAt *metav1.Time `json:"refreshedAt,omitempty"`
 }
 
 type NodeStatus struct {
@@ -307,9 +371,30 @@ type PhaseTransition struct {
 	Success   bool         `json:"success"`
 }
 
+// FQDN is the nested cluster's internal domain (DNS zone, certificates).
+// A clone keeps its master's.
 func (nc *NestedCluster) FQDN() string {
+	if s := nc.Spec.Source; s != nil && s.InternalName != "" && s.InternalBaseDomain != "" {
+		return s.InternalName + "." + s.InternalBaseDomain
+	}
 	return nc.Spec.ClusterName + "." + nc.Spec.BaseDomain
 }
+
+// MasterRefusal says why the cluster cannot become a master ("" if it can).
+func (nc *NestedCluster) MasterRefusal() string {
+	switch {
+	case nc.IsClone():
+		return "a clone cannot become a master (make the master from an installed cluster)"
+	case nc.Spec.Storage.Enabled || nc.Spec.Virtualization.Enabled:
+		return "clusters with nested storage or virtualization cannot become masters yet"
+	case nc.Status.LoadBalancer != LoadBalancerBastion:
+		return "only clusters with the bastion load balancer (0.3.0 or later) can become masters"
+	}
+	return ""
+}
+
+// IsClone reports whether the cluster is cloned from a master.
+func (nc *NestedCluster) IsClone() bool { return nc.Spec.Source != nil && nc.Spec.Source.Master != "" }
 
 func (nc *NestedCluster) APIEndpoint() string {
 	return "https://api." + nc.FQDN() + ":6443"
