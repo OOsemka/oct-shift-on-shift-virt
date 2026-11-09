@@ -104,8 +104,11 @@ func (s *StepExecutor) publishRoutes(ctx context.Context, nc *crd.NestedCluster)
 		return nil
 	}
 	nc.Status.HostConsoleURL, nc.Status.HostAPIURL = consoleURL, apiURL
-	setCondition(nc, conditionHostRoutesReady, metav1.ConditionTrue, "Published",
-		fmt.Sprintf("console %s, API %s", consoleURL, apiURL))
+	msg := fmt.Sprintf("console %s, API %s", consoleURL, apiURL)
+	if nc.IsClone() {
+		msg += " (the API certificate for this name is rolling out; oc login with the CA works in a few minutes)"
+	}
+	setCondition(nc, conditionHostRoutesReady, metav1.ConditionTrue, "Published", msg)
 	s.updateCRStatus(ctx, nc)
 	log.Info("API and console published through host routes", "console", consoleURL, "api", apiURL)
 	return nil
@@ -171,6 +174,8 @@ func (s *StepExecutor) doPublishRoutes(ctx context.Context, nc *crd.NestedCluste
 		{Name: "CONSOLE_HOST", Value: consoleHost},
 		{Name: "OAUTH_HOST", Value: oauthHost},
 		{Name: "API_HOST", Value: apiHost},
+		// Clones go Ready without waiting for the API certificate rollout.
+		{Name: "WAIT_API_CERT", Value: fmt.Sprint(!nc.IsClone())},
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("configuring the nested cluster: %w", err)
