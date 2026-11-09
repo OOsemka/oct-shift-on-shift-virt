@@ -93,9 +93,12 @@ var ClonePhaseOrder = []ClusterPhase{
 	PhaseCreateSecrets,
 	PhaseCloneVMs,
 	PhaseWaitCloneAPI,
+	// PublishRoutes before Sanitize: the named certificate and the new
+	// service-account issuer then land together and the API servers roll
+	// out once instead of twice.
+	PhasePublishRoutes,
 	PhaseSanitize,
 	PhaseCloneCreds,
-	PhasePublishRoutes,
 	PhaseFinishIsolate,
 	PhaseReady,
 }

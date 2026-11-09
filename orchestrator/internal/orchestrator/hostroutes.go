@@ -64,6 +64,17 @@ const (
 
 var hostRouteGVR = schema.GroupVersionResource{Group: "route.openshift.io", Version: "v1", Resource: "routes"}
 
+// hostRoutesKubeconfig is the nested kubeconfig the publish Job uses. An
+// Express clone publishes its routes BEFORE Sanitize (so the API server
+// rolls out the named certificate and the new issuer together), with the
+// master's admin kubeconfig, which is still valid at that point.
+func hostRoutesKubeconfig(nc *crd.NestedCluster) string {
+	if nc.Status.KubeconfigRef == "" && nc.IsClone() {
+		return expressSourceKCSecret(nc.Spec.ClusterName)
+	}
+	return nc.Status.KubeconfigRef
+}
+
 func externalAccessSecret(cluster string) string { return cluster + "-external-access" }
 func hostRoutesScriptsCM(cluster string) string  { return cluster + "-host-routes-scripts" }
 
@@ -126,7 +137,7 @@ func (s *StepExecutor) doPublishRoutes(ctx context.Context, nc *crd.NestedCluste
 	if err := s.checkHostRoutePool(ctx, nc); err != nil {
 		return "", "", err
 	}
-	if nc.Status.KubeconfigRef == "" {
+	if hostRoutesKubeconfig(nc) == "" {
 		return "", "", fmt.Errorf("no nested kubeconfig yet (PostInstall did not store one)")
 	}
 	opNs := operatorNamespace()
@@ -524,7 +535,7 @@ func (s *StepExecutor) runHostRoutesJob(ctx context.Context, nc *crd.NestedClust
 						{Name: "m", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 							LocalObjectReference: corev1.LocalObjectReference{Name: hostRoutesScriptsCM(cluster)}}}},
 						{Name: "nested", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-							SecretName: nc.Status.KubeconfigRef,
+							SecretName: hostRoutesKubeconfig(nc),
 							Items:      []corev1.KeyToPath{{Key: "kubeconfig", Path: "kubeconfig"}}}}},
 						// Leaf certificates and keys only; the CA key never leaves the Secret.
 						{Name: "certs", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
