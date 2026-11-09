@@ -49,6 +49,10 @@ if oc --kubeconfig "$OLD" whoami >/dev/null 2>&1; then
 fi
 poll 300 oc --kubeconfig "$NEW" whoami || fatal "the new admin certificate was not accepted"
 N="oc --kubeconfig $NEW"
+# Keep approving the clone nodes' certificate requests while the cluster changes.
+source /m/csr.sh
+NODES=$($N get nodes -o jsonpath='{.items[*].metadata.name}')
+( while sleep 15; do approve_csrs >/dev/null 2>&1; done ) &
 echo "OK new admin client CA active"
 if $N get secret kubeadmin -n kube-system -o jsonpath='{.data.kubeadmin}' | grep -q "$(base64 -w0 /creds/kubeadmin-hash)"; then :; else
   $N -n kube-system patch secret kubeadmin --type=merge \

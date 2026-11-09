@@ -4,6 +4,9 @@
 # client-auth CAs. CUTOFF lies between the master's CAs and the clone's new
 # signers. Serving and kubelet CAs are not rotated (see sanitize.sh).
 source /m/lib.sh
+source /m/csr.sh
+NODES=$($N get nodes -o jsonpath='{.items[*].metadata.name}')
+( while sleep 30; do approve_csrs >/dev/null 2>&1; done ) &
 rolled_out() {
   local r
   for r in kubeapiserver kubecontrollermanager kubescheduler; do

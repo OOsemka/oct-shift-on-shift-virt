@@ -16,38 +16,7 @@ done
 echo "OK cloned API answering"
 source /m/lib.sh
 
-# A master's snapshot ages: the kubelets' first, short-lived certificates may
-# have expired, so cloned nodes re-bootstrap and ask for new client, serving
-# and OVN node certificates. Nothing approves them on these platforms after
-# the install, so approve exactly those: the cluster's own node names, the
-# expected signer and subject, and the expected requester.
-approve_csrs() {
-  $N get csr -o json | NODES="$NODES" python3 -c '
-import base64, json, os, subprocess, sys
-nodes = set(os.environ["NODES"].split())
-for c in json.load(sys.stdin)["items"]:
-    if c.get("status", {}).get("conditions"):
-        continue
-    spec = c["spec"]
-    subj = subprocess.run(["openssl", "req", "-noout", "-subject"], input=base64.b64decode(spec["request"]),
-                          capture_output=True).stdout.decode().replace(" ", "")
-    user, signer = spec.get("username", ""), spec["signerName"]
-    ok = False
-    for n in nodes:
-        node_subj = "O=system:nodes,CN=system:node:" + n in subj or ("CN=system:node:" + n in subj and "O=system:nodes" in subj)
-        if signer == "kubernetes.io/kube-apiserver-client-kubelet" and node_subj and \
-                user in ("system:serviceaccount:openshift-machine-config-operator:node-bootstrapper", "system:node:" + n):
-            ok = True
-        if signer == "kubernetes.io/kubelet-serving" and node_subj and user == "system:node:" + n:
-            ok = True
-        if signer == "kubernetes.io/kube-apiserver-client" and "CN=system:ovn-node:" + n in subj and \
-                "O=system:ovn-nodes" in subj and user == "system:node:" + n:
-            ok = True
-    if ok:
-        print(c["metadata"]["name"])' | while read -r csr; do
-    $N adm certificate approve "$csr" >/dev/null && echo "OK approved $csr"
-  done
-}
+source /m/csr.sh
 NODES=$($N get nodes -o jsonpath='{.items[*].metadata.name}')
 settled() {
   approve_csrs
@@ -57,5 +26,15 @@ settled() {
   [ "$total" -gt 20 ] && [ "$bad" -eq 0 ]
 }
 poll 1200 settled || fatal "cluster operators of the clone did not become available within 20 minutes"
+# The nodes keep asking for certificates for a few minutes after boot; wait
+# until the API server can reach every kubelet (client and serving
+# certificates in place) before anything else changes the cluster.
+kubelets_ok() {
+  approve_csrs
+  local n
+  for n in $NODES; do [ "$($N get --raw "/api/v1/nodes/$n/proxy/healthz" 2>/dev/null)" = ok ] || return 1; done
+}
+poll 900 kubelets_ok || fatal "the kubelets of the clone did not get working certificates within 15 minutes"
+echo "OK all kubelets reachable"
 $N get nodes --no-headers | awk '{print "node", $1, $2}'
 echo CLONE_API_READY

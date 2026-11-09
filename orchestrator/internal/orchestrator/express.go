@@ -63,6 +63,9 @@ var expressSanitizeScript string
 //go:embed manifests/express/finish-isolation.sh
 var expressFinishScript string
 
+//go:embed manifests/express/csr.sh
+var expressCSRScript string
+
 const conditionIsolated = "Isolated"
 
 var (
@@ -494,7 +497,7 @@ func (s *StepExecutor) ensureExpressScripts(ctx context.Context, nc *crd.NestedC
 		ObjectMeta: metav1.ObjectMeta{Name: expressScriptsCM(nc.Spec.ClusterName), Namespace: nc.Spec.Namespace,
 			Labels: map[string]string{"oct-shift-on-shift-virt/cluster": nc.Spec.ClusterName}},
 		Data: map[string]string{"lib.sh": string(lib), "wait-api.sh": expressWaitAPIScript,
-			"sanitize.sh": expressSanitizeScript, "finish-isolation.sh": expressFinishScript},
+			"sanitize.sh": expressSanitizeScript, "finish-isolation.sh": expressFinishScript, "csr.sh": expressCSRScript},
 	}
 	cms := s.client.Clientset.CoreV1().ConfigMaps(nc.Spec.Namespace)
 	if _, err := cms.Create(ctx, cm, metav1.CreateOptions{}); err != nil {
