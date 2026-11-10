@@ -287,7 +287,7 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
         </FormHelperText>
       </FormGroup>
 
-      <FormGroup label={t('Host routes')} fieldId="host-routes">
+      <FormGroup label={t('Host routes')} fieldId="host-routes" isStack>
         <Checkbox
           id="host-routes"
           isChecked={Boolean(ea.hostRoutes) && Boolean(ea.ipPool)}

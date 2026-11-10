@@ -20,21 +20,3 @@
 .sos-quick-hint {
   color: var(--pf-t--global--text--color--subtle);
 }
-
-/* Options with a description (quick card, wizard, Lab Defaults): keep the
-   description tight under its own label and leave the gap before the NEXT
-   option, so a description never reads as belonging to the option below. */
-.sos-tab-content .pf-v6-c-check__description,
-.sos-tab-content .pf-v6-c-radio__description {
-  margin-block-start: var(--pf-t--global--spacer--xs, 4px);
-  padding-block-start: 0;
-}
-.sos-tab-content .pf-v6-c-check,
-.sos-tab-content .pf-v6-c-radio {
-  margin-block-end: var(--pf-t--global--spacer--md, 16px);
-  row-gap: 0;
-}
-.sos-tab-content .pf-v6-c-check:last-child,
-.sos-tab-content .pf-v6-c-radio:last-child {
-  margin-block-end: 0;
-}

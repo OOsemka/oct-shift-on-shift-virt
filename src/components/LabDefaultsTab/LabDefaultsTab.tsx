@@ -280,7 +280,7 @@ const LabDefaultsTab: FC = () => {
             label={t('Install a desktop on the bastion by default (adds 2 vCPU / 4 GiB; can be changed per cluster)')}
           />
         </FormGroup>
-        <FormGroup label={t('Host routes on quick clusters')} fieldId="lab-host-routes">
+        <FormGroup label={t('Host routes on quick clusters')} fieldId="lab-host-routes" isStack>
           <Checkbox
             id="lab-host-routes"
             isChecked={Boolean(settings.publishHostRoutes)}
@@ -295,7 +295,7 @@ const LabDefaultsTab: FC = () => {
             label={t('Also publish all application routes of quick clusters (outside openshift-* and kube-*; can be changed per cluster)')}
           />
         </FormGroup>
-        <FormGroup label={t('Nested storage and virtualization on quick clusters')} fieldId="lab-nested">
+        <FormGroup label={t('Nested storage and virtualization on quick clusters')} fieldId="lab-nested" isStack>
           <Checkbox
             id="lab-nested-storage"
             isChecked={Boolean(settings.nestedStorage || settings.nestedVirtualization)}
