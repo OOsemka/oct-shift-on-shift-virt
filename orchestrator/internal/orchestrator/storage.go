@@ -47,6 +47,9 @@ const (
 	// OpenShift Virtualization imports its boot-source images (golden
 	// images) into the nested cluster, all of which land on host storage.
 	virtualizationBootSourcesGi = 180
+	// imageRegistryGi is the nested image registry's volume (configure-
+	// registry.sh); counted in the quota so it does not eat the allowance.
+	imageRegistryGi = 100
 
 	csiClusterLabel = "oct-shift-on-shift-virt/csi-cluster"
 )
@@ -134,6 +137,19 @@ func (s *StepExecutor) doConfigureStorage(ctx context.Context, nc *crd.NestedClu
 		return "", fmt.Errorf("self-test: %w", err)
 	}
 
+	// Image registry on nested storage (non-fatal: reported in the message).
+	registry := "image registry: not configured"
+	if rlogs, rerr := s.runStorageJob(ctx, nc, cluster+"-configure-registry", "configure-registry.sh", []corev1.EnvVar{
+		{Name: "REGISTRY_GI", Value: strconv.Itoa(imageRegistryGi)},
+	}, 15*time.Minute); rerr != nil {
+		registry = "image registry not enabled: " + rerr.Error()
+		log.Info("image registry setup failed (non-fatal)", "error", rerr.Error())
+	} else if strings.Contains(rlogs, "REGISTRY_OK") {
+		registry = fmt.Sprintf("image registry on a %dGi kubevirt-csi volume", imageRegistryGi)
+	} else if strings.Contains(rlogs, "REGISTRY_SKIPPED") {
+		registry = "image registry already configured (left as is)"
+	}
+
 	migration := "RWX Block (nested VMs live-migratable)"
 	if !rwxBlock {
 		migration = "RWO only: host class has no RWX Block, nested VMs are not live-migratable"
@@ -142,7 +158,7 @@ func (s *StepExecutor) doConfigureStorage(ctx context.Context, nc *crd.NestedClu
 	if vsc == "" {
 		snap = "no snapshots (host has no VolumeSnapshotClass for " + provisioner + ")"
 	}
-	return fmt.Sprintf("StorageClass kubevirt-csi backed by host %s; %s; quota %dGi; %s", sc, migration, quotaGi, snap), nil
+	return fmt.Sprintf("StorageClass kubevirt-csi backed by host %s; %s; quota %dGi; %s; %s", sc, migration, quotaGi, snap, registry), nil
 }
 
 // configureVirtualization installs OpenShift Virtualization in the nested
@@ -439,14 +455,15 @@ func mustReadCSI(name string) string {
 
 // storageQuotaGi caps the namespace's total storage requests: what the
 // cluster already uses (VM disks, ISO), plus the allowance for nested
-// volumes, plus room for the virtualization boot images. Without it a nested
+// volumes, plus the image registry's volume, plus room for the virtualization
+// boot images. Without it a nested
 // user could fill the host storage backend.
 func storageQuotaGi(existingBytes int64, allowanceGi int, virtualization bool) int64 {
 	if allowanceGi <= 0 {
 		allowanceGi = defaultStorageAllowanceGi
 	}
 	const gi = int64(1) << 30
-	q := (existingBytes+gi-1)/gi + int64(allowanceGi)
+	q := (existingBytes+gi-1)/gi + int64(allowanceGi) + imageRegistryGi
 	if virtualization {
 		q += virtualizationBootSourcesGi
 	}

@@ -79,7 +79,8 @@ What it does on the host, and nothing more:
 
 - A controller Deployment in the cluster namespace, non-root, with a namespace-scoped Role. The one cluster-scoped grant is `get persistentvolumes`, used for volume expansion.
 - The nested cluster can use **only** the selected host class.
-- A ResourceQuota on the namespace caps its total storage: the VM disks plus the allowance from the wizard, plus 180 GiB for virtualization boot images.
+- A ResourceQuota on the namespace caps its total storage: the VM disks plus the allowance from the wizard, plus 100 GiB for the image registry, plus 180 GiB for virtualization boot images.
+- The nested **image registry** is enabled on a 100 GiB `kubevirt-csi` volume (one replica), so builds (e.g. catalog items with Source-to-Image) work. A registry you configured yourself is left alone. Express clones get their own registry volume the same way.
 
 Results appear on the cluster page (`StorageReady`, `VirtualizationReady`). A failure there never fails the cluster install.
 
