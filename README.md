@@ -111,6 +111,8 @@ With host routes on, any route of the nested cluster can be published under the 
 oc annotate route <name> -n <namespace> sos.octools.io/publish-host-route=true
 ```
 
+Or tick **Also publish all application routes** when creating the cluster (wizard, quick cluster card, or the lab default): every route outside the `openshift-*` and `kube-*` namespaces is then published automatically, including routes created later; a single route opts out with `sos.octools.io/publish-host-route=false`.
+
 Within about two minutes the orchestrator creates an edge route `<cluster>-<route>-<hash>` on the host, a sibling route with that name in the nested cluster, and a split-DNS record so the name also works inside. The URL is written to the route (`sos.octools.io/host-url`) and listed on the cluster page. Removing the annotation (or the route) removes them. Edge and reencrypt routes only (passthrough cannot be served); the hop from the host router to the nested cluster is plain HTTP on the external VLAN (console, OAuth and API stay end-to-end TLS). Wildcard routes are not possible: the host router refuses them by default.
 
 ## Configuration
