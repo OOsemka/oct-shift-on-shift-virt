@@ -153,6 +153,11 @@ func (s *StepExecutor) syncAppRoutes(ctx context.Context, nc *crd.NestedCluster)
 		}
 		explicit := r.GetAnnotations()[annoPublishHostRoute]
 		if !publishWanted(nc.Spec.ExternalAccess.PublishAppRoutes, r.GetNamespace(), explicit) {
+			// No longer published: drop the URL we wrote earlier.
+			if _, had := r.GetAnnotations()[annoHostURL]; had {
+				patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:null}}}`, annoHostURL)
+				_, _ = nested.Resource(hostRouteGVR).Namespace(r.GetNamespace()).Patch(ctx, r.GetName(), types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+			}
 			continue
 		}
 		if term, _, _ := unstructured.NestedString(r.Object, "spec", "tls", "termination"); term == "passthrough" {
