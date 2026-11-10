@@ -161,3 +161,27 @@ func TestAppRouteNames(t *testing.T) {
 		t.Error("sameAppRoutes")
 	}
 }
+
+func TestPublishWanted(t *testing.T) {
+	cases := []struct {
+		all  bool
+		ns   string
+		anno string
+		want bool
+	}{
+		{false, "demo", "", false},
+		{false, "demo", "true", true},
+		{true, "demo", "", true},
+		{true, "demo", "false", false},
+		{true, "openshift-console", "", false},
+		{true, "openshift-monitoring", "", false},
+		{true, "kube-system", "", false},
+		{true, "openshift-console", "true", true},
+		{true, "default", "", true},
+	}
+	for _, c := range cases {
+		if got := publishWanted(c.all, c.ns, c.anno); got != c.want {
+			t.Errorf("publishWanted(%v, %q, %q) = %v, want %v", c.all, c.ns, c.anno, got, c.want)
+		}
+	}
+}

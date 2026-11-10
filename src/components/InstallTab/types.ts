@@ -62,6 +62,8 @@ export interface ExternalAccessConfig {
   ipPool: string;
   /** Publish the API and console through host-cluster Routes (no DNS needed). */
   hostRoutes?: boolean;
+  /** Publish all application routes under the host's *.apps (needs hostRoutes). */
+  publishAppRoutes?: boolean;
 }
 
 /**

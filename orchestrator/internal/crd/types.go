@@ -263,6 +263,11 @@ type ExternalAccessConfig struct {
 	// without DNS records for the nested domain. Needs the bastion load
 	// balancer and external addresses the host nodes can reach.
 	HostRoutes bool `json:"hostRoutes,omitempty"`
+	// PublishAppRoutes publishes every route of the nested cluster outside
+	// the system namespaces (openshift-*, kube-*) under the host's *.apps
+	// (needs hostRoutes). A route opts out with
+	// sos.octools.io/publish-host-route: "false".
+	PublishAppRoutes bool `json:"publishAppRoutes,omitempty"`
 }
 
 // DefaultExternalPrefixLength is used when ExternalAccessConfig.PrefixLength is 0.

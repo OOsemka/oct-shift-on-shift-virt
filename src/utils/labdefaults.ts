@@ -44,6 +44,8 @@ export type LabSettings = {
   nestedVirtualization?: boolean;
   /** Quick clusters publish the API and console through host routes. */
   publishHostRoutes?: boolean;
+  /** Quick clusters also publish all their application routes. */
+  publishAppRoutes?: boolean;
 };
 
 /** The only settings a quick-cluster request may override. */
@@ -54,6 +56,8 @@ export type QuickOverrides = {
   desktopPassword?: string;
   /** Reach console/API through host-cluster routes instead of external DNS. */
   hostRoutes?: boolean;
+  /** Publish all application routes under the host's *.apps. */
+  publishAppRoutes?: boolean;
   /** Clone from this master (Express) instead of installing. */
   master?: string;
 };

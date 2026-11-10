@@ -73,6 +73,9 @@ func (s *Server) checkAddressAvailability(ctx context.Context, spec *crd.NestedC
 	if err := spec.CheckAddressesFree(others); err != nil {
 		return http.StatusConflict, err
 	}
+	if spec.ExternalAccess.PublishAppRoutes && !spec.ExternalAccess.HostRoutes {
+		return http.StatusBadRequest, fmt.Errorf("publishing application routes needs host routes")
+	}
 	if spec.ExternalAccess.HostRoutes && spec.ExternalAccess.IPPool == "" {
 		return http.StatusBadRequest, fmt.Errorf("host routes need the external addresses to come from an IP pool")
 	}

@@ -96,6 +96,12 @@ func TestQuickOverrides(t *testing.T) {
 	if ApplyQuickOverrides(&s, QuickOverrides{HostRoutes: &no}); s.ExternalAccess.HostRoutes {
 		t.Fatal("hostRoutes=false must turn the lab default off")
 	}
+	if ApplyQuickOverrides(&s, QuickOverrides{HostRoutes: &yes, PublishAppRoutes: &yes}); !s.ExternalAccess.PublishAppRoutes {
+		t.Fatal("publishAppRoutes override not applied")
+	}
+	if ApplyQuickOverrides(&s, QuickOverrides{HostRoutes: &no}); s.ExternalAccess.PublishAppRoutes {
+		t.Fatal("publishing application routes needs host routes")
+	}
 	s2, _ := BuildQuickSpec("quick-2", LabSettings{BaseDomain: "x.test", OCPVersion: "4.22", IPPool: "lab"}, true, pool, []string{"192.0.2.12", "192.0.2.13"}, nil)
 	if p := ApplyQuickOverrides(&s2, QuickOverrides{Graphical: &yes, DesktopUsername: "chris", DesktopPassword: "correct-horse"}); len(p) != 0 {
 		t.Fatalf("valid desktop overrides: %v", p)

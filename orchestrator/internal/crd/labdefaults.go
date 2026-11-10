@@ -45,6 +45,8 @@ type LabSettings struct {
 	NestedVirtualization     bool   `json:"nestedVirtualization,omitempty"`
 	// PublishHostRoutes: quick clusters get externalAccess.hostRoutes.
 	PublishHostRoutes bool `json:"publishHostRoutes,omitempty"`
+	// PublishAppRoutes: quick clusters publish all application routes.
+	PublishAppRoutes bool `json:"publishAppRoutes,omitempty"`
 }
 
 // WithDefaults fills unset compact-node sizes with the wizard's defaults.
