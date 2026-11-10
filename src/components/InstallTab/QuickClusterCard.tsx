@@ -57,6 +57,7 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
   const [desktopPassword, setDesktopPassword] = useState('');
   // Access path; starts from the lab default (publishHostRoutes).
   const [hostRoutes, setHostRoutes] = useState<boolean | undefined>(undefined);
+  const [publishApps, setPublishApps] = useState<boolean | undefined>(undefined);
   // Express: clone from a master instead of installing ('' = fresh install).
   const [masters, setMasters] = useState<MasterItem[]>([]);
   const [master, setMaster] = useState('');
@@ -69,6 +70,7 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
         setDefaults(d);
         setGraphical(Boolean(d.settings?.bastionGraphical));
         setHostRoutes(Boolean(d.settings?.publishHostRoutes));
+        setPublishApps(Boolean(d.settings?.publishHostRoutes && d.settings?.publishAppRoutes));
         // Pre-filled with the profile key; edit it to use another key for this cluster.
         setSshKey(d.sshPublicKey || '');
       })
@@ -102,6 +104,8 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
         ...(keyChanged && sshKey.trim() ? { sshPublicKey: sshKey.trim() } : {}),
         ...(graphical !== undefined ? { graphical } : {}),
         ...(hostRoutes !== undefined && !master ? { hostRoutes } : {}),
+        // Clones always use host routes, so the choice applies to them too.
+        ...(publishApps !== undefined && (hostRoutes || master) ? { publishAppRoutes: publishApps } : {}),
         ...(master ? { master } : {}),
         ...(graphical ? { desktopUsername: desktopUser.trim(), desktopPassword } : {}),
       });
@@ -217,6 +221,15 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
             description={t('Console, login and API are published as routes on this cluster, under its *.apps domain, so they work right away. Certificates come from a per-cluster CA you download from the cluster page (browsers warn until you trust it). Console and login then always use these names; your own applications in the nested cluster still need DNS. The API also keeps working through DNS if you add it later.')}
           />
         </FormGroup>
+        )}
+        {(hostRoutes || master) && (
+          <Checkbox
+            id="quick-publish-apps"
+            isChecked={Boolean(publishApps)}
+            onChange={(_e, v) => setPublishApps(v)}
+            label={t('Also publish all application routes')}
+            description={t('Every route created in the cluster (outside openshift-* and kube-*) gets an address under this cluster\'s *.apps with its trusted certificate. Opt a route out with sos.octools.io/publish-host-route=false.')}
+          />
         )}
         <Checkbox
           id="quick-graphical"

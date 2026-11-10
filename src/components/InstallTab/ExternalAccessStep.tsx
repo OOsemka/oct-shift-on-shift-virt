@@ -296,6 +296,14 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
           label={t("Publish the API and console through this cluster's routes (no DNS records needed)")}
           description={!ea.ipPool ? t('Pick the addresses from an IP pool to enable host routes.') : t('Console, login and API get names under this cluster\'s *.apps domain, signed by a per-cluster CA you can download. Other nested applications still need DNS. The external VLAN must be reachable from this cluster\'s nodes.')}
         />
+        <Checkbox
+          id="publish-app-routes"
+          isChecked={Boolean(ea.hostRoutes && ea.ipPool && ea.publishAppRoutes)}
+          isDisabled={!ea.hostRoutes || !ea.ipPool}
+          onChange={(_e, v) => onChange({ publishAppRoutes: v })}
+          label={t('Also publish all application routes')}
+          description={t('Every route you create in the nested cluster (outside openshift-* and kube-* namespaces) gets an address under this cluster\'s *.apps with its trusted certificate, within about two minutes. Opt a route out with the annotation sos.octools.io/publish-host-route=false. The hop from this cluster\'s router to the nested cluster is plain HTTP.')}
+        />
       </FormGroup>
 
       {fqdn && ea.apiIP && ea.ingressIP && !apiErr && !ingressErr && (

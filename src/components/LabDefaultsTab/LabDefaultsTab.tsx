@@ -287,6 +287,13 @@ const LabDefaultsTab: FC = () => {
             onChange={(_e, v) => update({ publishHostRoutes: v })}
             label={t("Publish the API and console through this cluster's routes by default (no DNS records needed; can be changed per cluster)")}
           />
+          <Checkbox
+            id="lab-publish-apps"
+            isChecked={Boolean(settings.publishHostRoutes && settings.publishAppRoutes)}
+            isDisabled={!settings.publishHostRoutes}
+            onChange={(_e, v) => update({ publishAppRoutes: v })}
+            label={t('Also publish all application routes of quick clusters (outside openshift-* and kube-*; can be changed per cluster)')}
+          />
         </FormGroup>
         <FormGroup label={t('Nested storage and virtualization on quick clusters')} fieldId="lab-nested">
           <Checkbox

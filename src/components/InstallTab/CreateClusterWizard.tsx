@@ -102,6 +102,9 @@ const CreateClusterWizard: FC = () => {
           ingressIP: config.externalAccess.ingressIP.trim(),
           // Host routes need pool addresses (the orchestrator refuses otherwise).
           hostRoutes: Boolean(config.externalAccess.hostRoutes && config.externalAccess.ipPool),
+          publishAppRoutes: Boolean(
+            config.externalAccess.hostRoutes && config.externalAccess.ipPool && config.externalAccess.publishAppRoutes,
+          ),
         },
       };
       await createCluster(deployConfig);

@@ -48,6 +48,22 @@ const (
 	appRouteSiblingSuffix = "-sos-host"
 )
 
+// publishWanted decides whether a nested route is published: explicitly
+// (annotation "true"), or automatically with publishAppRoutes for routes
+// outside the system namespaces unless the annotation says "false".
+func publishWanted(publishAll bool, namespace, annotation string) bool {
+	switch annotation {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	if !publishAll {
+		return false
+	}
+	return !strings.HasPrefix(namespace, "openshift") && !strings.HasPrefix(namespace, "kube-")
+}
+
 func appHTTPService(cluster string) string { return cluster + "-ext-http" }
 
 func trunc(s string, n int) string {
@@ -135,11 +151,19 @@ func (s *StepExecutor) syncAppRoutes(ctx context.Context, nc *crd.NestedCluster)
 			siblings = append(siblings, *r)
 			continue
 		}
-		if r.GetAnnotations()[annoPublishHostRoute] != "true" {
+		explicit := r.GetAnnotations()[annoPublishHostRoute]
+		if !publishWanted(nc.Spec.ExternalAccess.PublishAppRoutes, r.GetNamespace(), explicit) {
+			// No longer published: drop the URL we wrote earlier.
+			if _, had := r.GetAnnotations()[annoHostURL]; had {
+				patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:null}}}`, annoHostURL)
+				_, _ = nested.Resource(hostRouteGVR).Namespace(r.GetNamespace()).Patch(ctx, r.GetName(), types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+			}
 			continue
 		}
 		if term, _, _ := unstructured.NestedString(r.Object, "spec", "tls", "termination"); term == "passthrough" {
-			s.annotateNestedRoute(ctx, nested, r, "unsupported: passthrough routes cannot be published (use edge or reencrypt)")
+			if explicit == "true" { // say so only when asked explicitly
+				s.annotateNestedRoute(ctx, nested, r, "unsupported: passthrough routes cannot be published (use edge or reencrypt)")
+			}
 			continue
 		}
 		want[appRouteName(cluster, r.GetNamespace(), r.GetName())] = appRouteWant{ns: r.GetNamespace(), name: r.GetName(), route: r}

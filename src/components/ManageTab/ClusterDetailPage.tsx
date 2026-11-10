@@ -63,6 +63,7 @@ interface ClusterDetail {
     externalAccess: {
       apiIP: string;
       ingressIP: string;
+      publishAppRoutes?: boolean;
     };
     bastion?: {
       graphical?: boolean;
@@ -410,9 +411,14 @@ const ClusterDetailPage: FC = () => {
                           <a href={a.url} target="_blank" rel="noopener noreferrer">{a.url}</a> ({a.source})
                         </div>
                       ))}
+                      {spec.externalAccess?.publishAppRoutes && (
+                        <Label color="blue">{t('All application routes are published automatically')}</Label>
+                      )}
                       <HelperText>
                         <HelperTextItem variant="indeterminate">
-                          {t('Publish a route of the nested cluster under this cluster\u2019s *.apps (its trusted certificate, no DNS): annotate it, and it appears here within about two minutes. Edge and reencrypt routes only; the hop from this cluster\u2019s router to the nested cluster is plain HTTP.')}
+                          {spec.externalAccess?.publishAppRoutes
+                            ? t('Every route outside openshift-* and kube-* appears here within about two minutes. Opt one out with the annotation below set to false.')
+                            : t('Publish a route of the nested cluster under this cluster\u2019s *.apps (its trusted certificate, no DNS): annotate it, and it appears here within about two minutes. Edge and reencrypt routes only; the hop from this cluster\u2019s router to the nested cluster is plain HTTP.')}
                         </HelperTextItem>
                       </HelperText>
                       <ClipboardCopy isReadOnly isCode variant="inline-compact">

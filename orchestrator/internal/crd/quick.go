@@ -67,6 +67,8 @@ type QuickOverrides struct {
 	// reach the console and API through host-cluster routes instead of
 	// external DNS records. Quick clusters always use pool addresses.
 	HostRoutes *bool `json:"hostRoutes,omitempty"`
+	// PublishAppRoutes overrides the lab default (publish all application routes).
+	PublishAppRoutes *bool `json:"publishAppRoutes,omitempty"`
 	// Master clones the cluster from this master (Express) instead of
 	// installing it; applied by the API (it needs the master's spec).
 	Master string `json:"master,omitempty"`
@@ -90,6 +92,12 @@ func ApplyQuickOverrides(spec *NestedClusterSpec, o QuickOverrides) []string {
 	}
 	if o.HostRoutes != nil {
 		spec.ExternalAccess.HostRoutes = *o.HostRoutes
+	}
+	if o.PublishAppRoutes != nil {
+		spec.ExternalAccess.PublishAppRoutes = *o.PublishAppRoutes
+	}
+	if !spec.ExternalAccess.HostRoutes {
+		spec.ExternalAccess.PublishAppRoutes = false
 	}
 	if spec.Bastion.Graphical {
 		if u := strings.TrimSpace(o.DesktopUsername); u != "" {
@@ -195,6 +203,8 @@ func BuildQuickSpec(name string, s LabSettings, hasPullSecret bool, pool *IPPool
 			Gateway:      pool.Spec.Gateway,
 			IPPool:       pool.Name,
 			HostRoutes:   s.PublishHostRoutes,
+			// Publishing applications needs host routes.
+			PublishAppRoutes: s.PublishHostRoutes && s.PublishAppRoutes,
 		}
 		if len(free) >= 2 {
 			spec.ExternalAccess.APIIP, spec.ExternalAccess.IngressIP = free[0], free[1]

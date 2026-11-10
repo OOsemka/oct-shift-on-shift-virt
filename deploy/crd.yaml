@@ -242,6 +242,9 @@ spec:
                     hostRoutes:
                       type: boolean
                       description: Publish the nested API and console through Routes on the host cluster (host *.apps names), so they work without DNS records for the nested domain. Needs the bastion load balancer and external addresses reachable from the host nodes.
+                    publishAppRoutes:
+                      type: boolean
+                      description: Publish every route of the nested cluster outside openshift-* and kube-* namespaces under the host's *.apps (needs hostRoutes). A route opts out with the annotation sos.octools.io/publish-host-route=false.
                     ipPool:
                       type: string
                       description: Optional IPPool (same namespace) the external addresses were picked from; the API checks they match it.
