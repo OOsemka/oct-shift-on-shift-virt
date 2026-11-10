@@ -186,6 +186,10 @@ func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) 
 		if phase == crd.PhaseReady && nc.IsClone() {
 			go e.steps.CheckIsolation(ctx, nc)
 		}
+		// Per-application host routes follow the annotated nested routes.
+		if phase == crd.PhaseReady && nc.Spec.ExternalAccess.HostRoutes {
+			go e.steps.SyncAppRoutes(ctx, nc)
+		}
 		return
 	}
 
@@ -542,6 +546,16 @@ func (e *Engine) resyncPendingDeletions(ctx context.Context) {
 			for i := range list.Items {
 				obj := list.Items[i]
 				if obj.GetDeletionTimestamp() == nil {
+					// Ready clusters: follow annotated nested routes and the
+					// Express isolation job (neither changes the CR itself).
+					if nc, cerr := unstructuredToNestedCluster(&obj); cerr == nil && nc.Status.Phase == crd.PhaseReady {
+						if nc.IsClone() {
+							go e.steps.CheckIsolation(ctx, nc)
+						}
+						if nc.Spec.ExternalAccess.HostRoutes {
+							go e.steps.SyncAppRoutes(ctx, nc)
+						}
+					}
 					continue
 				}
 				hasOurs := false

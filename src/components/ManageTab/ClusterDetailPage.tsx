@@ -103,6 +103,8 @@ interface ClusterDetail {
     // the per-cluster CA served at /external-ca.
     hostConsoleURL?: string;
     hostAPIURL?: string;
+    // Applications published under the host's *.apps (per-application routes).
+    appRoutes?: Array<{ source: string; url: string }>;
     conditions?: Array<{ type: string; status: string; reason: string; message: string }>;
     installConfig?: string;
     agentConfig?: string;
@@ -398,6 +400,26 @@ const ClusterDetailPage: FC = () => {
                       </DescriptionListDescription>
                     </DescriptionListGroup>
                   </>
+                )}
+                {status.hostConsoleURL && (
+                  <DescriptionListGroup>
+                    <DescriptionListTerm>{t('Published applications')}</DescriptionListTerm>
+                    <DescriptionListDescription>
+                      {(status.appRoutes || []).map((a) => (
+                        <div key={a.source}>
+                          <a href={a.url} target="_blank" rel="noopener noreferrer">{a.url}</a> ({a.source})
+                        </div>
+                      ))}
+                      <HelperText>
+                        <HelperTextItem variant="indeterminate">
+                          {t('Publish a route of the nested cluster under this cluster\u2019s *.apps (its trusted certificate, no DNS): annotate it, and it appears here within about two minutes. Edge and reencrypt routes only; the hop from this cluster\u2019s router to the nested cluster is plain HTTP.')}
+                        </HelperTextItem>
+                      </HelperText>
+                      <ClipboardCopy isReadOnly isCode variant="inline-compact">
+                        {'oc annotate route <name> -n <namespace> sos.octools.io/publish-host-route=true'}
+                      </ClipboardCopy>
+                    </DescriptionListDescription>
+                  </DescriptionListGroup>
                 )}
                 {status.hostAPIRoute && !status.hostAPIURL && (
                   <>

@@ -22,8 +22,16 @@ func TestApplyMaster(t *testing.T) {
 	if spec.ClusterName != "c1" || spec.Namespace != "c1-ns" || spec.ExternalAccess.APIIP != "192.0.2.12" {
 		t.Error("name, namespace and external addresses stay the clone's")
 	}
-	if !spec.ExternalAccess.HostRoutes || spec.Storage.Enabled {
-		t.Error("clones use host routes and no nested storage")
+	if !spec.ExternalAccess.HostRoutes || !spec.Storage.Enabled {
+		t.Error("clones use host routes and keep their nested storage choice")
+	}
+	order := PhasesFor(nc)
+	idx := map[ClusterPhase]int{}
+	for i, p := range order {
+		idx[p] = i
+	}
+	if idx[PhaseConfigureStorage] <= idx[PhaseCloneCreds] || idx[PhaseConfigureVirtualization] <= idx[PhaseConfigureStorage] {
+		t.Error("clones configure storage and virtualization after they have their own credentials")
 	}
 	if PhasesFor(nc)[3] != PhaseCloneVMs || PhasesFor(&NestedCluster{})[3] != PhaseCreateVMs {
 		t.Error("phase order")

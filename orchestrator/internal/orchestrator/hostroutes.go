@@ -236,6 +236,15 @@ func (s *StepExecutor) hostRouteDNSRecords(ctx context.Context, nc *crd.NestedCl
 			out[host] = ingressIP
 		}
 	}
+	// Published applications (approutes.go) resolve to the nested ingress too.
+	if apps, err := routes.List(ctx, metav1.ListOptions{LabelSelector: "oct-shift-on-shift-virt/cluster=" + nc.Spec.ClusterName +
+		",oct-shift-on-shift-virt/component=" + appRoutesComponent}); err == nil {
+		for _, r := range apps.Items {
+			if host, _, _ := unstructured.NestedString(r.Object, "spec", "host"); host != "" {
+				out[host] = ingressIP
+			}
+		}
+	}
 	return out
 }
 
@@ -569,9 +578,15 @@ func (s *StepExecutor) runHostRoutesJob(ctx context.Context, nc *crd.NestedClust
 // deleteHostRoutes removes the host-side objects (operator namespace). The
 // cluster-namespace Secret and ConfigMap go with the namespace.
 func (s *StepExecutor) deleteHostRoutes(ctx context.Context, cluster string) {
+	for _, component := range []string{hostRoutesComponent, appRoutesComponent} {
+		s.deleteLabelled(ctx, cluster, component)
+	}
+}
+
+func (s *StepExecutor) deleteLabelled(ctx context.Context, cluster, component string) {
 	opNs := operatorNamespace()
 	sel := metav1.ListOptions{LabelSelector: "oct-shift-on-shift-virt/cluster=" + cluster +
-		",oct-shift-on-shift-virt/component=" + hostRoutesComponent}
+		",oct-shift-on-shift-virt/component=" + component}
 	routes := s.client.DynamicClient.Resource(hostRouteGVR).Namespace(opNs)
 	if list, err := routes.List(ctx, sel); err == nil {
 		for _, r := range list.Items {

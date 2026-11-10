@@ -87,8 +87,8 @@ Results appear on the cluster page (`StorageReady`, `VirtualizationReady`). A fa
 
 Cloning skips the install: a clone's console is up in about 8 minutes and `oc login` is reliable after about 15, versus about 60 minutes for a normal install (measured on a 3-node compact cluster with ODF RBD storage).
 
-- **Make a master** (Masters tab): pick a Ready cluster. It is shut down and its disks are snapshotted; it stays as a template and is no longer usable as a cluster. Prepare it first (operators, content): clones start from its current state. Version 1 accepts clusters without nested storage or virtualization.
-- **Clone** (quick cluster card on the Install tab, "How to create it"): the clone gets its own namespace, external addresses from the IP pool, host routes, admin certificate, kubeadmin password, cluster ID and service-account issuer. Clones always use host routes and keep the master's internal name, sizing and OpenShift release.
+- **Make a master** (Masters tab): pick a Ready cluster. It is shut down and its disks are snapshotted; it stays as a template and is no longer usable as a cluster. Prepare it first (operators, content): clones start from its current state. The master itself must not use nested storage or virtualization; clones get them instead (next point).
+- **Clone** (quick cluster card on the Install tab, "How to create it"): the clone gets its own namespace, external addresses from the IP pool, host routes, admin certificate, kubeadmin password, cluster ID and service-account issuer. Clones always use host routes and keep the master's internal name, sizing and OpenShift release. Nested storage and OpenShift Virtualization (from the lab defaults) are added to the clone after it is ready, exactly as on a normal install.
 - **Isolation**: a clone is usable at Ready. A background job then removes the last trust it shares with the master and its sibling clones (the old service-account issuer and the master's client-auth CAs); the `Isolated` condition turns True about 1.5 hours later. Serving and kubelet CAs stay shared with the master for now (copies of them allow posing as a server, not logging in).
 - **Refresh a master** every few days (Masters tab, possible while it has no clones): it boots, renews its certificates and takes new snapshots (about 20 minutes). Clones of an old master spend about 15 extra minutes renewing certificates on first boot.
 - A master cannot be deleted while it has clones. Deleting a clone never deletes the master's snapshots.
@@ -102,6 +102,16 @@ The cluster page shows the options that apply once the cluster is Ready.
 2. **Host routes (API, console and login; recommended)** — tick *Publish the API and console through this cluster's routes* on the External Access step (or *Host routes on quick clusters* in Lab Defaults). The PublishRoutes phase creates passthrough Routes `<cluster>-api`, `<cluster>-console` and `<cluster>-oauth` in the plugin namespace, pointing at the bastion's external addresses, and configures the nested cluster to answer on those names (`componentRoutes` for console and OAuth, a named certificate on the API server). Certificates come from a per-cluster CA; download it from the cluster page and log in with `oc login <API URL> --certificate-authority=<cluster>-ca.crt`. Trust the CA in your browser to avoid the warning. Needs the external addresses to come from an IP pool (so a host Route can only point at addresses an admin set aside), the bastion load balancer (0.3.0+), and an external VLAN that the host nodes can reach. Other `*.apps` applications of the nested cluster still need DNS.
 3. **Edge proxy (API only, legacy, optional)** — set `EDGE_PROXY_VLAN_IP` and `EDGE_PROXY_NAD` on the orchestrator. Each cluster then gets a passthrough Route to its API. Use `--insecure-skip-tls-verify`: the nested certificate does not carry the route hostname.
 4. **Bastion desktop** — enable *Graphical bastion* in the wizard, then open **Virtualization → VirtualMachines → `<cluster>-bastion` → Console**. The bastion resolves the nested zone, so its browser reaches the nested console directly. The login is stored in the `<cluster>-bastion-password` Secret.
+
+### Publishing applications (host routes)
+
+With host routes on, any route of the nested cluster can be published under the host cluster's `*.apps` too, with the host router's own (already trusted) certificate and no DNS:
+
+```
+oc annotate route <name> -n <namespace> sos.octools.io/publish-host-route=true
+```
+
+Within about two minutes the orchestrator creates an edge route `<cluster>-<route>-<hash>` on the host, a sibling route with that name in the nested cluster, and a split-DNS record so the name also works inside. The URL is written to the route (`sos.octools.io/host-url`) and listed on the cluster page. Removing the annotation (or the route) removes them. Edge and reencrypt routes only (passthrough cannot be served); the hop from the host router to the nested cluster is plain HTTP on the external VLAN (console, OAuth and API stay end-to-end TLS). Wildcard routes are not possible: the host router refuses them by default.
 
 ## Configuration
 
