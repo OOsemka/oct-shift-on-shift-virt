@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/OOsemka/oct-storefront/backend-security-kit/auth"
 	"github.com/OOsemka/oct-storefront/backend-security-kit/kubeclient"
+	"log/slog"
 
 	"context"
 	"crypto/tls"
@@ -55,7 +56,9 @@ func main() {
 		logger.Error("kubeclient for access reviews", "error", err.Error())
 		os.Exit(1)
 	}
-	policy := auth.NewPolicySource(kc, 0, nil)
+	// JSON like the orchestrator's own logs.
+	authLog := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("component", "auth")
+	policy := auth.NewPolicySource(kc, 0, authLog)
 	go policy.Run(ctx)
 	table, err := apiServer.AuthRoutes()
 	if err != nil {
@@ -67,6 +70,7 @@ func main() {
 		Mode:      auth.ModeFromEnv(),
 		Client:    kc,
 		Policy:    policy,
+		Logger:    authLog,
 	}, table)
 	if err != nil {
 		logger.Error("permission table", "error", err.Error())
