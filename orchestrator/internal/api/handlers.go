@@ -58,30 +58,45 @@ func NewServer(client *k8s.Client, logger *logging.Logger) *Server {
 }
 
 func (s *Server) registerRoutes() {
-	s.mux.HandleFunc("GET /api/v1/clusters", s.listClusters)
-	s.mux.HandleFunc("GET /api/v1/clusters/{name}", s.getCluster)
-	s.mux.HandleFunc("POST /api/v1/clusters", s.createCluster)
-	s.mux.HandleFunc("DELETE /api/v1/clusters/{name}", s.deleteCluster)
-	s.mux.HandleFunc("GET /api/v1/clusters/{name}/status", s.getClusterStatus)
-	s.mux.HandleFunc("GET /api/v1/clusters/{name}/nodes", s.getClusterNodes)
-	s.mux.HandleFunc("GET /api/v1/clusters/{name}/kubeconfig", s.getKubeconfig)
-	s.mux.HandleFunc("GET /api/v1/clusters/{name}/kubeadmin", s.getKubeadmin)
-	s.mux.HandleFunc("GET /api/v1/clusters/{name}/external-ca", s.getExternalCA)
-	s.mux.HandleFunc("POST /api/v1/clusters/{name}/make-master", s.makeMaster)
-	s.mux.HandleFunc("GET /api/v1/masters", s.listMasters)
-	s.mux.HandleFunc("POST /api/v1/clusters/{name}/refresh-master", s.refreshMaster)
-	s.mux.HandleFunc("GET /api/v1/clusters/{name}/logs", s.getClusterLogs)
-	s.mux.HandleFunc("POST /api/v1/clusters/preview-config", s.previewConfig)
-	s.mux.HandleFunc("GET /api/v1/storageclasses", s.listStorageClasses)
-	s.mux.HandleFunc("GET /api/v1/nads", s.listNADs)
-	s.mux.HandleFunc("GET /api/v1/ippools", s.listIPPools)
-	s.mux.HandleFunc("GET /api/v1/defaults", s.getLabDefaults)
-	s.mux.HandleFunc("GET /api/v1/quick-clusters/preview", s.previewQuickCluster)
-	s.mux.HandleFunc("POST /api/v1/quick-clusters", s.createQuickCluster)
-	s.mux.HandleFunc("GET /api/v1/ocp-versions", s.listOCPVersions)
-	s.mux.HandleFunc("GET /api/v1/network-plugins", s.listNetworkPlugins)
-	s.mux.HandleFunc("GET /api/v1/host-network", s.getHostNetwork)
-	s.mux.HandleFunc("GET /healthz", s.healthz)
+	for _, rt := range s.Routes() {
+		s.mux.HandleFunc(rt.Pattern, rt.Handler)
+	}
+}
+
+// Route is one API route. Routes is the single list the mux and the permission
+// table (permissions.go) are built from, so they can't drift apart.
+type Route struct {
+	Pattern string
+	Handler http.HandlerFunc
+}
+
+func (s *Server) Routes() []Route {
+	return []Route{
+		{"GET /api/v1/clusters", s.listClusters},
+		{"GET /api/v1/clusters/{name}", s.getCluster},
+		{"POST /api/v1/clusters", s.createCluster},
+		{"DELETE /api/v1/clusters/{name}", s.deleteCluster},
+		{"GET /api/v1/clusters/{name}/status", s.getClusterStatus},
+		{"GET /api/v1/clusters/{name}/nodes", s.getClusterNodes},
+		{"GET /api/v1/clusters/{name}/kubeconfig", s.getKubeconfig},
+		{"GET /api/v1/clusters/{name}/kubeadmin", s.getKubeadmin},
+		{"GET /api/v1/clusters/{name}/external-ca", s.getExternalCA},
+		{"POST /api/v1/clusters/{name}/make-master", s.makeMaster},
+		{"GET /api/v1/masters", s.listMasters},
+		{"POST /api/v1/clusters/{name}/refresh-master", s.refreshMaster},
+		{"GET /api/v1/clusters/{name}/logs", s.getClusterLogs},
+		{"POST /api/v1/clusters/preview-config", s.previewConfig},
+		{"GET /api/v1/storageclasses", s.listStorageClasses},
+		{"GET /api/v1/nads", s.listNADs},
+		{"GET /api/v1/ippools", s.listIPPools},
+		{"GET /api/v1/defaults", s.getLabDefaults},
+		{"GET /api/v1/quick-clusters/preview", s.previewQuickCluster},
+		{"POST /api/v1/quick-clusters", s.createQuickCluster},
+		{"GET /api/v1/ocp-versions", s.listOCPVersions},
+		{"GET /api/v1/network-plugins", s.listNetworkPlugins},
+		{"GET /api/v1/host-network", s.getHostNetwork},
+		{"GET /healthz", s.healthz},
+	}
 }
 
 func (s *Server) Handler() http.Handler {

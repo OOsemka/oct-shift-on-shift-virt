@@ -1,6 +1,9 @@
 package main
 
 import (
+	"github.com/OOsemka/oct-storefront/backend-security-kit/auth"
+	"github.com/OOsemka/oct-storefront/backend-security-kit/kubeclient"
+
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -43,6 +46,33 @@ func main() {
 
 	apiServer := api.NewServer(client, logger)
 
+	// Every API route is checked with the caller's own token (backend-security-kit).
+	// The console proxy forwards it (ConsolePlugin authorization: UserToken). This
+	// existing extension ships AUTH_MODE=audit; a cluster admin enables enforce in the
+	// cluster policy (backends.oct-shift-on-shift-virt.authMode).
+	kc, err := kubeclient.InCluster()
+	if err != nil {
+		logger.Error("kubeclient for access reviews", "error", err.Error())
+		os.Exit(1)
+	}
+	policy := auth.NewPolicySource(kc, 0, nil)
+	go policy.Run(ctx)
+	table, err := apiServer.AuthRoutes()
+	if err != nil {
+		logger.Error("permission table", "error", err.Error())
+		os.Exit(1)
+	}
+	authz, err := auth.New(auth.Options{
+		Extension: "oct-shift-on-shift-virt",
+		Mode:      auth.ModeFromEnv(),
+		Client:    kc,
+		Policy:    policy,
+	}, table)
+	if err != nil {
+		logger.Error("permission table", "error", err.Error())
+		os.Exit(1)
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8443"
@@ -59,7 +89,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%s", port),
-		Handler:      apiServer.Handler(),
+		Handler:      authz.Handler(),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,

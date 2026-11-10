@@ -498,6 +498,10 @@ spec:
             drop:
             - ALL
         env:
+        # backend-security-kit: audit until a cluster admin enables enforce
+        # (backends.oct-shift-on-shift-virt.authMode in the cluster policy).
+        - name: AUTH_MODE
+          value: audit
         - name: EDGE_PROXY_VLAN_IP
           value: ''
         - name: EDGE_PROXY_NAD
@@ -552,3 +556,45 @@ spec:
         name: sos-orchestrator
         namespace: oct-shift-on-shift-virt
         port: 8443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: oct-shift-on-shift-virt
+  namespace: oct-shift-on-shift-virt
+  labels:
+    app.kubernetes.io/part-of: oct-shift-on-shift-virt
+spec:
+  # The console plugin's static files: only the console loads them.
+  podSelector:
+    matchLabels:
+      app: oct-shift-on-shift-virt
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-console
+      ports:
+        - { protocol: TCP, port: 9443 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sos-orchestrator
+  namespace: oct-shift-on-shift-virt
+  labels:
+    app.kubernetes.io/part-of: oct-shift-on-shift-virt
+spec:
+  # The orchestrator API is only reached through the console proxy (nothing else calls it).
+  podSelector:
+    matchLabels:
+      app: sos-orchestrator
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-console
+      ports:
+        - { protocol: TCP, port: 8443 }
