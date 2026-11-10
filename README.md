@@ -103,6 +103,16 @@ The cluster page shows the options that apply once the cluster is Ready.
 3. **Edge proxy (API only, legacy, optional)** — set `EDGE_PROXY_VLAN_IP` and `EDGE_PROXY_NAD` on the orchestrator. Each cluster then gets a passthrough Route to its API. Use `--insecure-skip-tls-verify`: the nested certificate does not carry the route hostname.
 4. **Bastion desktop** — enable *Graphical bastion* in the wizard, then open **Virtualization → VirtualMachines → `<cluster>-bastion` → Console**. The bastion resolves the nested zone, so its browser reaches the nested console directly. The login is stored in the `<cluster>-bastion-password` Secret.
 
+### Publishing applications (host routes)
+
+With host routes on, any route of the nested cluster can be published under the host cluster's `*.apps` too, with the host router's own (already trusted) certificate and no DNS:
+
+```
+oc annotate route <name> -n <namespace> sos.octools.io/publish-host-route=true
+```
+
+Within about two minutes the orchestrator creates an edge route `<cluster>-<route>-<hash>` on the host, a sibling route with that name in the nested cluster, and a split-DNS record so the name also works inside. The URL is written to the route (`sos.octools.io/host-url`) and listed on the cluster page. Removing the annotation (or the route) removes them. Edge and reencrypt routes only (passthrough cannot be served); the hop from the host router to the nested cluster is plain HTTP on the external VLAN (console, OAuth and API stay end-to-end TLS). Wildcard routes are not possible: the host router refuses them by default.
+
 ## Configuration
 
 Orchestrator environment variables (all optional unless noted):
