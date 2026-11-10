@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
+	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/crd"
 	"os/exec"
 	"strings"
 	"testing"
@@ -138,5 +139,25 @@ func TestDNSScriptExtraRecords(t *testing.T) {
 	}
 	if plain := s.generateDNSScript("10.0.0.5", "10.0.0.6", "demo.example.test", nil); strings.Contains(plain, "#SOS_EXTRA") || !strings.Contains(plain, `"api-int.demo.example.test.": "10.0.0.5"`) {
 		t.Fatal("script without extras is wrong")
+	}
+}
+
+func TestAppRouteNames(t *testing.T) {
+	n := appRouteName("a-very-long-cluster-name", "some-namespace", "my-application-route")
+	if len(n)+len("-oct-shift-on-shift-virt") > 63 {
+		t.Fatalf("host route name %q too long for a DNS label once the router appends the namespace", n)
+	}
+	if n != appRouteName("a-very-long-cluster-name", "some-namespace", "my-application-route") {
+		t.Error("route name must be deterministic")
+	}
+	if n == appRouteName("a-very-long-cluster-name", "other-namespace", "my-application-route") {
+		t.Error("same route name in another namespace must not collide")
+	}
+	if s := appSiblingName(strings.Repeat("x", 80)); len(s) > 63 || !strings.HasSuffix(s, appRouteSiblingSuffix) {
+		t.Errorf("sibling name %q", s)
+	}
+	a := []crd.AppRoute{{Source: "ns/a", URL: "https://x"}}
+	if !sameAppRoutes(a, []crd.AppRoute{{Source: "ns/a", URL: "https://x"}}) || sameAppRoutes(a, nil) {
+		t.Error("sameAppRoutes")
 	}
 }

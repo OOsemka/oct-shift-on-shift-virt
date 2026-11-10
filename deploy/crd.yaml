@@ -345,6 +345,16 @@ spec:
             status:
               type: object
               properties:
+                appRoutes:
+                  type: array
+                  description: Nested routes published under the host's *.apps (annotation sos.octools.io/publish-host-route).
+                  items:
+                    type: object
+                    properties:
+                      source:
+                        type: string
+                      url:
+                        type: string
                 master:
                   type: object
                   description: Set once the cluster was turned into a master (Express); clones are created from its snapshots.

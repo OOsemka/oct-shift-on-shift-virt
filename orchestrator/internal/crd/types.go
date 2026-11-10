@@ -334,6 +334,15 @@ type NestedClusterStatus struct {
 	HostConsoleRoute string `json:"hostConsoleRoute,omitempty"`
 	// Master is set once this cluster has been turned into a master.
 	Master *MasterStatus `json:"master,omitempty"`
+	// AppRoutes are the nested routes published under the host's *.apps
+	// (annotation sos.octools.io/publish-host-route on the nested route).
+	AppRoutes []AppRoute `json:"appRoutes,omitempty"`
+}
+
+// AppRoute: a nested route (namespace/name) and its host-side URL.
+type AppRoute struct {
+	Source string `json:"source"`
+	URL    string `json:"url"`
 }
 
 // ClusterSource: clone from a master (a NestedCluster in phase Master).
