@@ -218,7 +218,7 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
             isChecked={hostRoutes === true}
             onChange={() => setHostRoutes(true)}
             label={t('Hosting cluster routes (no DNS needed)')}
-            description={t('Console, login and API are published as routes on this cluster, under its *.apps domain, so they work right away. Certificates come from a per-cluster CA you download from the cluster page (browsers warn until you trust it). Console and login then always use these names; your own applications in the nested cluster still need DNS. The API also keeps working through DNS if you add it later.')}
+            description={t('Console, login and API are published as routes on this cluster, under its *.apps domain, so they work right away. Certificates come from a per-cluster CA you download from the cluster page (browsers warn until you trust it). Console and login then always use these names, and the API also keeps working through DNS if you add it later. Publish your own applications with the option below or per route.')}
           />
         </FormGroup>
         )}

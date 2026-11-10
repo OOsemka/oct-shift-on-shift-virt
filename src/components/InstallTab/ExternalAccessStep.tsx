@@ -294,7 +294,7 @@ const ExternalAccessStep: FC<Props> = ({ config, onChange }) => {
           isDisabled={!ea.ipPool}
           onChange={(_e, v) => onChange({ hostRoutes: v })}
           label={t("Publish the API and console through this cluster's routes (no DNS records needed)")}
-          description={!ea.ipPool ? t('Pick the addresses from an IP pool to enable host routes.') : t('Console, login and API get names under this cluster\'s *.apps domain, signed by a per-cluster CA you can download. Other nested applications still need DNS. The external VLAN must be reachable from this cluster\'s nodes.')}
+          description={!ea.ipPool ? t('Pick the addresses from an IP pool to enable host routes.') : t('Console, login and API get names under this cluster\'s *.apps domain, signed by a per-cluster CA you can download. Publish your own applications with the option below or per route. The external VLAN must be reachable from this cluster\'s nodes.')}
         />
         <Checkbox
           id="publish-app-routes"
