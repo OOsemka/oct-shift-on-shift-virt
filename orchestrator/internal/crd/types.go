@@ -99,6 +99,10 @@ var ClonePhaseOrder = []ClusterPhase{
 	PhasePublishRoutes,
 	PhaseSanitize,
 	PhaseCloneCreds,
+	// Bolted on after the clone has its own credentials (the master has no
+	// nested storage); both are skipped unless requested, and non-fatal.
+	PhaseConfigureStorage,
+	PhaseConfigureVirtualization,
 	PhaseFinishIsolate,
 	PhaseReady,
 }

@@ -210,8 +210,8 @@ func (s *Server) createNestedCluster(ctx context.Context, spec crd.NestedCluster
 			return nil, http.StatusBadRequest, err
 		}
 		if want.Network != spec.Network || want.Masters != spec.Masters || want.StorageClassName != spec.StorageClassName ||
-			*want.Source != *spec.Source || !spec.ExternalAccess.HostRoutes || spec.Storage.Enabled || spec.Virtualization.Enabled {
-			return nil, http.StatusBadRequest, fmt.Errorf("a clone must keep the master's network, sizing and storage class, use host routes, and have no nested storage")
+			*want.Source != *spec.Source || !spec.ExternalAccess.HostRoutes {
+			return nil, http.StatusBadRequest, fmt.Errorf("a clone must keep the master's network, sizing and storage class, and use host routes")
 		}
 	}
 	// The cluster gets its own namespace: refuse one that already exists
