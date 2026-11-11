@@ -54,6 +54,40 @@ spec:
     - host
     - remote-node
 ---
+# OpenShift's default NetworkPolicies allow egress to the API servers with an
+# ipBlock (e.g. dns-default: 0.0.0.0/0). The API servers are host-network on
+# the masters, i.e. the host / remote-node / kube-apiserver identities, which
+# Cilium matches with a CIDR only under policy-cidr-match-mode=nodes. That
+# option is fragile: a cluster whose cilium-config was rewritten without it
+# had every CoreDNS pod started afterwards never sync ("Failed to watch",
+# "Policy denied ... -> host :6443"), so new services never resolved; and
+# Isovalent's enterprise agent refuses to start with it. Allow the API
+# servers by entity instead, independent of policy-cidr-match-mode and of
+# anything that rewrites cilium-config. All endpoints: OpenShift adds such
+# policies to more of its namespaces every release and the namespaces share
+# no label; without an egress policy a pod reaches the API anyway, and the
+# API's access control is RBAC, not the network. Port 6443 only (Cilium
+# enforces after the service translation 172.30.0.1:443 -> <master>:6443).
+# enableDefaultDeny false: this only adds an allow.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: sos-openshift-apiserver-egress
+spec:
+  endpointSelector: {}
+  enableDefaultDeny:
+    ingress: false
+    egress: false
+  egress:
+  - toEntities:
+    - kube-apiserver
+    - host
+    - remote-node
+    toPorts:
+    - ports:
+      - port: "6443"
+        protocol: TCP
+---
 # Cilium replaces kube-proxy (kubeProxyReplacement=true in cilium.yaml).
 apiVersion: operator.openshift.io/v1
 kind: Network
