@@ -5,9 +5,9 @@
 Standalone OpenShift Console plugin that deploys full, standalone OpenShift clusters on KubeVirt virtual machines — OpenShift-on-OpenShift, not HyperShift. A wizard collects the cluster definition; an orchestrator drives an agent-based install end to end and hands back a kubeconfig.
 
 - **Plugin ID:** `oct-shift-on-shift-virt`
-- **Version:** `0.5.2`
-- **Image:** `quay.io/cjanisze/oct-shift-on-shift-virt:0.5.2-ocp4.22` and `:0.5.2-ocp4.21` (`<semver>-ocp<major.minor>`; always publish both minors)
-- **Orchestrator image:** `quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator:0.5.2-ocp4.22` and `:0.5.2-ocp4.21` (companion)
+- **Version:** `0.5.3`
+- **Image:** `quay.io/cjanisze/oct-shift-on-shift-virt:0.5.3-ocp4.22` and `:0.5.3-ocp4.21` (`<semver>-ocp<major.minor>`; always publish both minors)
+- **Orchestrator image:** `quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator:0.5.3-ocp4.22` and `:0.5.3-ocp4.21` (companion)
 - **Git branch:** `main` tracks the newest supported minor (4.22); an `ocp-X.Y` branch is cut only when PatternFly or console APIs diverge
 
 Validated on OpenShift **4.22** (PatternFly 6), installing nested OpenShift 4.22. Open from **Community Tools → Compute** after the storefront ([oct-storefront](https://github.com/OOsemka/oct-storefront)) and this plugin are enabled.
@@ -79,7 +79,8 @@ What it does on the host, and nothing more:
 
 - A controller Deployment in the cluster namespace, non-root, with a namespace-scoped Role. The one cluster-scoped grant is `get persistentvolumes`, used for volume expansion.
 - The nested cluster can use **only** the selected host class.
-- A ResourceQuota on the namespace caps its total storage: the VM disks plus the allowance from the wizard, plus 180 GiB for virtualization boot images.
+- A ResourceQuota on the namespace caps its total storage: the VM disks plus the allowance from the wizard, plus 100 GiB for the image registry, plus 180 GiB for virtualization boot images.
+- The nested **image registry** is enabled on a 100 GiB `kubevirt-csi` volume (one replica), so builds (e.g. catalog items with Source-to-Image) work. A registry you configured yourself is left alone. Express clones get their own registry volume the same way.
 
 Results appear on the cluster page (`StorageReady`, `VirtualizationReady`). A failure there never fails the cluster install.
 

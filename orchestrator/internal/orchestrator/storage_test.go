@@ -20,10 +20,11 @@ func TestStorageQuotaGi(t *testing.T) {
 		virt     bool
 		want     int64
 	}{
-		{0, 0, false, defaultStorageAllowanceGi},
-		{360 * gi, 50, false, 410},
-		{360*gi + 1, 50, false, 411}, // partial Gi rounds up
-		{360 * gi, 50, true, 410 + virtualizationBootSourcesGi},
+		// The image registry's volume is always added on top of the allowance.
+		{0, 0, false, defaultStorageAllowanceGi + imageRegistryGi},
+		{360 * gi, 50, false, 410 + imageRegistryGi},
+		{360*gi + 1, 50, false, 411 + imageRegistryGi}, // partial Gi rounds up
+		{360 * gi, 50, true, 410 + imageRegistryGi + virtualizationBootSourcesGi},
 	}
 	for _, c := range cases {
 		if got := storageQuotaGi(c.existing, c.allow, c.virt); got != c.want {
@@ -148,6 +149,15 @@ func TestNestedClaimPropertySets(t *testing.T) {
 		got, rwx := nestedClaimPropertySets(c.host)
 		if rwx != c.rwx || !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: got %v rwx=%v, want %v rwx=%v", c.name, got, rwx, c.want, c.rwx)
+		}
+	}
+}
+
+func TestRegistryScriptEmbedded(t *testing.T) {
+	s := mustReadCSI("configure-registry.sh")
+	for _, want := range []string{"REGISTRY_OK", "REGISTRY_SKIPPED", "rollout restart deploy/controller-manager", "storageClassName: kubevirt-csi", "ReadWriteOnce", `"rolloutStrategy":"Recreate"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("configure-registry.sh lacks %q", want)
 		}
 	}
 }
