@@ -14,7 +14,7 @@ func TestWaitForImage(t *testing.T) {
 
 	// ISO generated before releases were resolved: helper image as before.
 	img, pull, secrets := waitForImage(nc)
-	if img != "quay.io/cjanisze/sos-installer-helper:4.22" || pull != corev1.PullAlways || secrets != nil {
+	if img != "quay.io/openshift-community-tools/sos-installer-helper:4.22" || pull != corev1.PullAlways || secrets != nil {
 		t.Errorf("legacy: %s %s %v", img, pull, secrets)
 	}
 

@@ -625,7 +625,7 @@ func (s *StepExecutor) startExpressJob(ctx context.Context, nc *crd.NestedCluste
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever, ServiceAccountName: cluster + "-ops",
 					Containers: []corev1.Container{{
-						Name: "run", Image: "quay.io/cjanisze/sos-installer-helper:4.22", ImagePullPolicy: corev1.PullAlways,
+						Name: "run", Image: "quay.io/openshift-community-tools/sos-installer-helper:4.22", ImagePullPolicy: corev1.PullAlways,
 						Command: []string{"/bin/bash", "/m/" + script}, Env: env, VolumeMounts: mounts,
 					}},
 					Volumes: vols,

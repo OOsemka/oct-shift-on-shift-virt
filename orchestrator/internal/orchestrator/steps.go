@@ -1418,7 +1418,7 @@ func (s *StepExecutor) generateISO(ctx context.Context, nc *crd.NestedCluster) e
 					Containers: []corev1.Container{
 						{
 							Name:            "installer",
-							Image:           "quay.io/cjanisze/sos-installer-helper:4.22",
+							Image:           "quay.io/openshift-community-tools/sos-installer-helper:4.22",
 							ImagePullPolicy: corev1.PullAlways,
 							Env: []corev1.EnvVar{
 								{Name: "HOME", Value: "/tmp"},
@@ -2605,7 +2605,7 @@ func (s *StepExecutor) postInstall(ctx context.Context, nc *crd.NestedCluster) e
 // whose ISO was generated before releases were resolved.
 func waitForImage(nc *crd.NestedCluster) (string, corev1.PullPolicy, []corev1.LocalObjectReference) {
 	if nc.Status.InstallerImage == "" {
-		return "quay.io/cjanisze/sos-installer-helper:4.22", corev1.PullAlways, nil
+		return "quay.io/openshift-community-tools/sos-installer-helper:4.22", corev1.PullAlways, nil
 	}
 	ps := nc.Spec.PullSecretRef.Name
 	if ps == "" {

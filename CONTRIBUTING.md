@@ -46,7 +46,7 @@ oc set image deploy/oct-shift-on-shift-virt -n oct-shift-on-shift-virt plugin=qu
 **Otherwise** deploy the YAML in this repo with your image:
 
 ```bash
-sed 's|quay.io/cjanisze/oct-shift-on-shift-virt:[^ ]*|quay.io/<you>/oct-shift-on-shift-virt:dev|' deploy/install.yaml | oc apply -f -
+sed 's|quay.io/openshift-community-tools/oct-shift-on-shift-virt:[^ ]*|quay.io/<you>/oct-shift-on-shift-virt:dev|' deploy/install.yaml | oc apply -f -
 ```
 
 and enable the plugin in the console (skip if the storefront already enabled it):

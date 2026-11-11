@@ -530,7 +530,7 @@ func (s *StepExecutor) runHostRoutesJob(ctx context.Context, nc *crd.NestedClust
 					ServiceAccountName: cluster + "-ops",
 					Containers: []corev1.Container{{
 						Name:            "run",
-						Image:           "quay.io/cjanisze/sos-installer-helper:4.22",
+						Image:           "quay.io/openshift-community-tools/sos-installer-helper:4.22",
 						ImagePullPolicy: corev1.PullAlways,
 						Command:         []string{"/bin/bash", "/m/publish-routes.sh"},
 						Env:             env,
