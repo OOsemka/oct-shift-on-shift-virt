@@ -342,7 +342,11 @@ const LabDefaultsTab: FC = () => {
             {saveError}
           </Alert>
         )}
-        {saved && <Alert variant="success" isInline isPlain title={t('Lab defaults saved')} />}
+        {saved && (
+          <Alert variant="success" isInline title={t('Lab defaults saved')}>
+            {t('A pasted pull secret is stored and no longer shown, so its field is empty again. The Install tab uses the new values when you open it.')}
+          </Alert>
+        )}
         <ActionGroup>
           <Button variant="primary" onClick={save} isLoading={saving} isDisabled={saving || Boolean(pullErr || sshErr)}>
             {t('Save')}
