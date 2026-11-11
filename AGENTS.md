@@ -9,9 +9,9 @@ This repository is the **Shift-on-Shift Virt** ConsolePlugin — deploy standalo
 | | Value |
 | --- | --- |
 | Plugin ID / ConsolePlugin / `package.json` `consolePlugin.name` | **`oct-shift-on-shift-virt`** |
-| Frontend image | `quay.io/cjanisze/oct-shift-on-shift-virt:<semver>-ocp<major.minor>` |
-| Orchestrator image (release) | `quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator:<semver>-ocp<major.minor>` |
-| Orchestrator image (dev loop) | `quay.io/cjanisze/sos-orchestrator:latest` (`orchestrator/build-push-rollout.sh`) |
+| Frontend image | `quay.io/openshift-community-tools/oct-shift-on-shift-virt:<semver>-ocp<major.minor>` |
+| Orchestrator image (release) | `quay.io/openshift-community-tools/oct-shift-on-shift-virt-orchestrator:<semver>-ocp<major.minor>` |
+| Orchestrator image (dev loop) | `quay.io/openshift-community-tools/sos-orchestrator:latest` (`orchestrator/build-push-rollout.sh`) |
 | i18n | `plugin__oct-shift-on-shift-virt` |
 | Route | `/community-tools/compute/shift-on-shift-virt` |
 | Proxy | `/api/proxy/plugin/oct-shift-on-shift-virt/orchestrator` |
@@ -216,9 +216,9 @@ Import from `@patternfly/react-core` ^6. Do **not** import PatternFly CSS. Prefi
 
 | Image | Current version | Quay repo |
 | --- | --- | --- |
-| `oct-shift-on-shift-virt-orchestrator` | **0.5.4** | `quay.io/cjanisze/oct-shift-on-shift-virt-orchestrator` |
-| `sos-installer-helper` | **4.22** | `quay.io/cjanisze/sos-installer-helper` (Jobs: `oc`, `openshift-install`, `python3`) |
-| `sos-ssh-helper` | **1.0.0** | `quay.io/cjanisze/sos-ssh-helper` (SSH Jobs; override `SSH_HELPER_IMAGE`). Must stay public: run `hack/check-images-public.sh` before releases. |
+| `oct-shift-on-shift-virt-orchestrator` | **0.5.4** | `quay.io/openshift-community-tools/oct-shift-on-shift-virt-orchestrator` |
+| `sos-installer-helper` | **4.22** | `quay.io/openshift-community-tools/sos-installer-helper` (Jobs: `oc`, `openshift-install`, `python3`) |
+| `sos-ssh-helper` | **1.0.0** | `quay.io/openshift-community-tools/sos-ssh-helper` (SSH Jobs; override `SSH_HELPER_IMAGE`). Must stay public: run `hack/check-images-public.sh` before releases. |
 
 ## Do-not-break list
 

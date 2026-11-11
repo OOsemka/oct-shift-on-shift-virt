@@ -27,7 +27,7 @@ func sshHelperImage() string {
 	// Pinned and public: community installs have no pull secret, so every
 	// image a phase uses must pull anonymously (a private :latest only worked
 	// on clusters that happened to carry a registry secret).
-	return "quay.io/cjanisze/sos-ssh-helper:1.0.0"
+	return "quay.io/openshift-community-tools/sos-ssh-helper:1.0.0"
 }
 
 // configureNodes runs after PowerOn and before WaitBootstrap. It fixes two
