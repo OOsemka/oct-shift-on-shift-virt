@@ -4,7 +4,7 @@ go 1.23
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/openshift-community-tools/oct-storefront/backend-security-kit v0.2.0-dev.2
+	github.com/openshift-community-tools/oct-storefront/backend-security-kit v0.2.0-dev.3
 	golang.org/x/crypto v0.31.0
 	k8s.io/api v0.31.4
 	k8s.io/apimachinery v0.31.4
@@ -58,4 +58,4 @@ require (
 
 // Until backend-security-kit is released from openshift-community-tools/oct-storefront, build against the
 // security-framework fork's dev tag. Remove this line once the release is tagged.
-replace github.com/openshift-community-tools/oct-storefront/backend-security-kit => github.com/dsorrentino/oct-storefront/backend-security-kit v0.2.0-dev.2
+replace github.com/openshift-community-tools/oct-storefront/backend-security-kit => github.com/dsorrentino/oct-storefront/backend-security-kit v0.2.0-dev.3
