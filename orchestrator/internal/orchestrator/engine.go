@@ -186,14 +186,27 @@ func (e *Engine) handleClusterEvent(ctx context.Context, nc *crd.NestedCluster) 
 		if phase == crd.PhaseReady && nc.IsClone() {
 			go e.steps.CheckIsolation(ctx, nc)
 		}
-		// Per-application host routes follow the annotated nested routes.
-		if phase == crd.PhaseReady && nc.Spec.ExternalAccess.HostRoutes {
-			go e.steps.SyncAppRoutes(ctx, nc)
+		if phase == crd.PhaseReady {
+			e.followHostRoutes(ctx, nc)
 		}
 		return
 	}
 
 	e.startReconcile(ctx, nc)
+}
+
+// followHostRoutes keeps the host routes of a Ready cluster in step with its
+// spec: hostRoutes turned on after the install publishes the API and console
+// (once per spec generation), and once published the per-application routes
+// follow the annotated nested routes.
+func (e *Engine) followHostRoutes(ctx context.Context, nc *crd.NestedCluster) {
+	if hostRoutesPending(nc) {
+		go e.steps.PublishRoutesOnReady(ctx, nc)
+		return
+	}
+	if nc.Spec.ExternalAccess.HostRoutes {
+		go e.steps.SyncAppRoutes(ctx, nc)
+	}
 }
 
 // startReconcile reports whether a reconcile was actually started. Callers
@@ -552,9 +565,7 @@ func (e *Engine) resyncPendingDeletions(ctx context.Context) {
 						if nc.IsClone() {
 							go e.steps.CheckIsolation(ctx, nc)
 						}
-						if nc.Spec.ExternalAccess.HostRoutes {
-							go e.steps.SyncAppRoutes(ctx, nc)
-						}
+						e.followHostRoutes(ctx, nc)
 					}
 					continue
 				}
