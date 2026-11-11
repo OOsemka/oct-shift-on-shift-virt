@@ -1,6 +1,10 @@
 package main
 
 import (
+	"github.com/openshift-community-tools/oct-storefront/backend-security-kit/auth"
+	"github.com/openshift-community-tools/oct-storefront/backend-security-kit/kubeclient"
+	"log/slog"
+
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -43,6 +47,36 @@ func main() {
 
 	apiServer := api.NewServer(client, logger)
 
+	// Every API route is checked with the caller's own token (backend-security-kit).
+	// The console proxy forwards it (ConsolePlugin authorization: UserToken). This
+	// existing extension ships AUTH_MODE=audit; a cluster admin enables enforce in the
+	// cluster policy (backends.oct-shift-on-shift-virt.authMode).
+	kc, err := kubeclient.InCluster()
+	if err != nil {
+		logger.Error("kubeclient for access reviews", "error", err.Error())
+		os.Exit(1)
+	}
+	// JSON like the orchestrator's own logs.
+	authLog := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("component", "auth")
+	policy := auth.NewPolicySource(kc, 0, authLog)
+	go policy.Run(ctx)
+	table, err := apiServer.AuthRoutes()
+	if err != nil {
+		logger.Error("permission table", "error", err.Error())
+		os.Exit(1)
+	}
+	authz, err := auth.New(auth.Options{
+		Extension: "oct-shift-on-shift-virt",
+		Mode:      auth.ModeFromEnv(),
+		Client:    kc,
+		Policy:    policy,
+		Logger:    authLog,
+	}, table)
+	if err != nil {
+		logger.Error("permission table", "error", err.Error())
+		os.Exit(1)
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8443"
@@ -59,7 +93,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%s", port),
-		Handler:      apiServer.Handler(),
+		Handler:      authz.Handler(),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
