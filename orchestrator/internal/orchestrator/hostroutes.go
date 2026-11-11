@@ -177,7 +177,12 @@ func (s *StepExecutor) PublishRoutesOnReady(ctx context.Context, nc *crd.NestedC
 	if !hostRoutesPending(nc) {
 		return
 	}
-	key := nc.Namespace + "/" + nc.Name
+	// Keyed by UID: a cluster deleted and re-created under the same name starts
+	// again at generation 1 and must not inherit the old attempt record.
+	key := string(nc.UID)
+	if key == "" {
+		key = nc.Namespace + "/" + nc.Name
+	}
 	mu, _ := hostRoutePublishes.LoadOrStore(key, &sync.Mutex{})
 	if !mu.(*sync.Mutex).TryLock() {
 		return
