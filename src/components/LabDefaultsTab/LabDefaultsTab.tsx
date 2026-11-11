@@ -285,7 +285,7 @@ const LabDefaultsTab: FC = () => {
             id="lab-host-routes"
             isChecked={Boolean(settings.publishHostRoutes)}
             onChange={(_e, v) => update({ publishHostRoutes: v })}
-            label={t("Publish the API and console through this cluster's routes by default (no DNS records needed; can be changed per cluster)")}
+            label={t('Publish the API and console through this cluster\'s routes by default (no DNS records needed; can be changed per cluster)')}
           />
           <Checkbox
             id="lab-publish-apps"
