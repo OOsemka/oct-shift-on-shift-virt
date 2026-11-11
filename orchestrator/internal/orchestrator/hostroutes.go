@@ -15,6 +15,7 @@ import (
 	"net"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/crd"
@@ -23,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -100,29 +102,93 @@ func (s *StepExecutor) publishRoutes(ctx context.Context, nc *crd.NestedCluster)
 	if !nc.Spec.ExternalAccess.HostRoutes {
 		return nil
 	}
+	s.publishRoutesResult(ctx, nc)(nc)
+	s.updateCRStatus(ctx, nc)
+	return nil
+}
+
+// publishRoutesResult publishes the routes and returns how to record the
+// outcome on a NestedCluster's status (HostRoutesReady, host URLs), so a
+// caller that ran long can apply it to a freshly read object.
+func (s *StepExecutor) publishRoutesResult(ctx context.Context, nc *crd.NestedCluster) func(*crd.NestedCluster) {
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent(hostRoutesComponent)
 	if !useBastionLB(nc) {
-		setCondition(nc, conditionHostRoutesReady, metav1.ConditionFalse, "NeedsBastionLoadBalancer",
-			"host routes need the bastion load balancer (clusters created with 0.3.0 or later)")
-		s.updateCRStatus(ctx, nc)
-		return nil
+		return func(t *crd.NestedCluster) {
+			setCondition(t, conditionHostRoutesReady, metav1.ConditionFalse, "NeedsBastionLoadBalancer",
+				"host routes need the bastion load balancer (clusters created with 0.3.0 or later)")
+		}
 	}
 	consoleURL, apiURL, err := s.doPublishRoutes(ctx, nc)
 	if err != nil {
 		log.Error("publishing host routes failed (non-fatal)", "error", err.Error())
-		setCondition(nc, conditionHostRoutesReady, metav1.ConditionFalse, "PublishFailed", err.Error())
-		s.updateCRStatus(ctx, nc)
-		return nil
+		return func(t *crd.NestedCluster) {
+			setCondition(t, conditionHostRoutesReady, metav1.ConditionFalse, "PublishFailed", err.Error())
+		}
 	}
-	nc.Status.HostConsoleURL, nc.Status.HostAPIURL = consoleURL, apiURL
 	msg := fmt.Sprintf("console %s, API %s", consoleURL, apiURL)
 	if nc.IsClone() {
 		msg += " (the console, login and API certificate for these names finish rolling out within a few minutes)"
 	}
-	setCondition(nc, conditionHostRoutesReady, metav1.ConditionTrue, "Published", msg)
-	s.updateCRStatus(ctx, nc)
 	log.Info("API and console published through host routes", "console", consoleURL, "api", apiURL)
-	return nil
+	return func(t *crd.NestedCluster) {
+		t.Status.HostConsoleURL, t.Status.HostAPIURL = consoleURL, apiURL
+		setCondition(t, conditionHostRoutesReady, metav1.ConditionTrue, "Published", msg)
+	}
+}
+
+// hostRoutesPending reports whether a Ready cluster has hostRoutes on but its
+// API and console were never published: hostRoutes was set after the install
+// (PublishRoutes only runs during it, and SyncAppRoutes needs the API route).
+// One attempt per spec generation: a failure is recorded on HostRoutesReady
+// with the generation, and the next spec edit tries again.
+func hostRoutesPending(nc *crd.NestedCluster) bool {
+	if nc.DeletionTimestamp != nil || nc.Status.Phase != crd.PhaseReady ||
+		!nc.Spec.ExternalAccess.HostRoutes || nc.Status.HostAPIURL != "" {
+		return false
+	}
+	c := meta.FindStatusCondition(nc.Status.Conditions, conditionHostRoutesReady)
+	return c == nil || c.ObservedGeneration < nc.Generation
+}
+
+var hostRoutePublishes sync.Map // cluster key -> *sync.Mutex (one publish at a time)
+
+// PublishRoutesOnReady publishes the API and console of a Ready cluster whose
+// hostRoutes was turned on after the install. The Job takes minutes, so the
+// result is applied to the CR as it is then, and dropped if the cluster is no
+// longer Ready (being deleted, or re-running phases) by then.
+func (s *StepExecutor) PublishRoutesOnReady(ctx context.Context, nc *crd.NestedCluster) {
+	if !hostRoutesPending(nc) {
+		return
+	}
+	mu, _ := hostRoutePublishes.LoadOrStore(nc.Namespace+"/"+nc.Name, &sync.Mutex{})
+	if !mu.(*sync.Mutex).TryLock() {
+		return
+	}
+	defer mu.(*sync.Mutex).Unlock()
+	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent(hostRoutesComponent)
+	log.Info("hostRoutes enabled on a Ready cluster: publishing the API and console")
+	apply := s.publishRoutesResult(ctx, nc)
+
+	gvr := schema.GroupVersionResource{Group: crd.Group, Version: crd.Version, Resource: crd.Resource}
+	obj, err := s.client.DynamicClient.Resource(gvr).Namespace(nc.Namespace).Get(ctx, nc.Name, metav1.GetOptions{})
+	if err != nil {
+		log.Error("reading the cluster to record host routes", "error", err.Error())
+		return
+	}
+	cur, err := unstructuredToNestedCluster(obj)
+	if err != nil {
+		log.Error("decoding the cluster to record host routes", "error", err.Error())
+		return
+	}
+	if cur.DeletionTimestamp != nil || cur.Status.Phase != crd.PhaseReady {
+		log.Info("cluster left Ready while publishing host routes; result not recorded", "phase", string(cur.Status.Phase))
+		return
+	}
+	// Recorded against the generation that was published, so an edit made
+	// meanwhile (e.g. hostRoutes toggled again) is looked at once more.
+	cur.Generation = nc.Generation
+	apply(cur)
+	s.updateCRStatus(ctx, cur)
 }
 
 func (s *StepExecutor) doPublishRoutes(ctx context.Context, nc *crd.NestedCluster) (string, string, error) {
