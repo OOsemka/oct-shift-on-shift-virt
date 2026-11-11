@@ -162,6 +162,107 @@ func TestCiliumOpenShiftSettings(t *testing.T) {
 	}
 }
 
+// ciliumPolicies returns the CiliumClusterwideNetworkPolicies of the rendered
+// Cilium manifests (every embedded version), keyed by name.
+func ciliumPolicies(t *testing.T) map[string]map[string]interface{} {
+	t.Helper()
+	out := map[string]map[string]interface{}{}
+	for _, v := range Versions(Cilium) {
+		m, err := Manifests(Params{NetworkType: Cilium, Version: v, ClusterName: "c", BaseDomain: "d", ClusterNetworkCIDR: "10.128.0.0/14"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, b := range m {
+			r := utilyaml.NewYAMLReader(bufioReader(b))
+			for {
+				doc, err := r.Read()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				var obj map[string]interface{}
+				if err := yaml.Unmarshal(doc, &obj); err != nil || obj["kind"] != "CiliumClusterwideNetworkPolicy" {
+					continue
+				}
+				out[obj["metadata"].(map[string]interface{})["name"].(string)] = obj
+			}
+		}
+	}
+	return out
+}
+
+// Our policies only add allows: none may put an endpoint into default deny
+// (Cilium's default for a policy with rules) or carry deny rules.
+func TestCiliumPoliciesNeverDefaultDeny(t *testing.T) {
+	pols := ciliumPolicies(t)
+	if len(pols) == 0 {
+		t.Fatal("no CiliumClusterwideNetworkPolicy rendered")
+	}
+	for name, p := range pols {
+		spec := p["spec"].(map[string]interface{})
+		dd, _ := spec["enableDefaultDeny"].(map[string]interface{})
+		if dd["ingress"] != false || dd["egress"] != false {
+			t.Errorf("%s: enableDefaultDeny must set ingress and egress to false, got %v", name, dd)
+		}
+		for _, k := range []string{"ingressDeny", "egressDeny"} {
+			if _, ok := spec[k]; ok {
+				t.Errorf("%s: must not have %s", name, k)
+			}
+		}
+	}
+}
+
+// OpenShift's default NetworkPolicies reach the host-network API servers with
+// an ipBlock, which Cilium matches only under policy-cidr-match-mode=nodes; a
+// CoreDNS pod started after those policies never synced. The API servers are
+// allowed by entity so this does not depend on cilium-config.
+func TestCiliumAllowsAPIServerEgressByEntity(t *testing.T) {
+	p, ok := ciliumPolicies(t)["sos-openshift-apiserver-egress"]
+	if !ok {
+		t.Fatal("CiliumClusterwideNetworkPolicy sos-openshift-apiserver-egress missing")
+	}
+	spec := p["spec"].(map[string]interface{})
+	if sel, _ := spec["endpointSelector"].(map[string]interface{}); sel == nil || len(sel) != 0 {
+		t.Errorf("endpointSelector must be {} (every endpoint), got %v", spec["endpointSelector"])
+	}
+	if _, ok := spec["ingress"]; ok {
+		t.Error("the API server policy must not have ingress rules")
+	}
+	egress, _ := spec["egress"].([]interface{})
+	if len(egress) != 1 {
+		t.Fatalf("want one egress rule, got %v", spec["egress"])
+	}
+	rule := egress[0].(map[string]interface{})
+	if _, ok := rule["toCIDR"]; ok {
+		t.Error("must select the API servers by entity, not CIDR")
+	}
+	ents := map[string]bool{}
+	for _, e := range rule["toEntities"].([]interface{}) {
+		ents[e.(string)] = true
+	}
+	for _, want := range []string{"kube-apiserver", "host", "remote-node"} {
+		if !ents[want] {
+			t.Errorf("toEntities missing %q: %v", want, rule["toEntities"])
+		}
+	}
+	if len(ents) != 3 {
+		t.Errorf("toEntities must be exactly kube-apiserver, host, remote-node: %v", rule["toEntities"])
+	}
+	tp, _ := rule["toPorts"].([]interface{})
+	if len(tp) != 1 {
+		t.Fatalf("want one toPorts entry, got %v", rule["toPorts"])
+	}
+	ports := tp[0].(map[string]interface{})["ports"].([]interface{})
+	if len(ports) != 1 {
+		t.Fatalf("want only 6443/TCP, got %v", ports)
+	}
+	if pp := ports[0].(map[string]interface{}); pp["port"] != "6443" || pp["protocol"] != "TCP" {
+		t.Errorf("want 6443/TCP, got %v", pp)
+	}
+}
+
 // assertParses decodes every YAML document and checks it is a Kubernetes object.
 func assertParses(t *testing.T, name string, b []byte) {
 	t.Helper()
