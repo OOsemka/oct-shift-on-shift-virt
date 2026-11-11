@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/OOsemka/oct-storefront/backend-security-kit/auth"
-	"github.com/OOsemka/oct-storefront/backend-security-kit/kubeclient"
+	"github.com/openshift-community-tools/oct-storefront/backend-security-kit/auth"
+	"github.com/openshift-community-tools/oct-storefront/backend-security-kit/kubeclient"
 	"log/slog"
 
 	"context"

@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/crd"
-	"github.com/OOsemka/oct-storefront/backend-security-kit/auth"
+	"github.com/openshift-community-tools/oct-storefront/backend-security-kit/auth"
 )
 
 // The permission table (backend-security-kit): what the caller must be allowed to do

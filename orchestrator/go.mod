@@ -3,8 +3,8 @@ module github.com/OOsemka/oct-shift-on-shift-virt/orchestrator
 go 1.23
 
 require (
-	github.com/OOsemka/oct-storefront/backend-security-kit v0.2.0-dev.1
 	github.com/google/uuid v1.6.0
+	github.com/openshift-community-tools/oct-storefront/backend-security-kit v0.2.0-dev.2
 	golang.org/x/crypto v0.31.0
 	k8s.io/api v0.31.4
 	k8s.io/apimachinery v0.31.4
@@ -56,6 +56,6 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
 )
 
-// Until backend-security-kit is released from OOsemka/oct-storefront, build against the
+// Until backend-security-kit is released from openshift-community-tools/oct-storefront, build against the
 // security-framework fork's dev tag. Remove this line once the release is tagged.
-replace github.com/OOsemka/oct-storefront/backend-security-kit => github.com/dsorrentino/oct-storefront/backend-security-kit v0.2.0-dev.1
+replace github.com/openshift-community-tools/oct-storefront/backend-security-kit => github.com/dsorrentino/oct-storefront/backend-security-kit v0.2.0-dev.2

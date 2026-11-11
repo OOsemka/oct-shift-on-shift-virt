@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/OOsemka/oct-storefront/backend-security-kit/auth"
-	"github.com/OOsemka/oct-storefront/backend-security-kit/kubeclient"
+	"github.com/openshift-community-tools/oct-storefront/backend-security-kit/auth"
+	"github.com/openshift-community-tools/oct-storefront/backend-security-kit/kubeclient"
 )
 
 // Every route has a permission rule and the kit accepts the table, so a new route
