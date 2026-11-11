@@ -43,3 +43,18 @@ func TestHostRoutesPending(t *testing.T) {
 		}
 	}
 }
+
+// Without observedGeneration on the condition (older CRDs prune it) a failed
+// publish must still not re-run on every resync: once per spec generation.
+func TestClaimHostRoutesAttempt(t *testing.T) {
+	key := "ns/claim-test"
+	if !claimHostRoutesAttempt(key, 2) {
+		t.Fatal("first attempt for generation 2 refused")
+	}
+	if claimHostRoutesAttempt(key, 2) {
+		t.Fatal("second attempt for generation 2 allowed: would loop on every resync")
+	}
+	if !claimHostRoutesAttempt(key, 3) {
+		t.Fatal("spec edited (generation 3) but no new attempt")
+	}
+}

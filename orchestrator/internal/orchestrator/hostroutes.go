@@ -150,7 +150,24 @@ func hostRoutesPending(nc *crd.NestedCluster) bool {
 	return c == nil || c.ObservedGeneration < nc.Generation
 }
 
-var hostRoutePublishes sync.Map // cluster key -> *sync.Mutex (one publish at a time)
+var (
+	hostRoutePublishes sync.Map // cluster key -> *sync.Mutex (one publish at a time)
+	// cluster key -> last spec generation a publish was attempted for. Keeps
+	// a failing publish from re-running on every resync when the condition's
+	// observedGeneration is pruned (CRDs before 0.5.5 lack the field); lost on
+	// restart, which costs at most one more attempt.
+	hostRoutePublishAttempts sync.Map
+)
+
+// claimHostRoutesAttempt reports whether no publish was attempted yet for
+// this spec generation, and records the attempt.
+func claimHostRoutesAttempt(key string, generation int64) bool {
+	if prev, ok := hostRoutePublishAttempts.Load(key); ok && prev.(int64) >= generation {
+		return false
+	}
+	hostRoutePublishAttempts.Store(key, generation)
+	return true
+}
 
 // PublishRoutesOnReady publishes the API and console of a Ready cluster whose
 // hostRoutes was turned on after the install. The Job takes minutes, so the
@@ -160,11 +177,15 @@ func (s *StepExecutor) PublishRoutesOnReady(ctx context.Context, nc *crd.NestedC
 	if !hostRoutesPending(nc) {
 		return
 	}
-	mu, _ := hostRoutePublishes.LoadOrStore(nc.Namespace+"/"+nc.Name, &sync.Mutex{})
+	key := nc.Namespace + "/" + nc.Name
+	mu, _ := hostRoutePublishes.LoadOrStore(key, &sync.Mutex{})
 	if !mu.(*sync.Mutex).TryLock() {
 		return
 	}
 	defer mu.(*sync.Mutex).Unlock()
+	if !claimHostRoutesAttempt(key, nc.Generation) {
+		return
+	}
 	log := s.logger.WithCluster(nc.Spec.ClusterName).WithComponent(hostRoutesComponent)
 	log.Info("hostRoutes enabled on a Ready cluster: publishing the API and console")
 	apply := s.publishRoutesResult(ctx, nc)
