@@ -24,6 +24,9 @@ import (
 // Safe to repeat (an orchestrator restart resumes the phase from the start):
 // the steps are idempotent and nodes that already have the flag are skipped.
 func (s *StepExecutor) EnableStorage(ctx context.Context, nc *crd.NestedCluster) error {
+	if !nc.ConditionTrue(crd.ConditionStorageReady) {
+		s.setProgress(ctx, nc, "Configuring nested storage")
+	}
 	if err := s.configureStorage(ctx, nc); err != nil {
 		return err
 	}
@@ -43,6 +46,9 @@ func (s *StepExecutor) EnableStorage(ctx context.Context, nc *crd.NestedCluster)
 			s.updateCRStatus(ctx, nc)
 			return nil
 		}
+	}
+	if c := meta.FindStatusCondition(nc.Status.Conditions, conditionStorageReady); c != nil && c.Status == metav1.ConditionTrue {
+		s.setProgress(ctx, nc, "Installing OpenShift Virtualization in the nested cluster")
 	}
 	return s.configureVirtualization(ctx, nc)
 }
