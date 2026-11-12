@@ -63,7 +63,7 @@ func TestCRDPhaseEnumCoversAllPhases(t *testing.T) {
 	}
 	crd := string(b)
 	phases := append(append([]ClusterPhase{}, PhaseOrder...), ClonePhaseOrder...)
-	phases = append(phases, PhaseMakeMaster, PhaseMaster, PhaseRefreshMaster, PhaseEnableStorage, PhaseFailed, PhaseDeleting)
+	phases = append(phases, PhaseMakeMaster, PhaseMaster, PhaseRefreshMaster, PhaseEnableStorage, PhaseEnableVirtualization, PhaseFailed, PhaseDeleting)
 	for _, p := range phases {
 		if !strings.Contains(crd, "\n                    - "+string(p)+"\n") {
 			t.Errorf("deploy/crd.yaml status.phase enum is missing %q", p)

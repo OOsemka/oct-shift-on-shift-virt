@@ -16,7 +16,8 @@ import (
 // enableStorage: POST /api/v1/clusters/{name}/enable-storage. Adds nested
 // storage, and with "virtualization": true OpenShift Virtualization, to a
 // Ready cluster. Virtualization needs storage, so it turns storage on as well
-// (as in the wizard). The orchestrator then runs phase EnableStorage: the
+// (as in the wizard). The orchestrator then runs phase EnableStorage (or
+// EnableVirtualization when virtualization was requested; same step): the
 // storage step, a rolling restart of the node VMs when virtualization needs
 // the host CPU's svm/vmx flag, and the virtualization step; the cluster
 // returns to Ready, with StorageReady / VirtualizationReady saying how it went.
@@ -104,7 +105,7 @@ func (s *Server) enableStorage(w http.ResponseWriter, r *http.Request) {
 		if gerr != nil {
 			return gerr
 		}
-		_ = unstructured.SetNestedField(cur.Object, string(crd.PhaseEnableStorage), "status", "phase")
+		_ = unstructured.SetNestedField(cur.Object, string(crd.EnableStoragePhase(req)), "status", "phase")
 		_ = unstructured.SetNestedField(cur.Object, msg, "status", "message")
 		_, uerr := res.UpdateStatus(r.Context(), cur, metav1.UpdateOptions{})
 		return uerr

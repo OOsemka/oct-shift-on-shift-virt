@@ -57,14 +57,18 @@ const (
 	// virtualization needs the host CPU's svm/vmx flag, and
 	// ConfigureVirtualization, then returns to Ready. It is not part of an
 	// install order, so a clone never re-runs FinishIsolation.
-	PhaseEnableStorage ClusterPhase = "EnableStorage"
-	PhaseCloneVMs      ClusterPhase = "CloneVMs"
-	PhaseWaitCloneAPI  ClusterPhase = "WaitCloneAPI"
-	PhaseSanitize      ClusterPhase = "Sanitize"
-	PhaseCloneCreds    ClusterPhase = "CloneCredentials"
-	PhaseFinishIsolate ClusterPhase = "FinishIsolation"
-	PhaseFailed        ClusterPhase = "Failed"
-	PhaseDeleting      ClusterPhase = "Deleting"
+	// PhaseEnableVirtualization is the same step for a request that includes
+	// OpenShift Virtualization (and so possibly a restart of every node): a
+	// separate name only so the phase shown to users says what is happening.
+	PhaseEnableStorage        ClusterPhase = "EnableStorage"
+	PhaseEnableVirtualization ClusterPhase = "EnableVirtualization"
+	PhaseCloneVMs             ClusterPhase = "CloneVMs"
+	PhaseWaitCloneAPI         ClusterPhase = "WaitCloneAPI"
+	PhaseSanitize             ClusterPhase = "Sanitize"
+	PhaseCloneCreds           ClusterPhase = "CloneCredentials"
+	PhaseFinishIsolate        ClusterPhase = "FinishIsolation"
+	PhaseFailed               ClusterPhase = "Failed"
+	PhaseDeleting             ClusterPhase = "Deleting"
 )
 
 var PhaseOrder = []ClusterPhase{
@@ -525,4 +529,17 @@ func NextPhase(current ClusterPhase) ClusterPhase {
 		}
 	}
 	return PhaseReady
+}
+
+// EnableStoragePhase is the phase a day-2 request runs in.
+func EnableStoragePhase(req EnableStorageRequest) ClusterPhase {
+	if req.Virtualization {
+		return PhaseEnableVirtualization
+	}
+	return PhaseEnableStorage
+}
+
+// IsEnableStoragePhase reports a day-2 storage/virtualization phase.
+func IsEnableStoragePhase(p ClusterPhase) bool {
+	return p == PhaseEnableStorage || p == PhaseEnableVirtualization
 }

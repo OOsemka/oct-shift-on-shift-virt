@@ -72,8 +72,8 @@ func TestEnableVirtualizationImpliesStorage(t *testing.T) {
 	if sc, _, _ := unstructured.NestedString(after.Object, "spec", "storage", "infraStorageClassName"); sc != "host-rbd" {
 		t.Errorf("infraStorageClassName = %q", sc)
 	}
-	if p, _, _ := unstructured.NestedString(after.Object, "status", "phase"); p != "EnableStorage" {
-		t.Errorf("phase = %q, want EnableStorage", p)
+	if p, _, _ := unstructured.NestedString(after.Object, "status", "phase"); p != "EnableVirtualization" {
+		t.Errorf("phase = %q, want EnableVirtualization", p)
 	}
 	if m, _, _ := unstructured.NestedString(after.Object, "status", "message"); m != "Adding nested storage and OpenShift Virtualization" {
 		t.Errorf("message = %q", m)
@@ -90,6 +90,9 @@ func TestEnableStorageOnlyKeepsVirtualizationOff(t *testing.T) {
 	}
 	if v, _, _ := unstructured.NestedBool(after.Object, "spec", "virtualization", "enabled"); v {
 		t.Error("storage alone must not enable virtualization")
+	}
+	if p, _, _ := unstructured.NestedString(after.Object, "status", "phase"); p != "EnableStorage" {
+		t.Errorf("phase = %q, want EnableStorage", p)
 	}
 }
 
@@ -116,7 +119,7 @@ func TestEnableStorageRefusals(t *testing.T) {
 			if rec.Code != c.code {
 				t.Fatalf("got %d, want %d: %s", rec.Code, c.code, rec.Body.String())
 			}
-			if p, _, _ := unstructured.NestedString(after.Object, "status", "phase"); p == "EnableStorage" {
+			if p, _, _ := unstructured.NestedString(after.Object, "status", "phase"); p == "EnableStorage" || p == "EnableVirtualization" {
 				t.Error("a refused request must not start the phase")
 			}
 		})
