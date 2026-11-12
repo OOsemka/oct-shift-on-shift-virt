@@ -51,7 +51,8 @@ func (s *Server) checksFor(pattern string) (checks []auth.Check, public bool, er
 		return []auth.Check{nestedClusters("create", nil), {Verb: "create", Resource: "namespaces"}}, false, nil
 	case "DELETE /api/v1/clusters/{name}":
 		return []auth.Check{nestedClusters("delete", byName)}, false, nil
-	case "POST /api/v1/clusters/{name}/make-master", "POST /api/v1/clusters/{name}/refresh-master":
+	case "POST /api/v1/clusters/{name}/make-master", "POST /api/v1/clusters/{name}/refresh-master",
+		"POST /api/v1/clusters/{name}/enable-storage":
 		return []auth.Check{nestedClusters("update", byName)}, false, nil
 	case "GET /api/v1/storageclasses":
 		return []auth.Check{{Verb: "list", Group: "storage.k8s.io", Resource: "storageclasses"}}, false, nil

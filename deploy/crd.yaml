@@ -421,6 +421,7 @@ spec:
                     - MakeMaster
                     - Master
                     - RefreshMaster
+                    - EnableStorage
                     - CloneVMs
                     - WaitCloneAPI
                     - Sanitize

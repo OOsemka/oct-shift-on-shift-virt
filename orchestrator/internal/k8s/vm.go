@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 	"strings"
 	"time"
 
@@ -77,12 +78,53 @@ func spreadAffinity(clusterName, role string) map[string]interface{} {
 func vmCPU(params VMCreateParams) map[string]interface{} {
 	cpu := map[string]interface{}{"cores": int64(params.CPUCores)}
 	if params.NestedVirt {
-		cpu["features"] = []interface{}{
-			map[string]interface{}{"name": "svm", "policy": "optional"},
-			map[string]interface{}{"name": "vmx", "policy": "optional"},
-		}
+		cpu["features"] = nestedVirtFeatures()
 	}
 	return cpu
+}
+
+// nestedVirtFeatures are the CPU features that pass the host's hardware
+// virtualization through (see vmCPU).
+func nestedVirtFeatures() []interface{} {
+	return []interface{}{
+		map[string]interface{}{"name": "svm", "policy": "optional"},
+		map[string]interface{}{"name": "vmx", "policy": "optional"},
+	}
+}
+
+// HasNestedVirtCPU reports whether a VM's template passes svm or vmx through.
+func HasNestedVirtCPU(vm *unstructured.Unstructured) bool {
+	feats, _, _ := unstructured.NestedSlice(vm.Object, "spec", "template", "spec", "domain", "cpu", "features")
+	for _, f := range feats {
+		if m, ok := f.(map[string]interface{}); ok {
+			if n, _ := m["name"].(string); n == "svm" || n == "vmx" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// EnableNestedVirtCPU adds the svm/vmx features to a VM's template (existing
+// features are kept). It takes effect at the VM's next start.
+func (c *Client) EnableNestedVirtCPU(ctx context.Context, namespace, name string) error {
+	res := c.DynamicClient.Resource(vmGVR).Namespace(namespace)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		vm, err := res.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if HasNestedVirtCPU(vm) {
+			return nil
+		}
+		feats, _, _ := unstructured.NestedSlice(vm.Object, "spec", "template", "spec", "domain", "cpu", "features")
+		feats = append(feats, nestedVirtFeatures()...)
+		if err := unstructured.SetNestedSlice(vm.Object, feats, "spec", "template", "spec", "domain", "cpu", "features"); err != nil {
+			return err
+		}
+		_, err = res.Update(ctx, vm, metav1.UpdateOptions{})
+		return err
+	})
 }
 
 func (c *Client) CreateVM(ctx context.Context, params VMCreateParams) (string, error) {

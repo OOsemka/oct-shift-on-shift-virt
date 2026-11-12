@@ -41,6 +41,7 @@ import {
 } from '@patternfly/react-table';
 import CommunityDisclaimer from '../shared/CommunityDisclaimer';
 import ConfigViewer from './ConfigViewer';
+import EnableStorageModal from './EnableStorageModal';
 import { deleteCluster, fetchCluster, fetchExternalCA, fetchKubeadmin, fetchKubeconfig } from '../../utils/api';
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
@@ -69,6 +70,11 @@ interface ClusterDetail {
       graphical?: boolean;
       username?: string;
     };
+    masters?: { count: number };
+    workers?: { count: number };
+    infra?: { count: number };
+    storage?: { enabled?: boolean };
+    virtualization?: { enabled?: boolean };
   };
   status: {
     phase: string;
@@ -142,6 +148,8 @@ const ClusterDetailPage: FC = () => {
   const [deleting, setDeleting] = useState(false);
   const [kubeadminPwd, setKubeadminPwd] = useState<string>();
   const [actionError, setActionError] = useState<string | undefined>();
+  // Day-2 "add nested storage / OpenShift Virtualization" dialog: which one, or closed.
+  const [enableDialog, setEnableDialog] = useState<'storage' | 'virtualization'>();
   // Controlled ExpandableSection needs an onToggle, otherwise clicking does
   // nothing: once the cluster was Ready the log was collapsed forever and
   // looked empty.
@@ -241,6 +249,15 @@ const ClusterDetailPage: FC = () => {
   const bastionOnVLAN = status.loadBalancer === 'bastion';
   const bastionHost = bastionOnVLAN ? spec.externalAccess?.apiIP : status.mcsRelayIP;
   const desktopUser = spec.bastion?.graphical ? spec.bastion.username : undefined;
+  // Day 2: offer what the cluster does not have working yet. Virtualization
+  // includes nested storage; "working" is judged by the result conditions, so a
+  // failed earlier attempt can be repeated.
+  const conditionTrue = (type: string) => status.conditions?.some((c) => c.type === type && c.status === 'True') ?? false;
+  const storageReady = conditionTrue('StorageReady');
+  const virtualizationReady = !!spec.virtualization?.enabled && conditionTrue('VirtualizationReady');
+  const canAddStorage = isReady && !storageReady && !spec.virtualization?.enabled;
+  const canAddVirtualization = isReady && !virtualizationReady;
+  const nodeCount = (spec.masters?.count ?? 0) + (spec.workers?.count ?? 0) + (spec.infra?.count ?? 0);
 
   return (
     <>
@@ -500,6 +517,20 @@ const ClusterDetailPage: FC = () => {
                     {t('Copy Kubeadmin Password')}
                   </Button>
                 </SplitItem>
+                {canAddStorage && (
+                  <SplitItem>
+                    <Button variant="secondary" onClick={() => setEnableDialog('storage')}>
+                      {t('Add nested storage')}
+                    </Button>
+                  </SplitItem>
+                )}
+                {canAddVirtualization && (
+                  <SplitItem>
+                    <Button variant="secondary" onClick={() => setEnableDialog('virtualization')}>
+                      {t('Add OpenShift Virtualization')}
+                    </Button>
+                  </SplitItem>
+                )}
               </Split>
               {actionError && (
                 <Alert variant="danger" isInline title={actionError} className="sos-action-error" />
@@ -602,6 +633,20 @@ const ClusterDetailPage: FC = () => {
           </StackItem>
         </Stack>
       </PageSection>
+
+      {enableDialog && name && (
+        <EnableStorageModal
+          clusterName={name}
+          virtualization={enableDialog === 'virtualization'}
+          storageReady={storageReady}
+          nodeCount={nodeCount}
+          onClose={() => setEnableDialog(undefined)}
+          onStarted={() => {
+            setEnableDialog(undefined);
+            loadCluster();
+          }}
+        />
+      )}
 
       {showDelete && (
         <Modal isOpen onClose={() => setShowDelete(false)} variant="small">

@@ -21,13 +21,13 @@ const I18N = 'plugin__oct-shift-on-shift-virt';
 
 // Mirrors the orchestrator (storage.go): OpenShift Virtualization imports its
 // boot-source images into the nested cluster, all on host storage.
-const VIRT_BOOT_SOURCES_GI = 180;
+export const VIRT_BOOT_SOURCES_GI = 180;
 // Per-cluster fixed disks: bastion root (32) plus the install ISO copies.
 const BASTION_DISK_GI = 32;
 const ISO_PER_NODE_GI = 8;
 const ISO_BLOCK_GI = 5;
 
-type StorageProfileKind = K8sResourceCommon & {
+export type StorageProfileKind = K8sResourceCommon & {
   status?: { claimPropertySets?: Array<{ accessModes?: string[]; volumeMode?: string }> };
 };
 
@@ -36,7 +36,7 @@ type StorageProfileKind = K8sResourceCommon & {
  * of nested VMs, needs the host class to support RWX Block. undefined = the
  * host profile is not visible, so nothing can be said.
  */
-function supportsRwxBlock(profiles: StorageProfileKind[], sc: string): boolean | undefined {
+export function supportsRwxBlock(profiles: StorageProfileKind[], sc: string): boolean | undefined {
   const p = profiles.find((x) => x.metadata?.name === sc);
   if (!p?.status?.claimPropertySets) return undefined;
   return p.status.claimPropertySets.some(
@@ -44,20 +44,20 @@ function supportsRwxBlock(profiles: StorageProfileKind[], sc: string): boolean |
   );
 }
 
-type StorageClassKind = K8sResourceCommon & {
+export type StorageClassKind = K8sResourceCommon & {
   metadata: { name: string; annotations?: Record<string, string> };
 };
 
-function isDefault(sc: StorageClassKind): boolean {
+export function isDefault(sc: StorageClassKind): boolean {
   return sc.metadata?.annotations?.['storageclass.kubernetes.io/is-default-class'] === 'true';
 }
 
-function isDefaultVirt(sc: StorageClassKind): boolean {
+export function isDefaultVirt(sc: StorageClassKind): boolean {
   return sc.metadata?.annotations?.['storageclass.kubevirt.io/is-default-virt-class'] === 'true';
 }
 
 /** Same rule as the orchestrator: default virt class, else cluster default. */
-function preferredInfraClass(list: StorageClassKind[]): string {
+export function preferredInfraClass(list: StorageClassKind[]): string {
   return (list.find(isDefaultVirt) || list.find(isDefault))?.metadata?.name || '';
 }
 
