@@ -75,6 +75,9 @@ func TestEnableVirtualizationImpliesStorage(t *testing.T) {
 	if p, _, _ := unstructured.NestedString(after.Object, "status", "phase"); p != "EnableStorage" {
 		t.Errorf("phase = %q, want EnableStorage", p)
 	}
+	if m, _, _ := unstructured.NestedString(after.Object, "status", "message"); m != "Adding nested storage and OpenShift Virtualization" {
+		t.Errorf("message = %q", m)
+	}
 }
 
 func TestEnableStorageOnlyKeepsVirtualizationOff(t *testing.T) {
@@ -129,6 +132,9 @@ func TestEnableVirtualizationOnExistingStorage(t *testing.T) {
 	}
 	if sc, _, _ := unstructured.NestedString(after.Object, "spec", "storage", "infraStorageClassName"); sc != "kept" {
 		t.Errorf("existing storage settings changed: infraStorageClassName = %q", sc)
+	}
+	if m, _, _ := unstructured.NestedString(after.Object, "status", "message"); m != "Adding OpenShift Virtualization (nested storage is already in place)" {
+		t.Errorf("message = %q: storage that already works must not be announced as added", m)
 	}
 	failed := day2Cluster("Ready", map[string]interface{}{"storage": map[string]interface{}{"enabled": true}},
 		map[string]interface{}{"type": "StorageReady", "status": "False", "reason": "ConfigureFailed", "message": "x", "lastTransitionTime": "2026-11-12T00:00:00Z"})

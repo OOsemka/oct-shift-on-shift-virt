@@ -436,8 +436,8 @@ const (
 	ConditionVirtualizationReady = "VirtualizationReady"
 )
 
-// conditionTrue reports whether condition t is present with status True.
-func (nc *NestedCluster) conditionTrue(t string) bool {
+// ConditionTrue reports whether condition t is present with status True.
+func (nc *NestedCluster) ConditionTrue(t string) bool {
 	for _, c := range nc.Status.Conditions {
 		if c.Type == t {
 			return c.Status == metav1.ConditionTrue
@@ -457,9 +457,9 @@ func (nc *NestedCluster) EnableStorageRefusal(req EnableStorageRequest) string {
 		return fmt.Sprintf("only a Ready cluster can get nested storage or virtualization (phase %s)", nc.Status.Phase)
 	case req.AllowanceGi < 0:
 		return "the storage allowance cannot be negative"
-	case req.Virtualization && nc.Spec.Virtualization.Enabled && nc.conditionTrue(ConditionVirtualizationReady):
+	case req.Virtualization && nc.Spec.Virtualization.Enabled && nc.ConditionTrue(ConditionVirtualizationReady):
 		return "OpenShift Virtualization is already enabled on this cluster"
-	case !req.Virtualization && nc.Spec.StorageWanted() && nc.conditionTrue(ConditionStorageReady):
+	case !req.Virtualization && nc.Spec.StorageWanted() && nc.ConditionTrue(ConditionStorageReady):
 		return "nested storage is already enabled on this cluster"
 	}
 	return ""

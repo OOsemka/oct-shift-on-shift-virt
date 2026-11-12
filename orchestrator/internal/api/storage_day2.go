@@ -86,10 +86,7 @@ func (s *Server) enableStorage(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "could not update the cluster spec: "+err.Error())
 		return
 	}
-	msg := "Adding nested storage"
-	if req.Virtualization {
-		msg = "Adding nested storage and OpenShift Virtualization"
-	}
+	msg := enableStorageMessage(nc, req)
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		cur, gerr := res.Get(r.Context(), name, metav1.GetOptions{})
 		if gerr != nil {
@@ -105,6 +102,20 @@ func (s *Server) enableStorage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logger.Info("enable storage requested", "cluster", name, "virtualization", req.Virtualization)
 	s.writeJSON(w, http.StatusAccepted, map[string]string{"status": msg})
+}
+
+// enableStorageMessage is the status message while the request runs: it says
+// only what is new (storage that already works is not "added" again; its step
+// still runs, to raise the storage quota for the virtualization boot images).
+func enableStorageMessage(nc *crd.NestedCluster, req crd.EnableStorageRequest) string {
+	switch {
+	case !req.Virtualization:
+		return "Adding nested storage"
+	case nc.ConditionTrue(crd.ConditionStorageReady):
+		return "Adding OpenShift Virtualization (nested storage is already in place)"
+	default:
+		return "Adding nested storage and OpenShift Virtualization"
+	}
 }
 
 // toMap converts a typed value to the map form unstructured objects use.
