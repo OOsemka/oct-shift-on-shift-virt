@@ -419,5 +419,12 @@
   "Host storage the nested cluster may use for its volumes, in addition to the VM disks and about {{gi}} GiB of virtualization boot images.": "Host storage the nested cluster may use for its volumes, in addition to the VM disks and about {{gi}} GiB of virtualization boot images.",
   "Host storage the nested cluster may use for its volumes, in addition to the VM disks.": "Host storage the nested cluster may use for its volumes, in addition to the VM disks.",
   "I understand that {{cluster}} will restart and be unavailable for a while": "I understand that {{cluster}} will restart and be unavailable for a while",
-  "I understand that every node of {{cluster}} will be drained and restarted, one at a time": "I understand that every node of {{cluster}} will be drained and restarted, one at a time"
+  "I understand that every node of {{cluster}} will be drained and restarted, one at a time": "I understand that every node of {{cluster}} will be drained and restarted, one at a time",
+  "Node restart": "Node restart",
+  "Rolling (one node at a time)": "Rolling (one node at a time)",
+  "The cluster stays available.": "The cluster stays available.",
+  "All nodes at once": "All nodes at once",
+  "Faster; the cluster is unavailable while it restarts.": "Faster; the cluster is unavailable while it restarts.",
+  "All nodes restart at once": "All nodes restart at once",
+  "To pass the host CPU’s hardware virtualization through, each node’s VM must be restarted. All {{count}} nodes of {{cluster}} are stopped and started together, without draining: the cluster, its API and its workloads are unavailable until every node has booted again and the control plane has settled.": "To pass the host CPU’s hardware virtualization through, each node’s VM must be restarted. All {{count}} nodes of {{cluster}} are stopped and started together, without draining: the cluster, its API and its workloads are unavailable until every node has booted again and the control plane has settled."
 }

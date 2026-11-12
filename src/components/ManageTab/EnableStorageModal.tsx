@@ -16,6 +16,7 @@ import {
   ModalFooter,
   ModalHeader,
   NumberInput,
+  Radio,
 } from '@patternfly/react-core';
 import { useK8sWatchResource } from '@openshift-console/dynamic-plugin-sdk';
 import { enableStorage } from '../../utils/api';
@@ -46,8 +47,9 @@ interface Props {
 
 /**
  * Day-2 action on a Ready cluster: add nested storage, or OpenShift
- * Virtualization (which needs nested storage and a rolling restart of the
- * node VMs, so the host CPU's hardware virtualization reaches the nodes).
+ * Virtualization (which needs nested storage and a restart of the node VMs,
+ * so the host CPU's hardware virtualization reaches the nodes: rolling by
+ * default, or all at once if the user prefers speed over availability).
  */
 const EnableStorageModal: FC<Props> = ({ clusterName, virtualization, storageReady, nodeCount, onClose, onStarted }) => {
   const { t } = useTranslation(I18N);
@@ -62,6 +64,7 @@ const EnableStorageModal: FC<Props> = ({ clusterName, virtualization, storageRea
   const scList = Array.isArray(storageClasses) ? storageClasses : [];
   const [infra, setInfra] = useState('');
   const [allowance, setAllowance] = useState(DEFAULT_ALLOWANCE_GI);
+  const [restartMode, setRestartMode] = useState<'rolling' | 'simultaneous'>('rolling');
   const [restartAck, setRestartAck] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
@@ -73,6 +76,11 @@ const EnableStorageModal: FC<Props> = ({ clusterName, virtualization, storageRea
   const configureStorage = !storageReady;
   const rwxBlock = infra ? supportsRwxBlock(Array.isArray(storageProfiles) ? storageProfiles : [], infra) : undefined;
   const single = nodeCount <= 1;
+  const allAtOnce = single || restartMode === 'simultaneous';
+  const chooseRestart = (m: 'rolling' | 'simultaneous') => {
+    setRestartMode(m);
+    setRestartAck(false); // the acknowledgement names the chosen mode
+  };
   const canSubmit = !submitting && (!virtualization || restartAck) && (!configureStorage || allowance >= 0);
 
   const submit = async () => {
@@ -81,6 +89,7 @@ const EnableStorageModal: FC<Props> = ({ clusterName, virtualization, storageRea
     try {
       await enableStorage(clusterName, {
         virtualization,
+        ...(virtualization && !single ? { restartMode } : {}),
         ...(configureStorage ? { infraStorageClassName: infra, allowanceGi: allowance } : {}),
       });
       onStarted();
@@ -108,12 +117,39 @@ const EnableStorageModal: FC<Props> = ({ clusterName, virtualization, storageRea
               {t('The cluster already has nested storage; its settings are kept.')}
             </Alert>
           )}
+          {virtualization && !single && (
+            <FormGroup role="radiogroup" isInline label={t('Node restart')} fieldId="enable-restart-mode">
+              <Radio
+                id="enable-restart-rolling"
+                name="enable-restart-mode"
+                isChecked={restartMode === 'rolling'}
+                onChange={() => chooseRestart('rolling')}
+                label={t('Rolling (one node at a time)')}
+                description={t('The cluster stays available.')}
+              />
+              <Radio
+                id="enable-restart-simultaneous"
+                name="enable-restart-mode"
+                isChecked={restartMode === 'simultaneous'}
+                onChange={() => chooseRestart('simultaneous')}
+                label={t('All nodes at once')}
+                description={t('Faster; the cluster is unavailable while it restarts.')}
+              />
+            </FormGroup>
+          )}
           {virtualization &&
             (single ? (
               <Alert variant="danger" isInline title={t('The cluster restarts and is unavailable for a while')}>
                 {t(
                   'To pass the host CPU’s hardware virtualization through, the node’s VM must be restarted. {{cluster}} has a single node, so the cluster and its workloads are unavailable until the node has booted again.',
                   { cluster: clusterName },
+                )}
+              </Alert>
+            ) : allAtOnce ? (
+              <Alert variant="danger" isInline title={t('All nodes restart at once')}>
+                {t(
+                  'To pass the host CPU’s hardware virtualization through, each node’s VM must be restarted. All {{count}} nodes of {{cluster}} are stopped and started together, without draining: the cluster, its API and its workloads are unavailable until every node has booted again and the control plane has settled.',
+                  { count: nodeCount, cluster: clusterName },
                 )}
               </Alert>
             ) : (
@@ -183,7 +219,7 @@ const EnableStorageModal: FC<Props> = ({ clusterName, virtualization, storageRea
               isChecked={restartAck}
               onChange={(_e, v) => setRestartAck(v)}
               label={
-                single
+                allAtOnce
                   ? t('I understand that {{cluster}} will restart and be unavailable for a while', { cluster: clusterName })
                   : t('I understand that every node of {{cluster}} will be drained and restarted, one at a time', { cluster: clusterName })
               }

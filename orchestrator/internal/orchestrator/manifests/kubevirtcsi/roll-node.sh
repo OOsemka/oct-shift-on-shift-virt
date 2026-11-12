@@ -4,9 +4,21 @@
 #   MODE=ready    after the node's VM restarted: wait for a new boot ID and
 #                 Ready, uncordon, and wait until etcd and kube-apiserver settle
 #   MODE=uncordon uncordon NODE (after a failed drain)
-# Env: VIP DOMAIN NODE MODE BOOT_ID(ready) API_WAIT(optional). Mounts: /nested/kubeconfig, /m.
+# Simultaneous restart (all nodes at once, no drain):
+#   MODE=bootids  print every node's boot ID (BOOTID <node> <id>, one per line)
+#   MODE=allready after all VMs restarted: wait until every node in BOOT_IDS
+#                 ("node=id node=id ...") booted again and is Ready, then wait
+#                 until etcd and kube-apiserver settle
+# Env: VIP DOMAIN NODE MODE BOOT_ID(ready) BOOT_IDS(allready) API_WAIT(optional). Mounts: /nested/kubeconfig, /m.
 source /m/lib.sh
 bootid() { $N get node "$NODE" -o jsonpath='{.status.nodeInfo.bootID}'; }
+settled() {
+  for co in etcd kube-apiserver; do
+    s=$($N get co "$co" -o jsonpath='{range .status.conditions[*]}{.type}={.status} {end}') || return 1
+    case "$s" in *Available=True*) ;; *) return 1 ;; esac
+    case "$s" in *Degraded=True*|*Progressing=True*) return 1 ;; esac
+  done
+}
 case "$MODE" in
 bootid)
   echo "BOOTID=$(bootid)" ;;
@@ -23,17 +35,24 @@ ready)
   ready() { [ "$($N get node "$NODE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; }
   poll 2400 ready || fatal "$NODE did not become Ready within 40 minutes after its restart"
   $N adm uncordon "$NODE"
-  settled() {
-    for co in etcd kube-apiserver; do
-      s=$($N get co "$co" -o jsonpath='{range .status.conditions[*]}{.type}={.status} {end}') || return 1
-      case "$s" in *Available=True*) ;; *) return 1 ;; esac
-      case "$s" in *Degraded=True*|*Progressing=True*) return 1 ;; esac
-    done
-  }
   poll 2400 settled || fatal "etcd and kube-apiserver did not settle within 40 minutes after $NODE restarted"
   echo "OK $NODE booted again, Ready and uncordoned; the control plane has settled" ;;
 uncordon)
   $N adm uncordon "$NODE" || true ;;
+bootids)
+  $N get nodes -o jsonpath='{range .items[*]}BOOTID {.metadata.name} {.status.nodeInfo.bootID}{"\n"}{end}' ;;
+allready)
+  [ -n "${BOOT_IDS:-}" ] || fatal "BOOT_IDS not set"
+  for pair in $BOOT_IDS; do
+    NODE=${pair%%=*}; BOOT_ID=${pair#*=}
+    rebooted() { b=$(bootid) && [ -n "$b" ] && [ "$b" != "$BOOT_ID" ]; }
+    poll 2400 rebooted || fatal "$NODE did not boot again within 40 minutes after the restart"
+    ready() { [ "$($N get node "$NODE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; }
+    poll 2400 ready || fatal "$NODE did not become Ready within 40 minutes after the restart"
+    echo "OK $NODE booted again and is Ready"
+  done
+  poll 2400 settled || fatal "etcd and kube-apiserver did not settle within 40 minutes after the restart"
+  echo "OK all nodes booted again and are Ready; the control plane has settled" ;;
 *)
   fatal "unknown MODE $MODE" ;;
 esac

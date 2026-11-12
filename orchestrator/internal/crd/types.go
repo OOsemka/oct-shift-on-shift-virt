@@ -428,6 +428,27 @@ type EnableStorageRequest struct {
 	Virtualization        bool   `json:"virtualization"`
 	InfraStorageClassName string `json:"infraStorageClassName,omitempty"`
 	AllowanceGi           int    `json:"allowanceGi,omitempty"`
+	// RestartMode applies to virtualization: RestartRolling (default, one node
+	// at a time, drained first) or RestartSimultaneous (every node stopped and
+	// started together, for clusters whose downtime does not matter).
+	RestartMode string `json:"restartMode,omitempty"`
+}
+
+// Restart modes for adding virtualization after install, and the annotation
+// that carries the choice from the API to the orchestrator.
+const (
+	RestartRolling        = "rolling"
+	RestartSimultaneous   = "simultaneous"
+	AnnotationRestartMode = "oct-shift-on-shift-virt/virtualization-restart"
+)
+
+// RestartModeOf returns the restart mode recorded on the cluster (rolling when
+// unset or unknown).
+func (nc *NestedCluster) RestartModeOf() string {
+	if nc.Annotations[AnnotationRestartMode] == RestartSimultaneous {
+		return RestartSimultaneous
+	}
+	return RestartRolling
 }
 
 // Condition types reported by the storage and virtualization steps.
@@ -457,6 +478,8 @@ func (nc *NestedCluster) EnableStorageRefusal(req EnableStorageRequest) string {
 		return fmt.Sprintf("only a Ready cluster can get nested storage or virtualization (phase %s)", nc.Status.Phase)
 	case req.AllowanceGi < 0:
 		return "the storage allowance cannot be negative"
+	case req.RestartMode != "" && req.RestartMode != RestartRolling && req.RestartMode != RestartSimultaneous:
+		return fmt.Sprintf("restartMode must be %q or %q", RestartRolling, RestartSimultaneous)
 	case req.Virtualization && nc.Spec.Virtualization.Enabled && nc.ConditionTrue(ConditionVirtualizationReady):
 		return "OpenShift Virtualization is already enabled on this cluster"
 	case !req.Virtualization && nc.Spec.StorageWanted() && nc.ConditionTrue(ConditionStorageReady):

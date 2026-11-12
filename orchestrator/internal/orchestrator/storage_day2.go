@@ -73,9 +73,10 @@ func nodeVMs(vms []unstructured.Unstructured) []unstructured.Unstructured {
 // nested nodes get /dev/kvm. The flag only takes effect at a VM start, so the
 // nodes are restarted one at a time: drain in the nested cluster, stop and
 // start the VM, wait for the node to boot again and be Ready, uncordon, and
-// wait for etcd and kube-apiserver to settle before the next node. A
-// single-node cluster is not drained (nowhere to move the pods): it is simply
-// restarted. Stops at the first error, leaving the remaining nodes untouched.
+// wait for etcd and kube-apiserver to settle before the next node. With
+// RestartSimultaneous, or a single node, all nodes restart together instead
+// (restartAllAtOnce). Stops at the first error, leaving the remaining nodes
+// untouched.
 func (s *StepExecutor) enableNestedVirtCPU(ctx context.Context, nc *crd.NestedCluster) error {
 	cluster, ns := nc.Spec.ClusterName, nc.Spec.Namespace
 	log := s.logger.WithCluster(cluster).WithComponent("virtualization")
@@ -97,26 +98,22 @@ func (s *StepExecutor) enableNestedVirtCPU(ctx context.Context, nc *crd.NestedCl
 	if err := s.ensureStorageScripts(ctx, nc); err != nil {
 		return err
 	}
-	single := nc.Spec.NodeCount() == 1
 	job := cluster + "-roll-node"
 	run := func(node, mode string, extra ...corev1.EnvVar) (string, error) {
 		env := append([]corev1.EnvVar{{Name: "NODE", Value: node}, {Name: "MODE", Value: mode}}, extra...)
 		return s.runStorageJob(ctx, nc, job, "roll-node.sh", env, 75*time.Minute)
+	}
+	if nc.Spec.NodeCount() == 1 || nc.RestartModeOf() == crd.RestartSimultaneous {
+		return s.restartAllAtOnce(ctx, nc, todo, run)
 	}
 	for i, node := range todo {
 		s.setProgress(ctx, nc, fmt.Sprintf("Restarting node %d of %d (%s) to enable hardware virtualization", i+1, len(todo), node))
 		if err := s.client.EnableNestedVirtCPU(ctx, ns, node); err != nil {
 			return fmt.Errorf("adding the svm/vmx CPU flag to VM %s: %w", node, err)
 		}
-		mode := "drain"
-		if single {
-			mode = "bootid"
-		}
-		logs, err := run(node, mode)
+		logs, err := run(node, "drain")
 		if err != nil {
-			if !single {
-				_, _ = run(node, "uncordon")
-			}
+			_, _ = run(node, "uncordon")
 			return fmt.Errorf("node %s: %w (restart stopped; %d node(s) not restarted)", node, err, len(todo)-i)
 		}
 		boot := keyValue(logs, "BOOTID")
@@ -135,6 +132,64 @@ func (s *StepExecutor) enableNestedVirtCPU(ctx context.Context, nc *crd.NestedCl
 		log.Info("node restarted with hardware virtualization", "node", node, "done", i+1, "of", len(todo))
 	}
 	return nil
+}
+
+// restartAllAtOnce applies the CPU flag to every node VM and restarts them all
+// together, without draining: the user chose downtime over a rolling restart
+// (or the cluster has a single node). It records each node's boot ID first and
+// then waits until every node booted again and is Ready, and the control plane
+// has settled.
+func (s *StepExecutor) restartAllAtOnce(ctx context.Context, nc *crd.NestedCluster, nodes []string,
+	run func(node, mode string, extra ...corev1.EnvVar) (string, error)) error {
+	ns := nc.Spec.Namespace
+	s.setProgress(ctx, nc, fmt.Sprintf("Restarting all %d node(s) at once to enable hardware virtualization", len(nodes)))
+	logs, err := run("", "bootids")
+	if err != nil {
+		return fmt.Errorf("reading the nodes' boot IDs: %w", err)
+	}
+	boots := bootIDs(logs)
+	var pairs []string
+	for _, n := range nodes {
+		b := boots[n]
+		if b == "" {
+			return fmt.Errorf("node %s: could not read its boot ID", n)
+		}
+		pairs = append(pairs, n+"="+b)
+	}
+	for _, n := range nodes {
+		if err := s.client.EnableNestedVirtCPU(ctx, ns, n); err != nil {
+			return fmt.Errorf("adding the svm/vmx CPU flag to VM %s: %w", n, err)
+		}
+	}
+	for _, n := range nodes {
+		if err := s.client.SetVMPower(ctx, ns, n, false, 10*time.Minute); err != nil {
+			return fmt.Errorf("stopping VM %s: %w", n, err)
+		}
+	}
+	for _, n := range nodes {
+		if err := s.client.SetVMPower(ctx, ns, n, true, 10*time.Minute); err != nil {
+			return fmt.Errorf("starting VM %s: %w", n, err)
+		}
+	}
+	if _, err := run("", "allready", corev1.EnvVar{Name: "BOOT_IDS", Value: strings.Join(pairs, " ")},
+		corev1.EnvVar{Name: "API_WAIT", Value: "2400"}); err != nil {
+		return fmt.Errorf("after restarting all nodes: %w", err)
+	}
+	s.logger.WithCluster(nc.Spec.ClusterName).WithComponent("virtualization").
+		Info("all nodes restarted with hardware virtualization", "nodes", len(nodes))
+	return nil
+}
+
+// bootIDs parses "BOOTID <node> <id>" lines.
+func bootIDs(logs string) map[string]string {
+	out := map[string]string{}
+	for _, l := range strings.Split(logs, "\n") {
+		f := strings.Fields(l)
+		if len(f) == 3 && f[0] == "BOOTID" {
+			out[f[1]] = f[2]
+		}
+	}
+	return out
 }
 
 // setProgress updates the status message while the phase runs.

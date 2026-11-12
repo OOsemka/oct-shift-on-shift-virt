@@ -70,3 +70,18 @@ func TestCRDPhaseEnumCoversAllPhases(t *testing.T) {
 		}
 	}
 }
+
+func TestRestartModeOf(t *testing.T) {
+	nc := &NestedCluster{}
+	if m := nc.RestartModeOf(); m != RestartRolling {
+		t.Errorf("no annotation: %q, want rolling", m)
+	}
+	nc.Annotations = map[string]string{AnnotationRestartMode: "garbage"}
+	if m := nc.RestartModeOf(); m != RestartRolling {
+		t.Errorf("unknown value: %q, want rolling", m)
+	}
+	nc.Annotations[AnnotationRestartMode] = RestartSimultaneous
+	if m := nc.RestartModeOf(); m != RestartSimultaneous {
+		t.Errorf("%q, want simultaneous", m)
+	}
+}

@@ -53,3 +53,10 @@ func TestEnableStorageSummary(t *testing.T) {
 		t.Fatalf("summary = %q", got)
 	}
 }
+
+func TestBootIDs(t *testing.T) {
+	got := bootIDs("noise\nBOOTID cluster-master-0 aaa\nBOOTID cluster-master-1 bbb\nBOOTID broken\n")
+	if len(got) != 2 || got["cluster-master-0"] != "aaa" || got["cluster-master-1"] != "bbb" {
+		t.Errorf("bootIDs = %v", got)
+	}
+}

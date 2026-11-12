@@ -108,6 +108,7 @@ func TestEnableStorageRefusals(t *testing.T) {
 		{"unknown host StorageClass", day2Cluster("Ready", nil), `{"infraStorageClassName": "nope"}`, http.StatusBadRequest},
 		{"unknown field", day2Cluster("Ready", nil), `{"virtualisation": true}`, http.StatusBadRequest},
 		{"negative allowance", day2Cluster("Ready", nil), `{"allowanceGi": -1}`, http.StatusBadRequest},
+		{"unknown restart mode", day2Cluster("Ready", nil), `{"virtualization": true, "restartMode": "sometimes"}`, http.StatusBadRequest},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -140,5 +141,23 @@ func TestEnableVirtualizationOnExistingStorage(t *testing.T) {
 		map[string]interface{}{"type": "StorageReady", "status": "False", "reason": "ConfigureFailed", "message": "x", "lastTransitionTime": "2026-11-12T00:00:00Z"})
 	if rec, _ := postEnableStorage(t, failed, `{}`); rec.Code != http.StatusAccepted {
 		t.Fatalf("retry after a failed storage step: got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The chosen restart mode is recorded for the orchestrator; rolling unless the
+// user asked for all nodes at once.
+func TestEnableVirtualizationRestartMode(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"virtualization": true}`:                                "rolling",
+		`{"virtualization": true, "restartMode": "rolling"}`:      "rolling",
+		`{"virtualization": true, "restartMode": "simultaneous"}`: "simultaneous",
+	} {
+		rec, after := postEnableStorage(t, day2Cluster("Ready", nil), body)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("%s: got %d: %s", body, rec.Code, rec.Body.String())
+		}
+		if got := after.GetAnnotations()["oct-shift-on-shift-virt/virtualization-restart"]; got != want {
+			t.Errorf("%s: restart annotation = %q, want %q", body, got, want)
+		}
 	}
 }

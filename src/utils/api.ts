@@ -40,7 +40,13 @@ export const fetchClusterLogs = (name: string): Promise<unknown> =>
  */
 export const enableStorage = (
   name: string,
-  body: { virtualization: boolean; infraStorageClassName?: string; allowanceGi?: number },
+  body: {
+    virtualization: boolean;
+    infraStorageClassName?: string;
+    allowanceGi?: number;
+    /** How the node VMs restart for virtualization (default rolling). */
+    restartMode?: 'rolling' | 'simultaneous';
+  },
 ): Promise<unknown> =>
   consoleFetchJSON.post(`${PROXY_BASE}/api/v1/clusters/${encodeURIComponent(name)}/enable-storage`, body);
 

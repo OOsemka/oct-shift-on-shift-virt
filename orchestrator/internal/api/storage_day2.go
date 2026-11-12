@@ -80,6 +80,18 @@ func (s *Server) enableStorage(w http.ResponseWriter, r *http.Request) {
 			return merr
 		}
 		cur.Object["spec"] = specMap
+		// The orchestrator reads the restart mode from this annotation (rolling
+		// unless the user chose otherwise).
+		ann := cur.GetAnnotations()
+		if ann == nil {
+			ann = map[string]string{}
+		}
+		mode := crd.RestartRolling
+		if req.RestartMode == crd.RestartSimultaneous {
+			mode = crd.RestartSimultaneous
+		}
+		ann[crd.AnnotationRestartMode] = mode
+		cur.SetAnnotations(ann)
 		_, uerr := res.Update(r.Context(), cur, metav1.UpdateOptions{})
 		return uerr
 	}); err != nil {
@@ -100,7 +112,7 @@ func (s *Server) enableStorage(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "could not start: "+err.Error())
 		return
 	}
-	s.logger.Info("enable storage requested", "cluster", name, "virtualization", req.Virtualization)
+	s.logger.Info("enable storage requested", "cluster", name, "virtualization", req.Virtualization, "restartMode", req.RestartMode)
 	s.writeJSON(w, http.StatusAccepted, map[string]string{"status": msg})
 }
 
