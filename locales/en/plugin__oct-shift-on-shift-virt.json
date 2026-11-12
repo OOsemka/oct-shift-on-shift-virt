@@ -426,5 +426,11 @@
   "All nodes at once": "All nodes at once",
   "Faster; the cluster is unavailable while it restarts.": "Faster; the cluster is unavailable while it restarts.",
   "All nodes restart at once": "All nodes restart at once",
-  "To pass the host CPU’s hardware virtualization through, each node’s VM must be restarted. All {{count}} nodes of {{cluster}} are stopped and started together, without draining: the cluster, its API and its workloads are unavailable until every node has booted again and the control plane has settled.": "To pass the host CPU’s hardware virtualization through, each node’s VM must be restarted. All {{count}} nodes of {{cluster}} are stopped and started together, without draining: the cluster, its API and its workloads are unavailable until every node has booted again and the control plane has settled."
+  "To pass the host CPU’s hardware virtualization through, each node’s VM must be restarted. All {{count}} nodes of {{cluster}} are stopped and started together, without draining: the cluster, its API and its workloads are unavailable until every node has booted again and the control plane has settled.": "To pass the host CPU’s hardware virtualization through, each node’s VM must be restarted. All {{count}} nodes of {{cluster}} are stopped and started together, without draining: the cluster, its API and its workloads are unavailable until every node has booted again and the control plane has settled.",
+  "For the volumes you create in the nested cluster. The virtualization boot images get their own {{gi}} GiB (see below), so they do not use this allowance.": "For the volumes you create in the nested cluster. The virtualization boot images get their own {{gi}} GiB (see below), so they do not use this allowance.",
+  "For the volumes you create in the nested cluster.": "For the volumes you create in the nested cluster.",
+  "Host storage this adds to the cluster’s quota": "Host storage this adds to the cluster’s quota",
+  "Nested volumes (your allowance): {{gi}} GiB": "Nested volumes (your allowance): {{gi}} GiB",
+  "Nested image registry: {{gi}} GiB": "Nested image registry: {{gi}} GiB",
+  "Total added: {{gi}} GiB, on top of the VM disks the cluster already uses": "Total added: {{gi}} GiB, on top of the VM disks the cluster already uses"
 }

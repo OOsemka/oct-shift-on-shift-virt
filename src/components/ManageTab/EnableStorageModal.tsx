@@ -32,6 +32,9 @@ import {
 
 const I18N = 'plugin__oct-shift-on-shift-virt';
 const DEFAULT_ALLOWANCE_GI = 100; // same default as the wizard
+const MIN_ALLOWANCE_GI = 1; // same minimum as the wizard (0 would mean "default" to the orchestrator)
+/** The nested image registry's volume, counted in the quota by the orchestrator (storage.go imageRegistryGi). */
+const IMAGE_REGISTRY_GI = 100;
 
 interface Props {
   clusterName: string;
@@ -81,7 +84,7 @@ const EnableStorageModal: FC<Props> = ({ clusterName, virtualization, storageRea
     setRestartMode(m);
     setRestartAck(false); // the acknowledgement names the chosen mode
   };
-  const canSubmit = !submitting && (!virtualization || restartAck) && (!configureStorage || allowance >= 0);
+  const canSubmit = !submitting && (!virtualization || restartAck) && (!configureStorage || allowance >= MIN_ALLOWANCE_GI);
 
   const submit = async () => {
     setSubmitting(true);
@@ -193,10 +196,12 @@ const EnableStorageModal: FC<Props> = ({ clusterName, virtualization, storageRea
                 <NumberInput
                   id="enable-allowance"
                   value={allowance}
-                  min={0}
-                  onMinus={() => setAllowance((a) => Math.max(0, a - 10))}
+                  min={MIN_ALLOWANCE_GI}
+                  onMinus={() => setAllowance((a) => Math.max(MIN_ALLOWANCE_GI, a - 10))}
                   onPlus={() => setAllowance((a) => a + 10)}
-                  onChange={(e) => setAllowance(Math.max(0, Number((e.target as HTMLInputElement).value) || 0))}
+                  onChange={(e) =>
+                    setAllowance(Math.max(MIN_ALLOWANCE_GI, Number((e.target as HTMLInputElement).value) || MIN_ALLOWANCE_GI))
+                  }
                   inputAriaLabel={t('Storage allowance (GiB)')}
                   unit="GiB"
                 />
@@ -204,13 +209,40 @@ const EnableStorageModal: FC<Props> = ({ clusterName, virtualization, storageRea
                   <HelperText>
                     <HelperTextItem>
                       {virtualization
-                        ? t('Host storage the nested cluster may use for its volumes, in addition to the VM disks and about {{gi}} GiB of virtualization boot images.', { gi: VIRT_BOOT_SOURCES_GI })
-                        : t('Host storage the nested cluster may use for its volumes, in addition to the VM disks.')}
+                        ? t('For the volumes you create in the nested cluster. The virtualization boot images get their own {{gi}} GiB (see below), so they do not use this allowance.', { gi: VIRT_BOOT_SOURCES_GI })
+                        : t('For the volumes you create in the nested cluster.')}
                     </HelperTextItem>
                   </HelperText>
                 </FormHelperText>
               </FormGroup>
             </>
+          )}
+
+          {(configureStorage || virtualization) && (
+            <FormGroup label={t('Host storage this adds to the cluster’s quota')} fieldId="enable-quota-breakdown">
+              <HelperText id="enable-quota-breakdown">
+                {configureStorage && (
+                  <HelperTextItem>{t('Nested volumes (your allowance): {{gi}} GiB', { gi: allowance })}</HelperTextItem>
+                )}
+                {configureStorage && (
+                  <HelperTextItem>{t('Nested image registry: {{gi}} GiB', { gi: IMAGE_REGISTRY_GI })}</HelperTextItem>
+                )}
+                {virtualization && (
+                  <HelperTextItem>
+                    {t('Virtualization boot images: {{gi}} GiB', { gi: VIRT_BOOT_SOURCES_GI })}
+                  </HelperTextItem>
+                )}
+                <HelperTextItem>
+                  <strong>
+                    {t('Total added: {{gi}} GiB, on top of the VM disks the cluster already uses', {
+                      gi:
+                        (configureStorage ? allowance + IMAGE_REGISTRY_GI : 0) +
+                        (virtualization ? VIRT_BOOT_SOURCES_GI : 0),
+                    })}
+                  </strong>
+                </HelperTextItem>
+              </HelperText>
+            </FormGroup>
           )}
 
           {virtualization && (
