@@ -239,6 +239,10 @@ const ClusterDetailPage: FC = () => {
 
   const { spec, status } = cluster;
   const isReady = status.phase === 'Ready';
+  // EnableStorage is a day-2 change on a running cluster: it stays usable, so
+  // keep its URLs, kubeconfig and kubeadmin available (a rolling restart for
+  // virtualization can take a while).
+  const isUsable = isReady || status.phase === 'EnableStorage';
   const fqdn = spec.source?.internalName
     ? `${spec.source.internalName}.${spec.source.internalBaseDomain}`
     : `${spec.clusterName}.${spec.baseDomain}`;
@@ -353,7 +357,7 @@ const ClusterDetailPage: FC = () => {
             </StackItem>
           )}
 
-          {isReady && (
+          {isUsable && (
             <StackItem>
               <DescriptionList isHorizontal>
                 <DescriptionListGroup>
