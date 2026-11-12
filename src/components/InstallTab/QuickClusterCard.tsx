@@ -36,10 +36,12 @@ const I18N = 'plugin__oct-shift-on-shift-virt';
 interface Props {
   /** Switch the page to the Lab Defaults tab. */
   onOpenDefaults: () => void;
+  /** Changes when the Install tab is shown again: reload defaults, masters and the plan. */
+  refreshKey?: number;
 }
 
 /** One-button compact 3-node cluster from the lab defaults. */
-const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
+const QuickClusterCard: FC<Props> = ({ onOpenDefaults, refreshKey = 0 }) => {
   const { t } = useTranslation(I18N);
   const navigate = useNavigate();
   const [name, setName] = useState('');
@@ -60,16 +62,21 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
     fetchMasters()
       .then(setMasters)
       .catch(() => setMasters([]));
-  }, []);
+  }, [refreshKey]);
+  // The profile key the SSH field was last filled with: a reload replaces the
+  // field only if the user has not edited it.
+  const profileKey = useRef('');
   useEffect(() => {
     fetchLabDefaults()
       .then((d) => {
         setDefaults(d);
         // Pre-filled with the profile key; edit it to use another key for this cluster.
-        setSshKey(d.sshPublicKey || '');
+        const next = d.sshPublicKey || '';
+        setSshKey((cur) => (cur.trim() === profileKey.current.trim() ? next : cur));
+        profileKey.current = next;
       })
       .catch(() => setDefaults(null));
-  }, []);
+  }, [refreshKey]);
   const keyChanged = sshKey.trim() !== (defaults?.sshPublicKey || '').trim();
   const sshErr = sshKey.trim() ? sshKeyProblem(sshKey) : undefined;
 
@@ -89,7 +96,7 @@ const QuickClusterCard: FC<Props> = ({ onOpenDefaults }) => {
       name ? 400 : 0,
     );
     return () => clearTimeout(timer.current);
-  }, [name, master]);
+  }, [name, master, refreshKey]);
 
   const deploy = async () => {
     setDeploying(true);

@@ -25,6 +25,15 @@ const I18N = 'plugin__oct-shift-on-shift-virt';
 const ShiftOnShiftPage: FC = () => {
   const { t } = useTranslation(I18N);
   const [activeTab, setActiveTab] = useState<string | number>('install');
+  // Every tab stays mounted, so the Install tab would keep what it loaded when
+  // the page opened (lab defaults, masters, quick plan). Bump this whenever the
+  // Install tab is shown again so it reloads them, e.g. after saving the lab
+  // defaults or making a master.
+  const [installRefresh, setInstallRefresh] = useState(0);
+  const selectTab = (key: string | number) => {
+    if (key === 'install' && activeTab !== 'install') setInstallRefresh((n) => n + 1);
+    setActiveTab(key);
+  };
 
   const goComputeHub = () => {
     window.location.href = '/community-tools/compute';
@@ -55,7 +64,7 @@ const ShiftOnShiftPage: FC = () => {
           <StackItem>
             <Tabs
               activeKey={activeTab}
-              onSelect={(_e, key) => setActiveTab(key)}
+              onSelect={(_e, key) => selectTab(key)}
               className="sos-tabs"
             >
               <Tab
@@ -63,8 +72,8 @@ const ShiftOnShiftPage: FC = () => {
                 title={<TabTitleText>{t('Install')}</TabTitleText>}
               >
                 <div className="sos-tab-content">
-                  <QuickClusterCard onOpenDefaults={() => setActiveTab('defaults')} />
-                  <CreateClusterWizard />
+                  <QuickClusterCard refreshKey={installRefresh} onOpenDefaults={() => selectTab('defaults')} />
+                  <CreateClusterWizard refreshKey={installRefresh} />
                 </div>
               </Tab>
               <Tab

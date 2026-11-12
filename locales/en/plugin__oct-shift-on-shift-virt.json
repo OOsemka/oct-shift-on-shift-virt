@@ -400,5 +400,6 @@
   "bastion desktop": "bastion desktop",
   "Settings come from the Lab Defaults. Use the wizard below for anything else.": "Settings come from the Lab Defaults. Use the wizard below for anything else.",
   "Publish the API and console through this cluster's routes (no DNS records needed)": "Publish the API and console through this cluster's routes (no DNS records needed)",
-  "Publish the API and console through this cluster's routes by default (no DNS records needed; can be changed per cluster)": "Publish the API and console through this cluster's routes by default (no DNS records needed; can be changed per cluster)"
+  "Publish the API and console through this cluster's routes by default (no DNS records needed; can be changed per cluster)": "Publish the API and console through this cluster's routes by default (no DNS records needed; can be changed per cluster)",
+  "A pasted pull secret is stored and no longer shown, so its field is empty again. The Install tab uses the new values when you open it.": "A pasted pull secret is stored and no longer shown, so its field is empty again. The Install tab uses the new values when you open it."
 }

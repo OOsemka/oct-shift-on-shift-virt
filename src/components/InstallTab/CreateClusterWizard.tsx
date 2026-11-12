@@ -35,7 +35,12 @@ function withHostDefaults(config: ClusterConfig, host: HostNetwork | null): Clus
   return { ...config, network: { ...config.network, cudnSubnet: suggested, ...(internalVIPs(suggested) || {}) } };
 }
 
-const CreateClusterWizard: FC = () => {
+interface Props {
+  /** Changes when the Install tab is shown again: reload the lab defaults. */
+  refreshKey?: number;
+}
+
+const CreateClusterWizard: FC<Props> = ({ refreshKey = 0 }) => {
   const { t } = useTranslation(I18N);
   const navigate = useNavigate();
   const [config, setConfig] = useState<ClusterConfig>({ ...DEFAULT_CLUSTER_CONFIG });
@@ -57,7 +62,7 @@ const CreateClusterWizard: FC = () => {
   const [labDefaults, setLabDefaults] = useState<LabDefaults | null>(null);
   useEffect(() => {
     fetchLabDefaults().then(setLabDefaults).catch(() => setLabDefaults(null));
-  }, []);
+  }, [refreshKey]);
 
   // Host node addresses: the internal network must not overlap them. If the
   // orchestrator cannot tell (older RBAC, error), the check is skipped here
