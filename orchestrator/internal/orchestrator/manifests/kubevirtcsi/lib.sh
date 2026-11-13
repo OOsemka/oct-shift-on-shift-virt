@@ -12,7 +12,8 @@ oc --kubeconfig "$NKC" config set-cluster "$CL" --server="https://${VIP}:6443" >
 oc --kubeconfig "$NKC" config set "clusters.${CL}.tls-server-name" "api.${DOMAIN}" >/dev/null
 N="oc --kubeconfig $NKC"
 # Retry: a job can start while the API servers restart (e.g. a revision rollout).
-_end=$((SECONDS + 300))
+# API_WAIT (seconds) lengthens the wait, e.g. after a single-node cluster restarted.
+_end=$((SECONDS + ${API_WAIT:-300}))
 until $N get --raw /readyz >/dev/null 2>&1; do
   [ $SECONDS -ge $_end ] && fatal "nested API not reachable at ${VIP}:6443"
   sleep 10

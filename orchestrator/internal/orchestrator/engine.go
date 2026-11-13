@@ -341,6 +341,25 @@ func (e *Engine) reconcile(ctx context.Context, nc *crd.NestedCluster) {
 		e.updateStatus(ctx, nc, crd.PhaseMaster, "Master: snapshots refreshed")
 		return
 	}
+	// Day 2 (requested through the API on a Ready cluster): add nested storage
+	// and optionally OpenShift Virtualization, then back to Ready. Never runs
+	// the install order, so a clone does not repeat FinishIsolation.
+	if crd.IsEnableStoragePhase(currentPhase) {
+		if err := e.steps.EnableStorage(ctx, nc); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Error("enable storage failed", "error", err.Error())
+			what := "nested storage"
+			if currentPhase == crd.PhaseEnableVirtualization {
+				what = "OpenShift Virtualization"
+			}
+			e.updateStatus(ctx, nc, crd.PhaseReady, "Ready; adding "+what+" failed: "+err.Error())
+			return
+		}
+		e.updateStatus(ctx, nc, crd.PhaseReady, enableStorageSummary(nc))
+		return
+	}
 	order := crd.PhasesFor(nc)
 	if currentPhase == crd.PhaseEmpty {
 		// A new cluster (also one applied with oc, bypassing the API): fail

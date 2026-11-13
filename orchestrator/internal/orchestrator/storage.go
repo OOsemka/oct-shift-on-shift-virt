@@ -36,8 +36,8 @@ import (
 var kubevirtCSIFS embed.FS
 
 const (
-	conditionStorageReady        = "StorageReady"
-	conditionVirtualizationReady = "VirtualizationReady"
+	conditionStorageReady        = crd.ConditionStorageReady
+	conditionVirtualizationReady = crd.ConditionVirtualizationReady
 
 	// Shared by every cluster: the controller's resizer reads the host PV
 	// behind a DataVolume (finding F17). get only, no list/watch.

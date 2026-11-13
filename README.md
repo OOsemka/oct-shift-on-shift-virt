@@ -26,6 +26,7 @@ Validated on OpenShift **4.22** (PatternFly 6), installing nested OpenShift 4.22
 - **Credentials on the cluster page** — download the kubeconfig, reveal the kubeadmin password, copy an `oc login` command.
 - **Nested storage (optional)** — the KubeVirt CSI driver gives the nested cluster a default `kubevirt-csi` StorageClass backed by one host StorageClass, with snapshots when the host has a matching VolumeSnapshotClass. All images come from the nested release payload. A storage quota on the cluster namespace caps host usage.
 - **Nested OpenShift Virtualization (optional)** — installed and configured to use nested storage, so the nested cluster can run VMs. Plan for ~180 GiB of extra host storage for its boot images.
+- **Add storage or virtualization later** — a Ready cluster's page offers both as day-2 actions, with a rolling or all-at-once restart of the nodes for virtualization.
 - **Clean teardown** — deleting a cluster removes its VMs, disks, snapshots and namespace.
 
 ## Routes
@@ -83,6 +84,16 @@ What it does on the host, and nothing more:
 - The nested **image registry** is enabled on a 100 GiB `kubevirt-csi` volume (one replica), so builds (e.g. catalog items with Source-to-Image) work. A registry you configured yourself is left alone. Express clones get their own registry volume the same way.
 
 Results appear on the cluster page (`StorageReady`, `VirtualizationReady`). A failure there never fails the cluster install.
+
+### Adding them to a deployed cluster
+
+A Ready cluster's page (Manage) offers **Add nested storage** and **Add OpenShift Virtualization** for whatever it doesn't have working yet. The rules are the wizard's: storage can be added alone; virtualization needs storage, so it adds storage first when the cluster has none.
+
+- The dialog pre-selects the host StorageClass (default virtualization class, else the default class) and shows what the request adds to the storage quota: the allowance (nested volumes, at least 1 GiB), 100 GiB for the image registry and 180 GiB for virtualization boot images. Existing storage settings are kept.
+- **Virtualization restarts every node VM**: the host CPU's `svm`/`vmx` flag only reaches a VM when it starts. Choose **Rolling** (default: one node at a time, drained first, workers before masters, waiting for each node to be Ready and etcd/kube-apiserver to settle; the cluster stays available) or **All nodes at once** (no drain, faster on larger clusters; the cluster and its API are down until every node is back). A single-node cluster always restarts and is unavailable meanwhile. The dialog requires an acknowledgement.
+- The cluster runs phase `EnableStorage` (storage only) or `EnableVirtualization`, keeps its URLs and credentials available, and returns to Ready with the result in `StorageReady` / `VirtualizationReady`. A failed attempt can be repeated.
+- Measured on a 3-master compact cluster with ODF RBD: storage about 2–4 minutes; virtualization on top of it with a rolling restart about 20 minutes (about 5 minutes per node, then the install); virtualization directly on a fresh cluster with all nodes at once about 22 minutes, storage included.
+- API: `POST /api/v1/clusters/{name}/enable-storage` with `{"virtualization": bool, "infraStorageClassName": "...", "allowanceGi": n, "restartMode": "rolling" | "simultaneous"}` (all optional; storage only by default). Needs `update` on the NestedCluster, like make-master.
 
 ## Shift-on-Shift Express (clone from a master)
 

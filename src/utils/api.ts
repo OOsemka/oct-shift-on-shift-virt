@@ -34,6 +34,22 @@ export const fetchKubeadmin = (name: string): Promise<unknown> =>
 export const fetchClusterLogs = (name: string): Promise<unknown> =>
   consoleFetchJSON(`${PROXY_BASE}/api/v1/clusters/${encodeURIComponent(name)}/logs`);
 
+/**
+ * Day 2: add nested storage, or OpenShift Virtualization (which includes nested
+ * storage and restarts the node VMs one at a time), to a Ready cluster.
+ */
+export const enableStorage = (
+  name: string,
+  body: {
+    virtualization: boolean;
+    infraStorageClassName?: string;
+    allowanceGi?: number;
+    /** How the node VMs restart for virtualization (default rolling). */
+    restartMode?: 'rolling' | 'simultaneous';
+  },
+): Promise<unknown> =>
+  consoleFetchJSON.post(`${PROXY_BASE}/api/v1/clusters/${encodeURIComponent(name)}/enable-storage`, body);
+
 export const fetchStorageClasses = (): Promise<unknown> =>
   consoleFetchJSON(`${PROXY_BASE}/api/v1/storageclasses`);
 

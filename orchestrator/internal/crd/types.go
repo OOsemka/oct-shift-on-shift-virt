@@ -1,6 +1,9 @@
 package crd
 
 import (
+	"fmt"
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -49,13 +52,24 @@ const (
 	// RefreshMaster boots a master, lets its certificates renew, and takes
 	// new snapshots, so clones do not have to renew them on first boot.
 	PhaseRefreshMaster ClusterPhase = "RefreshMaster"
-	PhaseCloneVMs      ClusterPhase = "CloneVMs"
-	PhaseWaitCloneAPI  ClusterPhase = "WaitCloneAPI"
-	PhaseSanitize      ClusterPhase = "Sanitize"
-	PhaseCloneCreds    ClusterPhase = "CloneCredentials"
-	PhaseFinishIsolate ClusterPhase = "FinishIsolation"
-	PhaseFailed        ClusterPhase = "Failed"
-	PhaseDeleting      ClusterPhase = "Deleting"
+	// EnableStorage adds nested storage, and optionally OpenShift
+	// Virtualization, to a Ready cluster (day 2, requested through the API).
+	// It runs ConfigureStorage, a rolling restart of the node VMs when
+	// virtualization needs the host CPU's svm/vmx flag, and
+	// ConfigureVirtualization, then returns to Ready. It is not part of an
+	// install order, so a clone never re-runs FinishIsolation.
+	// PhaseEnableVirtualization is the same step for a request that includes
+	// OpenShift Virtualization (and so possibly a restart of every node): a
+	// separate name only so the phase shown to users says what is happening.
+	PhaseEnableStorage        ClusterPhase = "EnableStorage"
+	PhaseEnableVirtualization ClusterPhase = "EnableVirtualization"
+	PhaseCloneVMs             ClusterPhase = "CloneVMs"
+	PhaseWaitCloneAPI         ClusterPhase = "WaitCloneAPI"
+	PhaseSanitize             ClusterPhase = "Sanitize"
+	PhaseCloneCreds           ClusterPhase = "CloneCredentials"
+	PhaseFinishIsolate        ClusterPhase = "FinishIsolation"
+	PhaseFailed               ClusterPhase = "Failed"
+	PhaseDeleting             ClusterPhase = "Deleting"
 )
 
 var PhaseOrder = []ClusterPhase{
@@ -411,6 +425,114 @@ func (nc *NestedCluster) MasterRefusal() string {
 	return ""
 }
 
+// EnableStorageRequest is a day-2 request to add nested storage and, with
+// Virtualization, OpenShift Virtualization. InfraStorageClassName and
+// AllowanceGi apply only when the cluster has no nested storage yet; empty or
+// zero keep the same defaults as the wizard.
+type EnableStorageRequest struct {
+	Virtualization        bool   `json:"virtualization"`
+	InfraStorageClassName string `json:"infraStorageClassName,omitempty"`
+	AllowanceGi           int    `json:"allowanceGi,omitempty"`
+	// RestartMode applies to virtualization: RestartRolling (default, one node
+	// at a time, drained first) or RestartSimultaneous (every node stopped and
+	// started together, for clusters whose downtime does not matter).
+	RestartMode string `json:"restartMode,omitempty"`
+}
+
+// Restart modes for adding virtualization after install, and the annotation
+// that carries the choice from the API to the orchestrator.
+const (
+	RestartRolling        = "rolling"
+	RestartSimultaneous   = "simultaneous"
+	AnnotationRestartMode = "oct-shift-on-shift-virt/virtualization-restart"
+	// AnnotationDay2Pending marks a day-2 request between its spec update and
+	// its phase update (RFC 3339 time), so a second request in that window is
+	// refused. It expires by itself (Day2PendingTTL): no cleanup needed.
+	AnnotationDay2Pending = "oct-shift-on-shift-virt/day2-request-pending"
+)
+
+// Day2PendingTTL is how long AnnotationDay2Pending blocks other requests.
+const Day2PendingTTL = 2 * time.Minute
+
+// Day2Pending reports a day-2 request that has updated the spec but not yet
+// the phase (within Day2PendingTTL of now).
+func (nc *NestedCluster) Day2Pending(now time.Time) bool {
+	t, err := time.Parse(time.RFC3339, nc.Annotations[AnnotationDay2Pending])
+	return err == nil && now.Sub(t) < Day2PendingTTL && now.Sub(t) > -Day2PendingTTL
+}
+
+// RestartModeOf returns the restart mode recorded on the cluster (rolling when
+// unset or unknown).
+func (nc *NestedCluster) RestartModeOf() string {
+	if nc.Annotations[AnnotationRestartMode] == RestartSimultaneous {
+		return RestartSimultaneous
+	}
+	return RestartRolling
+}
+
+// Condition types reported by the storage and virtualization steps.
+const (
+	ConditionStorageReady        = "StorageReady"
+	ConditionVirtualizationReady = "VirtualizationReady"
+)
+
+// ConditionTrue reports whether condition t is present with status True.
+func (nc *NestedCluster) ConditionTrue(t string) bool {
+	for _, c := range nc.Status.Conditions {
+		if c.Type == t {
+			return c.Status == metav1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// EnableStorageRefusal says why the request cannot run on this cluster ("" if
+// it can). Only a Ready cluster qualifies (a master is in phase Master and
+// must stay without nested storage, see MasterRefusal). "Already enabled" is
+// judged by the result conditions, not the spec flags, so a request that was
+// interrupted or whose (non-fatal) step failed can simply be repeated.
+func (nc *NestedCluster) EnableStorageRefusal(req EnableStorageRequest) string {
+	switch {
+	case nc.Status.Phase != PhaseReady:
+		return fmt.Sprintf("only a Ready cluster can get nested storage or virtualization (phase %s)", nc.Status.Phase)
+	case req.AllowanceGi < 0:
+		return "the storage allowance cannot be negative"
+	case req.RestartMode != "" && req.RestartMode != RestartRolling && req.RestartMode != RestartSimultaneous:
+		return fmt.Sprintf("restartMode must be %q or %q", RestartRolling, RestartSimultaneous)
+	case req.Virtualization && nc.Spec.Virtualization.Enabled && nc.ConditionTrue(ConditionVirtualizationReady):
+		return "OpenShift Virtualization is already enabled on this cluster"
+	case !req.Virtualization && nc.Spec.StorageWanted() && nc.ConditionTrue(ConditionStorageReady):
+		return "nested storage is already enabled on this cluster"
+	}
+	return ""
+}
+
+// ApplyEnableStorage changes the spec for the request. Virtualization needs
+// storage, so it also turns storage on (as in the wizard); existing storage
+// settings are kept.
+func (nc *NestedCluster) ApplyEnableStorage(req EnableStorageRequest) {
+	s := &nc.Spec
+	// Storage that works keeps its settings. Storage that was requested but
+	// never became ready (a failed attempt) takes the new request's class and
+	// allowance, so a retry can pick a different host StorageClass (the storage
+	// step reconfigures the controller and the nested StorageClass for it).
+	if !s.Storage.Enabled || !nc.ConditionTrue(ConditionStorageReady) {
+		s.Storage = StorageConfig{Enabled: true, InfraStorageClassName: req.InfraStorageClassName, AllowanceGi: req.AllowanceGi}
+	}
+	if req.Virtualization {
+		s.Virtualization.Enabled = true
+	}
+}
+
+// StorageSettingsApply reports whether a day-2 request's StorageClass and
+// allowance are used (no working nested storage yet).
+func (nc *NestedCluster) StorageSettingsApply() bool {
+	return !nc.Spec.Storage.Enabled || !nc.ConditionTrue(ConditionStorageReady)
+}
+
+// NodeCount is the number of node VMs (masters, workers and infra).
+func (s NestedClusterSpec) NodeCount() int { return s.Masters.Count + s.Workers.Count + s.Infra.Count }
+
 // IsClone reports whether the cluster is cloned from a master.
 func (nc *NestedCluster) IsClone() bool { return nc.Spec.Source != nil && nc.Spec.Source.Master != "" }
 
@@ -433,4 +555,17 @@ func NextPhase(current ClusterPhase) ClusterPhase {
 		}
 	}
 	return PhaseReady
+}
+
+// EnableStoragePhase is the phase a day-2 request runs in.
+func EnableStoragePhase(req EnableStorageRequest) ClusterPhase {
+	if req.Virtualization {
+		return PhaseEnableVirtualization
+	}
+	return PhaseEnableStorage
+}
+
+// IsEnableStoragePhase reports a day-2 storage/virtualization phase.
+func IsEnableStoragePhase(p ClusterPhase) bool {
+	return p == PhaseEnableStorage || p == PhaseEnableVirtualization
 }

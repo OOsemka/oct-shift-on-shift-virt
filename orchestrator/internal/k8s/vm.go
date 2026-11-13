@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 	"strings"
 	"time"
 
@@ -77,12 +78,45 @@ func spreadAffinity(clusterName, role string) map[string]interface{} {
 func vmCPU(params VMCreateParams) map[string]interface{} {
 	cpu := map[string]interface{}{"cores": int64(params.CPUCores)}
 	if params.NestedVirt {
-		cpu["features"] = []interface{}{
-			map[string]interface{}{"name": "svm", "policy": "optional"},
-			map[string]interface{}{"name": "vmx", "policy": "optional"},
-		}
+		cpu["features"] = nestedVirtFeatures()
 	}
 	return cpu
+}
+
+// nestedVirtFeatures are the CPU features that pass the host's hardware
+// virtualization through (see vmCPU).
+func nestedVirtFeatures() []interface{} {
+	return []interface{}{
+		map[string]interface{}{"name": "svm", "policy": "optional"},
+		map[string]interface{}{"name": "vmx", "policy": "optional"},
+	}
+}
+
+// HasNestedVirtCPU reports whether a VM's template passes svm or vmx through.
+func HasNestedVirtCPU(vm *unstructured.Unstructured) bool {
+	return hasNestedVirtFeature(vm.Object, "spec", "template", "spec", "domain", "cpu", "features")
+}
+
+// EnableNestedVirtCPU adds the svm/vmx features to a VM's template (existing
+// features are kept). It takes effect at the VM's next start.
+func (c *Client) EnableNestedVirtCPU(ctx context.Context, namespace, name string) error {
+	res := c.DynamicClient.Resource(vmGVR).Namespace(namespace)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		vm, err := res.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if HasNestedVirtCPU(vm) {
+			return nil
+		}
+		feats, _, _ := unstructured.NestedSlice(vm.Object, "spec", "template", "spec", "domain", "cpu", "features")
+		feats = append(feats, nestedVirtFeatures()...)
+		if err := unstructured.SetNestedSlice(vm.Object, feats, "spec", "template", "spec", "domain", "cpu", "features"); err != nil {
+			return err
+		}
+		_, err = res.Update(ctx, vm, metav1.UpdateOptions{})
+		return err
+	})
 }
 
 func (c *Client) CreateVM(ctx context.Context, params VMCreateParams) (string, error) {
@@ -486,6 +520,41 @@ var vmiGVR = schema.GroupVersionResource{
 	Group:    "kubevirt.io",
 	Version:  "v1",
 	Resource: "virtualmachineinstances",
+}
+
+// VMIRunsNestedVirt describes a node VM's instance for the day-2
+// virtualization restart. Running means a VMI exists: false when the VM is
+// stopped. A terminating or Failed VMI also counts, which is harmless (that
+// node just gets drained and restarted). HasFlag reports the svm/vmx CPU
+// feature on the instance, which (unlike the VM template) only changes at a
+// restart.
+type VMIRunsNestedVirt struct {
+	Running bool
+	HasFlag bool
+}
+
+// NestedVirtState reads the running instance of a VM.
+func (c *Client) NestedVirtState(ctx context.Context, namespace, name string) (VMIRunsNestedVirt, error) {
+	vmi, err := c.DynamicClient.Resource(vmiGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		return VMIRunsNestedVirt{}, nil
+	}
+	if err != nil {
+		return VMIRunsNestedVirt{}, fmt.Errorf("getting VMI %s: %w", name, err)
+	}
+	return VMIRunsNestedVirt{Running: true, HasFlag: hasNestedVirtFeature(vmi.Object, "spec", "domain", "cpu", "features")}, nil
+}
+
+func hasNestedVirtFeature(obj map[string]interface{}, path ...string) bool {
+	feats, _, _ := unstructured.NestedSlice(obj, path...)
+	for _, f := range feats {
+		if m, ok := f.(map[string]interface{}); ok {
+			if n, _ := m["name"].(string); n == "svm" || n == "vmx" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // GetVMIIP reads the IP address from the VMI status.interfaces.

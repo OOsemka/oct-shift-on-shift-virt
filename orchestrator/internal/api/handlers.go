@@ -84,6 +84,7 @@ func (s *Server) Routes() []Route {
 		{"POST /api/v1/clusters/{name}/make-master", s.makeMaster},
 		{"GET /api/v1/masters", s.listMasters},
 		{"POST /api/v1/clusters/{name}/refresh-master", s.refreshMaster},
+		{"POST /api/v1/clusters/{name}/enable-storage", s.enableStorage},
 		{"GET /api/v1/clusters/{name}/logs", s.getClusterLogs},
 		{"POST /api/v1/clusters/preview-config", s.previewConfig},
 		{"GET /api/v1/storageclasses", s.listStorageClasses},
