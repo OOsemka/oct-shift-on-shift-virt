@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/crd"
 
@@ -48,9 +50,13 @@ func (s *Server) enableStorage(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, code, why)
 		return
 	}
+	if nc.Day2Pending(time.Now()) {
+		s.writeError(w, http.StatusConflict, errDay2Busy.Error())
+		return
+	}
 	// A named host StorageClass must exist; empty means the host default
 	// (resolved by the storage step, as for a new cluster).
-	if sc := req.InfraStorageClassName; sc != "" && !nc.Spec.Storage.Enabled {
+	if sc := req.InfraStorageClassName; sc != "" && nc.StorageSettingsApply() {
 		if _, err := s.client.Clientset.StorageV1().StorageClasses().Get(r.Context(), sc, metav1.GetOptions{}); err != nil {
 			if apierrors.IsNotFound(err) {
 				s.writeError(w, http.StatusBadRequest, fmt.Sprintf("host StorageClass %q does not exist", sc))
@@ -75,7 +81,14 @@ func (s *Server) enableStorage(w http.ResponseWriter, r *http.Request) {
 		if cerr != nil {
 			return cerr
 		}
-		c.Spec.ApplyEnableStorage(req)
+		// Re-check on every attempt: another request may have started since
+		// the first read. The pending marker below is written in this same
+		// optimistic update, so of two concurrent requests only one gets past
+		// here (the other conflicts, re-reads and sees the marker).
+		if c.Status.Phase != crd.PhaseReady || c.Day2Pending(time.Now()) {
+			return errDay2Busy
+		}
+		c.ApplyEnableStorage(req)
 		specMap, merr := toMap(c.Spec)
 		if merr != nil {
 			return merr
@@ -92,10 +105,14 @@ func (s *Server) enableStorage(w http.ResponseWriter, r *http.Request) {
 			mode = crd.RestartSimultaneous
 		}
 		ann[crd.AnnotationRestartMode] = mode
+		ann[crd.AnnotationDay2Pending] = time.Now().UTC().Format(time.RFC3339)
 		cur.SetAnnotations(ann)
 		_, uerr := res.Update(r.Context(), cur, metav1.UpdateOptions{})
 		return uerr
-	}); err != nil {
+	}); errors.Is(err, errDay2Busy) {
+		s.writeError(w, http.StatusConflict, err.Error())
+		return
+	} else if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "could not update the cluster spec: "+err.Error())
 		return
 	}
@@ -105,17 +122,26 @@ func (s *Server) enableStorage(w http.ResponseWriter, r *http.Request) {
 		if gerr != nil {
 			return gerr
 		}
+		if p, _, _ := unstructured.NestedString(cur.Object, "status", "phase"); p != string(crd.PhaseReady) {
+			return errDay2Busy
+		}
 		_ = unstructured.SetNestedField(cur.Object, string(crd.EnableStoragePhase(req)), "status", "phase")
 		_ = unstructured.SetNestedField(cur.Object, msg, "status", "message")
 		_, uerr := res.UpdateStatus(r.Context(), cur, metav1.UpdateOptions{})
 		return uerr
-	}); err != nil {
+	}); errors.Is(err, errDay2Busy) {
+		s.writeError(w, http.StatusConflict, err.Error())
+		return
+	} else if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "could not start: "+err.Error())
 		return
 	}
 	s.logger.Info("enable storage requested", "cluster", name, "virtualization", req.Virtualization, "restartMode", req.RestartMode)
 	s.writeJSON(w, http.StatusAccepted, map[string]string{"status": msg})
 }
+
+// errDay2Busy: the cluster left Ready, or another day-2 request is starting.
+var errDay2Busy = errors.New("another change is already starting or running on this cluster; try again when it is Ready")
 
 // enableStorageMessage is the status message while the request runs: it says
 // only what is new (storage that already works is not "added" again; its step

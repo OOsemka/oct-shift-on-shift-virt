@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/k8s"
 	"github.com/OOsemka/oct-shift-on-shift-virt/orchestrator/internal/logging"
@@ -162,5 +163,52 @@ func TestEnableVirtualizationRestartMode(t *testing.T) {
 		if got := after.GetAnnotations()["oct-shift-on-shift-virt/virtualization-restart"]; got != want {
 			t.Errorf("%s: restart annotation = %q, want %q", body, got, want)
 		}
+	}
+}
+
+// Review: a second request while one is starting (spec updated, phase not
+// yet) is refused instead of changing the running request.
+func TestEnableStorageRefusesWhilePending(t *testing.T) {
+	nc := day2Cluster("Ready", nil)
+	nc.SetAnnotations(map[string]string{"oct-shift-on-shift-virt/day2-request-pending": time.Now().UTC().Format(time.RFC3339)})
+	rec, after := postEnableStorage(t, nc, `{"virtualization": true}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("got %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if v, _, _ := unstructured.NestedBool(after.Object, "spec", "virtualization", "enabled"); v {
+		t.Error("a refused request must not change the spec")
+	}
+	// An old marker (a request that died between its two updates) expires.
+	old := day2Cluster("Ready", nil)
+	old.SetAnnotations(map[string]string{"oct-shift-on-shift-virt/day2-request-pending": time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)})
+	if rec, _ := postEnableStorage(t, old, `{}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("expired marker: got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A successful request leaves the marker, so a request racing it is refused.
+func TestEnableStorageSetsPendingMarker(t *testing.T) {
+	_, after := postEnableStorage(t, day2Cluster("Ready", nil), `{}`)
+	if after.GetAnnotations()["oct-shift-on-shift-virt/day2-request-pending"] == "" {
+		t.Error("pending marker not set")
+	}
+}
+
+// Review: after a failed storage step the user's new StorageClass is used and
+// validated (the dialog shows the pickers again).
+func TestEnableStorageRetryUsesNewClass(t *testing.T) {
+	failed := func() *unstructured.Unstructured {
+		return day2Cluster("Ready", map[string]interface{}{"storage": map[string]interface{}{"enabled": true, "infraStorageClassName": "old"}},
+			map[string]interface{}{"type": "StorageReady", "status": "False", "reason": "ConfigureFailed", "message": "x", "lastTransitionTime": "2026-11-12T00:00:00Z"})
+	}
+	rec, after := postEnableStorage(t, failed(), `{"infraStorageClassName": "host-rbd", "allowanceGi": 250}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	if sc, _, _ := unstructured.NestedString(after.Object, "spec", "storage", "infraStorageClassName"); sc != "host-rbd" {
+		t.Errorf("infraStorageClassName = %q, want the newly picked host-rbd", sc)
+	}
+	if rec, _ := postEnableStorage(t, failed(), `{"infraStorageClassName": "nope"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("unknown class on retry: got %d, want 400", rec.Code)
 	}
 }

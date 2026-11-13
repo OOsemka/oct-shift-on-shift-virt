@@ -2,6 +2,7 @@ package crd
 
 import (
 	"fmt"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -444,7 +445,21 @@ const (
 	RestartRolling        = "rolling"
 	RestartSimultaneous   = "simultaneous"
 	AnnotationRestartMode = "oct-shift-on-shift-virt/virtualization-restart"
+	// AnnotationDay2Pending marks a day-2 request between its spec update and
+	// its phase update (RFC 3339 time), so a second request in that window is
+	// refused. It expires by itself (Day2PendingTTL): no cleanup needed.
+	AnnotationDay2Pending = "oct-shift-on-shift-virt/day2-request-pending"
 )
+
+// Day2PendingTTL is how long AnnotationDay2Pending blocks other requests.
+const Day2PendingTTL = 2 * time.Minute
+
+// Day2Pending reports a day-2 request that has updated the spec but not yet
+// the phase (within Day2PendingTTL of now).
+func (nc *NestedCluster) Day2Pending(now time.Time) bool {
+	t, err := time.Parse(time.RFC3339, nc.Annotations[AnnotationDay2Pending])
+	return err == nil && now.Sub(t) < Day2PendingTTL && now.Sub(t) > -Day2PendingTTL
+}
 
 // RestartModeOf returns the restart mode recorded on the cluster (rolling when
 // unset or unknown).
@@ -495,13 +510,24 @@ func (nc *NestedCluster) EnableStorageRefusal(req EnableStorageRequest) string {
 // ApplyEnableStorage changes the spec for the request. Virtualization needs
 // storage, so it also turns storage on (as in the wizard); existing storage
 // settings are kept.
-func (s *NestedClusterSpec) ApplyEnableStorage(req EnableStorageRequest) {
-	if !s.Storage.Enabled {
+func (nc *NestedCluster) ApplyEnableStorage(req EnableStorageRequest) {
+	s := &nc.Spec
+	// Storage that works keeps its settings. Storage that was requested but
+	// never became ready (a failed attempt) takes the new request's class and
+	// allowance, so a retry can pick a different host StorageClass (the storage
+	// step reconfigures the controller and the nested StorageClass for it).
+	if !s.Storage.Enabled || !nc.ConditionTrue(ConditionStorageReady) {
 		s.Storage = StorageConfig{Enabled: true, InfraStorageClassName: req.InfraStorageClassName, AllowanceGi: req.AllowanceGi}
 	}
 	if req.Virtualization {
 		s.Virtualization.Enabled = true
 	}
+}
+
+// StorageSettingsApply reports whether a day-2 request's StorageClass and
+// allowance are used (no working nested storage yet).
+func (nc *NestedCluster) StorageSettingsApply() bool {
+	return !nc.Spec.Storage.Enabled || !nc.ConditionTrue(ConditionStorageReady)
 }
 
 // NodeCount is the number of node VMs (masters, workers and infra).

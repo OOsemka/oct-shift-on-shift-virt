@@ -94,15 +94,7 @@ func nestedVirtFeatures() []interface{} {
 
 // HasNestedVirtCPU reports whether a VM's template passes svm or vmx through.
 func HasNestedVirtCPU(vm *unstructured.Unstructured) bool {
-	feats, _, _ := unstructured.NestedSlice(vm.Object, "spec", "template", "spec", "domain", "cpu", "features")
-	for _, f := range feats {
-		if m, ok := f.(map[string]interface{}); ok {
-			if n, _ := m["name"].(string); n == "svm" || n == "vmx" {
-				return true
-			}
-		}
-	}
-	return false
+	return hasNestedVirtFeature(vm.Object, "spec", "template", "spec", "domain", "cpu", "features")
 }
 
 // EnableNestedVirtCPU adds the svm/vmx features to a VM's template (existing
@@ -528,6 +520,39 @@ var vmiGVR = schema.GroupVersionResource{
 	Group:    "kubevirt.io",
 	Version:  "v1",
 	Resource: "virtualmachineinstances",
+}
+
+// VMIRunsNestedVirt describes a node VM's running instance for the day-2
+// virtualization restart: Running is false when no VMI exists (the VM is
+// stopped); HasFlag reports the svm/vmx CPU feature on the running instance,
+// which (unlike the VM template) only changes at a restart.
+type VMIRunsNestedVirt struct {
+	Running bool
+	HasFlag bool
+}
+
+// NestedVirtState reads the running instance of a VM.
+func (c *Client) NestedVirtState(ctx context.Context, namespace, name string) (VMIRunsNestedVirt, error) {
+	vmi, err := c.DynamicClient.Resource(vmiGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		return VMIRunsNestedVirt{}, nil
+	}
+	if err != nil {
+		return VMIRunsNestedVirt{}, fmt.Errorf("getting VMI %s: %w", name, err)
+	}
+	return VMIRunsNestedVirt{Running: true, HasFlag: hasNestedVirtFeature(vmi.Object, "spec", "domain", "cpu", "features")}, nil
+}
+
+func hasNestedVirtFeature(obj map[string]interface{}, path ...string) bool {
+	feats, _, _ := unstructured.NestedSlice(obj, path...)
+	for _, f := range feats {
+		if m, ok := f.(map[string]interface{}); ok {
+			if n, _ := m["name"].(string); n == "svm" || n == "vmx" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // GetVMIIP reads the IP address from the VMI status.interfaces.
