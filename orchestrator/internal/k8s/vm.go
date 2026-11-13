@@ -522,10 +522,12 @@ var vmiGVR = schema.GroupVersionResource{
 	Resource: "virtualmachineinstances",
 }
 
-// VMIRunsNestedVirt describes a node VM's running instance for the day-2
-// virtualization restart: Running is false when no VMI exists (the VM is
-// stopped); HasFlag reports the svm/vmx CPU feature on the running instance,
-// which (unlike the VM template) only changes at a restart.
+// VMIRunsNestedVirt describes a node VM's instance for the day-2
+// virtualization restart. Running means a VMI exists: false when the VM is
+// stopped. A terminating or Failed VMI also counts, which is harmless (that
+// node just gets drained and restarted). HasFlag reports the svm/vmx CPU
+// feature on the instance, which (unlike the VM template) only changes at a
+// restart.
 type VMIRunsNestedVirt struct {
 	Running bool
 	HasFlag bool

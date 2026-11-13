@@ -146,52 +146,76 @@ func restartForNestedVirt(nodes []string, simultaneous bool, r nodeRestarter, pr
 		}
 		todo = append(todo, pending{name: n, running: st.Running})
 	}
+	// Every run ends by uncordoning the nodes a restart cordoned (marked at
+	// drain time; nodes cordoned by someone else stay cordoned). This covers a
+	// node whose VM already restarted with the flag when the orchestrator was
+	// interrupted before the ready step uncordoned it: on resume that node is
+	// done (skipped above), but still cordoned.
+	finish := func() error {
+		if _, err := r.Job("", "uncordonmarked", corev1.EnvVar{Name: "API_WAIT", Value: "2400"}); err != nil {
+			return fmt.Errorf("uncordoning nodes left cordoned by an interrupted restart: %w", err)
+		}
+		return nil
+	}
 	if len(todo) == 0 {
 		log.Info("every node VM already runs with hardware virtualization; no restart needed")
-		return nil
+		return finish()
 	}
 
 	if simultaneous {
 		progress(fmt.Sprintf("Restarting all %d node(s) at once to enable hardware virtualization", len(todo)))
-		boots := map[string]string{}
-		if out, err := r.Job("", "bootids"); err != nil {
-			return fmt.Errorf("reading the nodes' boot IDs: %w", err)
-		} else {
-			boots = bootIDs(out)
-		}
-		var pairs []string
-		for _, p := range todo {
-			b := noBootID
-			if p.running {
-				if b = boots[p.name]; b == "" {
-					return fmt.Errorf("node %s: could not read its boot ID", p.name)
-				}
-			}
-			pairs = append(pairs, p.name+"="+b)
-		}
 		for _, p := range todo {
 			if err := r.SetFlag(p.name); err != nil {
 				return fmt.Errorf("adding the svm/vmx CPU flag to VM %s: %w", p.name, err)
 			}
 		}
+		// Start VMs left stopped by an earlier failure first: with them down
+		// the nested API may be unreachable (a single node, or no etcd
+		// quorum), and nothing below must depend on it before they run.
+		pairs := map[string]string{}
+		var running []pending
 		for _, p := range todo {
 			if p.running {
+				running = append(running, p)
+				continue
+			}
+			if err := r.Power(p.name, true); err != nil {
+				return fmt.Errorf("starting VM %s: %w (it is stopped; a retry starts it)", p.name, err)
+			}
+			pairs[p.name] = noBootID
+		}
+		if len(running) > 0 {
+			out, err := r.Job("", "bootids", corev1.EnvVar{Name: "API_WAIT", Value: "2400"})
+			if err != nil {
+				return fmt.Errorf("reading the nodes' boot IDs: %w", err)
+			}
+			boots := bootIDs(out)
+			for _, p := range running {
+				if pairs[p.name] = boots[p.name]; pairs[p.name] == "" {
+					return fmt.Errorf("node %s: could not read its boot ID", p.name)
+				}
+			}
+			for _, p := range running {
 				if err := r.Power(p.name, false); err != nil {
 					return fmt.Errorf("stopping VM %s: %w (a retry restarts the nodes still without hardware virtualization)", p.name, err)
 				}
 			}
-		}
-		for _, p := range todo {
-			if err := r.Power(p.name, true); err != nil {
-				return fmt.Errorf("starting VM %s: %w (it is stopped; a retry starts it)", p.name, err)
+			for _, p := range running {
+				if err := r.Power(p.name, true); err != nil {
+					return fmt.Errorf("starting VM %s: %w (it is stopped; a retry starts it)", p.name, err)
+				}
 			}
 		}
-		if _, err := r.Job("", "allready", corev1.EnvVar{Name: "BOOT_IDS", Value: strings.Join(pairs, " ")},
+		var list []string
+		for _, p := range todo {
+			list = append(list, p.name+"="+pairs[p.name])
+		}
+		if _, err := r.Job("", "allready", corev1.EnvVar{Name: "BOOT_IDS", Value: strings.Join(list, " ")},
 			corev1.EnvVar{Name: "API_WAIT", Value: "2400"}); err != nil {
 			return fmt.Errorf("after restarting all nodes: %w", err)
 		}
 		log.Info("all nodes restarted with hardware virtualization", "nodes", len(todo))
-		return nil
+		return finish()
 	}
 
 	for i, p := range todo {
@@ -230,7 +254,7 @@ func restartForNestedVirt(nodes []string, simultaneous bool, r nodeRestarter, pr
 		}
 		log.Info("node restarted with hardware virtualization", "node", node, "done", i+1, "of", len(todo))
 	}
-	return nil
+	return finish()
 }
 
 // clusterRestarter implements nodeRestarter against the host cluster.

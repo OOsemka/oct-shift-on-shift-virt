@@ -125,6 +125,10 @@ func (f *fakeCluster) Job(n, mode string, _ ...corev1.EnvVar) (string, error) {
 		return "BOOTID=b-" + n, nil
 	case "ready", "uncordon":
 		f.cordoned[n] = false
+	case "uncordonmarked":
+		for node := range f.cordoned {
+			f.cordoned[node] = false
+		}
 	case "bootids":
 		out := ""
 		for node, up := range f.running {
@@ -145,7 +149,7 @@ func runRestart(f *fakeCluster, simultaneous bool, nodes ...string) error {
 	return restartForNestedVirt(nodes, simultaneous, f, func(string) {}, nopLog{})
 }
 
-// Chris's review: a failure after the flag is written must not make a retry
+// Review: a failure after the flag is written must not make a retry
 // skip the node. Every failure point, rolling mode: the retry restarts
 // exactly the nodes still without the flag, never one twice, and no node is
 // left cordoned.
@@ -180,10 +184,10 @@ func TestRestartRetryAfterFailureRolling(t *testing.T) {
 			if f.starts["m1"] != 1 || f.starts["m2"] != 1 {
 				t.Errorf("starts m1=%d m2=%d, want 1 each", f.starts["m1"], f.starts["m2"])
 			}
-			// A third run has nothing left to do.
+			// A third run restarts nothing (it only uncordons marked nodes).
 			f.calls = nil
-			if err := runRestart(f, false, "w0", "m1", "m2"); err != nil || len(f.calls) != 0 {
-				t.Errorf("third run: err=%v calls=%v, want nothing", err, f.calls)
+			if err := runRestart(f, false, "w0", "m1", "m2"); err != nil || len(f.calls) != 1 || f.calls[0] != "uncordonmarked:" {
+				t.Errorf("third run: err=%v calls=%v, want only uncordonmarked", err, f.calls)
 			}
 		})
 	}
@@ -248,4 +252,66 @@ func (f *failingUncordon) Job(n, mode string, env ...corev1.EnvVar) (string, err
 		return "", fmt.Errorf("API unavailable")
 	}
 	return f.fakeCluster.Job(n, mode, env...)
+}
+
+// Review round 2: the orchestrator dies after a VM started with the flag but
+// before the ready step uncordoned the node. On resume that node is done
+// (skipped), but the run must still uncordon it.
+func TestResumeUncordonsNodeLeftCordoned(t *testing.T) {
+	f := newFakeCluster("m0", "m1")
+	// Simulate the kill: m0's ready step "fails" and its uncordon never runs.
+	killed := &failingUncordon{fakeCluster: f}
+	f.failOn = "ready:m0"
+	_ = restartForNestedVirt([]string{"m0", "m1"}, false, killed, func(string) {}, nopLog{})
+	if !f.cordoned["m0"] || !f.vmiFlag["m0"] {
+		t.Fatalf("test premise: m0 restarted with the flag and still cordoned (cordoned=%v flag=%v)", f.cordoned["m0"], f.vmiFlag["m0"])
+	}
+	if err := runRestart(f, false, "m0", "m1"); err != nil {
+		t.Fatal(err)
+	}
+	if f.cordoned["m0"] || f.cordoned["m1"] {
+		t.Errorf("left cordoned after resume: %v", f.cordoned)
+	}
+	if f.starts["m0"] != 1 {
+		t.Errorf("m0 started %d times, want 1", f.starts["m0"])
+	}
+	// Even with nothing left to restart, a run uncordons marked nodes.
+	f.cordoned["m1"] = true
+	if err := runRestart(f, false, "m0", "m1"); err != nil || f.cordoned["m1"] {
+		t.Errorf("no-op run must uncordon marked nodes: err=%v cordoned=%v", err, f.cordoned)
+	}
+}
+
+// Review round 2: with VMs left stopped the nested API may be down, so a
+// simultaneous retry starts them before reading any boot ID.
+func TestSimultaneousRetryStartsStoppedVMsFirst(t *testing.T) {
+	f := newFakeCluster("m0", "m1", "m2")
+	f.template["m0"] = true // m0 already done
+	f.vmiFlag["m0"] = true
+	f.running["m1"], f.running["m2"] = false, false // left stopped by a failure
+	if err := runRestart(f, true, "m0", "m1", "m2"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.calls {
+		if c == "bootids:" {
+			t.Errorf("read boot IDs although no running node needed a restart (calls %v)", f.calls)
+		}
+	}
+	if f.calls[0] != "start:m1" || f.calls[1] != "start:m2" {
+		t.Errorf("stopped VMs must start before anything else; calls %v", f.calls)
+	}
+	for _, n := range []string{"m0", "m1", "m2"} {
+		if !f.running[n] || !f.vmiFlag[n] {
+			t.Errorf("%s not running with the flag", n)
+		}
+	}
+	// Mixed: one stopped, one running without the flag: start first, then boot IDs.
+	g := newFakeCluster("a", "b")
+	g.running["a"] = false
+	if err := runRestart(g, true, "a", "b"); err != nil {
+		t.Fatal(err)
+	}
+	if g.calls[0] != "start:a" || g.calls[1] != "bootids:" {
+		t.Errorf("order: %v", g.calls)
+	}
 }
